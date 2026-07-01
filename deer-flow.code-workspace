@@ -6,6 +6,13 @@
   ],
   "settings": {
     "js/ts.tsdk.path": "frontend/node_modules/typescript/lib",
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+      "${workspaceFolder}/backend",
+      "${workspaceFolder}/backend/packages/harness"
+    ],
+    "python.analysis.autoImportCompletions": true,
     "python-envs.pythonProjects": [
       {
         "path": "backend",

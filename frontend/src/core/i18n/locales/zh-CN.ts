@@ -327,6 +327,15 @@ export const zhCN: Translations = {
     failed: "子任务失败",
   },
 
+  clarification: {
+    title: "需要你的输入",
+    description: "请回答问题以继续。",
+    submit: "提交",
+    other: "其他（自行输入）",
+    supplement: "补充说明",
+    fillPlaceholder: "请输入你的回答",
+  },
+
   // Token Usage
   tokenUsage: {
     title: "Token 用量",

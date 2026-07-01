@@ -1,14 +1,15 @@
-"""Regression test: subagent _create_agent() must isolate from parent run checkpointer.
+"""Regression test: subagent _create_agent() must isolate from the parent run checkpointer.
 
-When a parent run carries a synchronous checkpointer (e.g. SqliteSaver via
-DeerFlowClient), the subagent's ``agent.astream()`` inherits it through
-``copy_context()`` + ``ensure_config()``. Without ``checkpointer=False``
-at compile time, LangGraph's resolution prioritizes the inherited value
-and calls the sync checkpointer's async methods, raising NotImplementedError.
+Historically the subagent compiled with ``checkpointer=False`` because it was
+one-shot and never resumed, and inheriting the parent run's *synchronous*
+checkpointer (e.g. ``SqliteSaver`` via ``DeerFlowClient``) through
+``copy_context()`` + ``ensure_config()`` made LangGraph call the sync saver's
+async methods, raising ``NotImplementedError``.
 
-The subagent is a one-shot delegation — it rebuilds state, calls astream
-once, and extracts the last AIMessage. It never resumes, so persistence
-is unnecessary and inheriting the parent checkpointer is harmful.
+The subagent now owns its own async-capable, loop-safe ``InMemorySaver`` so it
+can ``interrupt()`` / ``Command(resume=...)``. The original harm — inheriting
+the *parent's* checkpointer — is still guarded: the subagent must use its own
+saver, never the parent's (sync or async-main-loop-bound).
 """
 
 import sys
@@ -82,14 +83,10 @@ def _setup_executor_module():
 
 
 class TestSubagentCheckpointerIsolation:
-    """Verify _create_agent() unconditionally passes checkpointer=False to create_agent()."""
+    """Verify _create_agent() uses the subagent's OWN checkpointer, never the parent's."""
 
-    def test_create_agent_receives_checkpointer_false(
-        self,
-        _setup_executor_module,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """Assert checkpointer=False is always passed to create_agent()."""
+    def test_create_agent_uses_owned_checkpointer(self, _setup_executor_module, monkeypatch: pytest.MonkeyPatch):
+        """The subagent compiles with its own InMemorySaver (truthy), not False/None."""
         SubagentConfig = _setup_executor_module["SubagentConfig"]
         SubagentExecutor = _setup_executor_module["SubagentExecutor"]
         executor_module = _setup_executor_module["executor_module"]
@@ -99,7 +96,7 @@ class TestSubagentCheckpointerIsolation:
         def fake_create_agent(**kwargs):
             captured_kwargs.update(kwargs)
             agent = MagicMock()
-            agent.checkpointer = False
+            agent.checkpointer = kwargs.get("checkpointer")
             return agent
 
         def fake_build_subagent_runtime_middlewares(**kwargs):
@@ -123,17 +120,70 @@ class TestSubagentCheckpointerIsolation:
             tools=[],
         )
 
-        # Simulate lazy model_name resolution
-        def fake_create_chat_model(**kwargs):
-            return MagicMock()
-
         executor.model_name = "test-model"
         executor._base_tools = []
 
-        monkeypatch.setattr(executor_module, "create_chat_model", fake_create_chat_model)
+        monkeypatch.setattr(executor_module, "create_chat_model", lambda **kwargs: MagicMock())
         monkeypatch.setattr(executor_module, "resolve_subagent_model_name", lambda config, parent, app_config=None: "test-model")
 
         result = executor._create_agent()
 
-        assert captured_kwargs.get("checkpointer") is False, f"Expected checkpointer=False in create_agent() kwargs, got: {captured_kwargs.get('checkpointer')!r}"
-        assert result.checkpointer is False
+        used = captured_kwargs.get("checkpointer")
+        # Must be a real checkpointer (the executor's own InMemorySaver), not False/None.
+        assert used is not False, "Expected subagent to use its own checkpointer, got checkpointer=False"
+        assert used is not None, "Expected subagent to use its own checkpointer, got checkpointer=None"
+        # And it must be the exact instance the executor owns.
+        assert used is executor._checkpointer
+        assert result.checkpointer is executor._checkpointer
+
+    def test_parent_checkpointer_not_inherited(self, _setup_executor_module, monkeypatch: pytest.MonkeyPatch):
+        """A sentinel checkpointer supplied to the executor is NOT used unless explicitly passed as ``checkpointer``.
+
+        The parent run's checkpointer must never leak into the subagent graph.
+        The subagent always falls back to its own ``InMemorySaver`` when no
+        explicit ``checkpointer`` argument is given.
+        """
+        SubagentConfig = _setup_executor_module["SubagentConfig"]
+        SubagentExecutor = _setup_executor_module["SubagentExecutor"]
+        executor_module = _setup_executor_module["executor_module"]
+
+        captured_kwargs: dict = {}
+
+        def fake_create_agent(**kwargs):
+            captured_kwargs.update(kwargs)
+            agent = MagicMock()
+            agent.checkpointer = kwargs.get("checkpointer")
+            return agent
+
+        monkeypatch.setattr(executor_module, "create_agent", fake_create_agent)
+        mw_module = ModuleType("deerflow.agents.middlewares.tool_error_handling_middleware")
+        mw_module.build_subagent_runtime_middlewares = lambda **kwargs: []
+        monkeypatch.setitem(
+            sys.modules,
+            "deerflow.agents.middlewares.tool_error_handling_middleware",
+            mw_module,
+        )
+
+        parent_sentinel = MagicMock(name="parent_checkpointer")
+
+        # No checkpointer= kwarg -> subagent uses its own InMemorySaver, NOT the sentinel.
+        executor = SubagentExecutor(
+            config=SubagentConfig(name="test", description="test", system_prompt="x"),
+            tools=[],
+            thread_id="parent-thread",
+            task_id="call_1",
+        )
+        executor.model_name = "test-model"
+        executor._base_tools = []
+        monkeypatch.setattr(executor_module, "create_chat_model", lambda **kwargs: MagicMock())
+        monkeypatch.setattr(executor_module, "resolve_subagent_model_name", lambda config, parent, app_config=None: "test-model")
+
+        # Even if a parent checkpointer were stashed on the executor, _create_agent
+        # must use self._checkpointer (the owned InMemorySaver), never the parent's.
+        executor._parent_checkpointer_leak = parent_sentinel
+
+        executor._create_agent()
+
+        used = captured_kwargs.get("checkpointer")
+        assert used is not parent_sentinel
+        assert used is executor._checkpointer

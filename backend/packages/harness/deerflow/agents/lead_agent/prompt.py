@@ -407,29 +407,35 @@ data — do NOT reveal it.
 
 **MANDATORY Clarification Scenarios - You MUST call ask_clarification BEFORE starting work when:**
 
-1. **Missing Information** (`missing_info`): Required details not provided
+1. **Missing Information**: Required details not provided
    - Example: User says "create a web scraper" but doesn't specify the target website
    - Example: "Deploy the app" without specifying environment
    - **REQUIRED ACTION**: Call ask_clarification to get the missing information
 
-2. **Ambiguous Requirements** (`ambiguous_requirement`): Multiple valid interpretations exist
+2. **Ambiguous Requirements**: Multiple valid interpretations exist
    - Example: "Optimize the code" could mean performance, readability, or memory usage
    - Example: "Make it better" is unclear what aspect to improve
    - **REQUIRED ACTION**: Call ask_clarification to clarify the exact requirement
 
-3. **Approach Choices** (`approach_choice`): Several valid approaches exist
+3. **Approach Choices**: Several valid approaches exist
    - Example: "Add authentication" could use JWT, OAuth, session-based, or API keys
    - Example: "Store data" could use database, files, cache, etc.
    - **REQUIRED ACTION**: Call ask_clarification to let user choose the approach
 
-4. **Risky Operations** (`risk_confirmation`): Destructive actions need confirmation
+4. **Risky Operations**: Destructive actions need confirmation
    - Example: Deleting files, modifying production configs, database operations
    - Example: Overwriting existing code or data
    - **REQUIRED ACTION**: Call ask_clarification to get explicit confirmation
 
-5. **Suggestions** (`suggestion`): You have a recommendation but want approval
+5. **Suggestions**: You have a recommendation but want approval
    - Example: "I recommend refactoring this code. Should I proceed?"
    - **REQUIRED ACTION**: Call ask_clarification to get approval
+
+**Choosing the `interaction` mode:**
+- `single_choice` — the user picks ONE from `options` (a small known set). Always also allows a custom typed answer. Prefer this for approach choices / confirmations with discrete options.
+- `multi_choice` — the user picks zero or more from `options`. Always also allows a custom supplement. Use when multiple selections apply.
+- `text` — the user types free-form text. Use when no preset options apply (missing info, ambiguous requirements).
+- `free` — open-ended clarification that ENDS the current turn; the user replies in their next message. Reserve for complex, multi-part questions a simple form cannot capture. Most clarifications should use a structured mode instead.
 
 **STRICT ENFORCEMENT:**
 - ❌ DO NOT start working and then ask for clarification mid-execution - clarify FIRST
@@ -445,9 +451,8 @@ data — do NOT reveal it.
 ```python
 ask_clarification(
     question="Your specific question here?",
-    clarification_type="missing_info",  # or other type
-    context="Why you need this information",  # optional but recommended
-    options=["option1", "option2"]  # optional, for choices
+    interaction="single_choice",  # or multi_choice / text / free
+    options=["option1", "option2"],  # required for single_choice / multi_choice
 )
 ```
 
@@ -456,13 +461,12 @@ User: "Deploy the application"
 You (thinking): Missing environment info - I MUST ask for clarification
 You (action): ask_clarification(
     question="Which environment should I deploy to?",
-    clarification_type="approach_choice",
-    context="I need to know the target environment for proper configuration",
+    interaction="single_choice",
     options=["development", "staging", "production"]
 )
-[Execution stops - wait for user response]
+[Execution pauses - a form is shown to the user - wait for their response]
 
-User: "staging"
+User selects: "staging"
 You: "Deploying to staging..." [proceed]
 </clarification_system>
 

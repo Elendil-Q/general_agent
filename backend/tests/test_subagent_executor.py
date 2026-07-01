@@ -1624,11 +1624,13 @@ class TestCleanupBackgroundTask:
         # Should not raise
         executor_module.cleanup_background_task("nonexistent-task")
 
-    def test_cleanup_removes_task_with_completed_at_even_if_running(self, executor_module, classes):
-        """Test that cleanup removes task if completed_at is set, even if status is RUNNING.
+    def test_cleanup_keeps_running_task_even_if_completed_at_set(self, executor_module, classes):
+        """Cleanup keys strictly off ``is_terminal`` — not ``completed_at``.
 
-        This is a safety net: if completed_at is set, the task is considered done
-        regardless of status.
+        INTERRUPTED subagents never set ``completed_at`` but must stay resident
+        for resume, so cleanup can no longer treat ``completed_at`` as a done
+        signal. A RUNNING task with ``completed_at`` set (a transient inconsistency)
+        is therefore left in place rather than greedily removed.
         """
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
@@ -1638,14 +1640,14 @@ class TestCleanupBackgroundTask:
             task_id=task_id,
             trace_id="test-trace",
             status=SubagentStatus.RUNNING,  # Status not terminal
-            completed_at=datetime.now(),  # But completed_at is set
+            completed_at=datetime.now(),  # completed_at is set but status wins
         )
         executor_module._background_tasks[task_id] = result
 
         executor_module.cleanup_background_task(task_id)
 
-        # Should be removed because completed_at is set
-        assert task_id not in executor_module._background_tasks
+        # Kept because status is not terminal; only is_terminal is cleanup-safe.
+        assert task_id in executor_module._background_tasks
 
 
 # -----------------------------------------------------------------------------

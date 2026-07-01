@@ -52,17 +52,55 @@ def pop_cached_subagent_usage(tool_call_id: str) -> dict | None:
 
 
 def _is_subagent_terminal(result: Any) -> bool:
-    """Return whether a background subagent result is safe to clean up."""
-    return result.status in {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.CANCELLED, SubagentStatus.TIMED_OUT} or getattr(result, "completed_at", None) is not None
+    """Return whether a background subagent result is safe to clean up.
+
+    INTERRUPTED is intentionally excluded: a paused subagent must stay resident
+    so it can be resumed via ``resume_background_subagent``.
+    """
+    return result.status in {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.CANCELLED, SubagentStatus.TIMED_OUT}
+
+
+def _summarize_interrupts(interrupts: Any) -> str:
+    """Render the serialized ``__interrupt__`` payload as a short human-readable string.
+
+    ``interrupts`` is the list of ``{value, id}`` dicts produced by
+    ``serialize_lc_object`` on the raw ``Interrupt`` tuple. Falls back to a
+    plain ``str`` rendering for anything unexpected so the lead agent always
+    gets *some* question to surface.
+    """
+    if not interrupts:
+        return "(no question provided)"
+    parts: list[str] = []
+    if isinstance(interrupts, (list, tuple)):
+        items = interrupts
+    else:
+        items = [interrupts]
+    for item in items:
+        value = item.get("value") if isinstance(item, dict) else item
+        if isinstance(value, str):
+            parts.append(value)
+        elif value is not None:
+            try:
+                import json
+
+                parts.append(json.dumps(value, ensure_ascii=False, default=str))
+            except Exception:
+                parts.append(str(value))
+    return " | ".join(parts) if parts else "(no question provided)"
 
 
 async def _await_subagent_terminal(task_id: str, max_polls: int) -> Any | None:
-    """Poll until the background subagent reaches a terminal status or we run out of polls."""
+    """Poll until the background subagent stops or we run out of polls.
+
+    ``is_stopped`` (terminal OR INTERRUPTED) is the right predicate here: a
+    paused subagent is no longer actively running, so a parent cancel should not
+    block waiting on it. INTERRUPTED tasks are left resident for resume.
+    """
     for _ in range(max_polls):
         result = get_background_task_result(task_id)
         if result is None:
             return None
-        if _is_subagent_terminal(result):
+        if getattr(result.status, "is_stopped", result.status.is_terminal):
             return result
         await asyncio.sleep(5)
     return None
@@ -330,6 +368,10 @@ async def task_tool(
         "oauth_provider": oauth_provider,
         "oauth_id": oauth_id,
         "run_id": run_id,
+        # tool_call_id becomes the task_id; passing it here lets the executor
+        # derive a deterministic, API-addressable subagent_thread_id so an
+        # interrupted subagent can be resumed by task_id.
+        "task_id": tool_call_id,
     }
     if resolved_app_config is not None:
         executor_kwargs["app_config"] = resolved_app_config
@@ -416,6 +458,26 @@ async def task_tool(
                 logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
                 cleanup_background_task(task_id)
                 return f"Task timed out. Error: {result.error}"
+            elif result.status == SubagentStatus.INTERRUPTED:
+                # The subagent called interrupt() and is paused awaiting human
+                # input. Surface the interrupt question to the frontend and return
+                # a pause message so the lead agent's turn can end naturally. The
+                # result + executor stay resident (NOT cleaned up) so the subagent
+                # can be resumed via POST /api/threads/{parent}/subagents/{task_id}/resume.
+                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
+                _report_subagent_usage(runtime, result)
+                writer(
+                    {
+                        "type": "task_interrupted",
+                        "task_id": task_id,
+                        "subagent_thread_id": result.subagent_thread_id,
+                        "description": description,
+                        "interrupts": result.interrupts,
+                    }
+                )
+                logger.info(f"[trace={trace_id}] Task {task_id} interrupted awaiting human input")
+                interrupt_summary = _summarize_interrupts(result.interrupts)
+                return f"Task paused awaiting human input. task_id={task_id}. Question: {interrupt_summary} Resume by providing an answer to this task_id."
 
             # Still running, wait before next poll
             await asyncio.sleep(5)

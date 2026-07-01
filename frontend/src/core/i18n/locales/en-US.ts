@@ -342,6 +342,15 @@ export const enUS: Translations = {
     failed: "Subtask failed",
   },
 
+  clarification: {
+    title: "Your input is needed",
+    description: "Please answer the question to continue.",
+    submit: "Submit",
+    other: "Other (type your own)",
+    supplement: "Additional notes",
+    fillPlaceholder: "Type your answer",
+  },
+
   // Token Usage
   tokenUsage: {
     title: "Token Usage",

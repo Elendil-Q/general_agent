@@ -26,6 +26,7 @@ import type { UploadedFileInfo } from "../uploads";
 import { promptInputFilePartToFile, uploadFiles } from "../uploads";
 
 import { fetchThreadTokenUsage } from "./api";
+import type { ClarificationInterruptRequest } from "./clarification";
 import {
   buildThreadsSearchQueryOptions,
   DEFAULT_THREAD_SEARCH_PARAMS,
@@ -776,6 +777,23 @@ export function useThreadStream({
   const queryClient = useQueryClient();
   const updateSubtask = useUpdateSubtask();
 
+  // --- Clarification interrupt latch -------------------------------------
+  // The SDK's `thread.interrupt` getter is unreliable for driving a modal:
+  // `fetchStateHistory` returns a `historyValues` snapshot WITHOUT
+  // `__interrupt__` (interrupts are a live-stream construct), so on
+  // thread-switch / page-refresh the getter is briefly undefined until
+  // `reconnectOnMount` + `joinStream` re-establishes the stream. Latching the
+  // interrupt locally from `thread.values.__interrupt__` and clearing it only
+  // on explicit lifecycle events (submit / dismiss / thread switch / run
+  // finish) keeps the modal stable instead of flickering closed.
+  const [clarificationInterruptValue, setClarificationInterruptValue] =
+    useState<ClarificationInterruptRequest | null>(null);
+  const [clarificationDismissed, setClarificationDismissed] = useState(false);
+  // tool_call_id of the interrupt we most recently submitted a resume for, so
+  // a reconnected stream replaying the same paused interrupt doesn't re-open
+  // the modal after the user already answered.
+  const submittedInterruptIdRef = useRef<string | null>(null);
+
   const thread = useStream<AgentThreadState>({
     client: getAPIClient(isMock),
     assistantId: "lead_agent",
@@ -955,6 +973,20 @@ export function useThreadStream({
           .map(messageIdentity)
           .filter((id): id is string => Boolean(id)),
       );
+      // Do NOT clear the clarification latch here. The SDK fires onFinish
+      // whenever the SSE stream closes — including when the run PAUSES on a
+      // clarification interrupt. `state` is the refetched history head
+      // (submit's onSuccess awaits history.mutate then calls onFinish), whose
+      // `.values` omits `__interrupt__` (interrupts live in tasks[].interrupts,
+      // not channel_values — see the SDK `interrupt` getter fallback). So a
+      // pause is indistinguishable from a terminal state here, and clearing
+      // would dismiss the form the instant it appears ("一闪而过"). After
+      // onFinish the SDK also calls setStreamValues(null) (submit's onSuccess
+      // returns null), which makes thread.values fall back to the history
+      // snapshot — also without `__interrupt__`. The latch effect below
+      // early-returns on empty `rawInterrupt`, so it correctly PRESERVES the
+      // latch across both transitions; a stale latch is cleared by that
+      // effect's isLoading-gated else branch, never here.
       void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
       void queryClient.invalidateQueries({
         queryKey: INFINITE_THREADS_QUERY_KEY_PREFIX,
@@ -1094,6 +1126,14 @@ export function useThreadStream({
         return;
       }
       sendInFlightRef.current = true;
+
+      // A new user turn abandons any pending clarification; the latch is
+      // SET-only w.r.t. `__interrupt__` (won't self-clear from stream
+      // lifecycle — see the latch effect below), so clear it here so a stale
+      // inline form doesn't linger over the new run.
+      setClarificationInterruptValue(null);
+      setClarificationDismissed(false);
+      submittedInterruptIdRef.current = null;
 
       const text = message.text.trim();
 
@@ -1258,6 +1298,9 @@ export function useThreadStream({
               thinking_enabled: context.mode !== "flash",
               is_plan_mode: context.mode === "pro" || context.mode === "ultra",
               subagent_enabled: context.mode === "ultra",
+              // Enable structured clarification interrupts (single/multi/text form)
+              // on the web. IM channels don't set this and fall back to goto=END.
+              clarification_interrupt_enabled: true,
               reasoning_effort:
                 context.reasoning_effort ??
                 (context.mode === "ultra"
@@ -1305,6 +1348,10 @@ export function useThreadStream({
         return;
       }
       sendInFlightRef.current = true;
+      // Regenerating abandons any pending clarification, like sendMessage.
+      setClarificationInterruptValue(null);
+      setClarificationDismissed(false);
+      submittedInterruptIdRef.current = null;
       prevHumanMsgCountRef.current = humanMessageCount;
       pendingUsageBaselineMessageIdsRef.current = new Set(
         persistedMessages
@@ -1444,11 +1491,109 @@ export function useThreadStream({
     messages: mergedMessages,
   } as typeof thread;
 
+  // Stabilize the active clarification interrupt in local state.
+  // The SDK's `thread.interrupt` getter is undefined until `reconnectOnMount`
+  // re-streams `__interrupt__` (history snapshots don't carry it). Latch from
+  // `thread.values.__interrupt__`. This effect is SET-only: it never clears
+  // the latch when `rawInterrupt` is empty. The SDK drops `__interrupt__` from
+  // `thread.values` at two points during a paused run — (a) a later `values`
+  // chunk without it REPLACES stream.values (manager.js
+  // `else this.setStreamValues(data)`), and (b) after the stream ends
+  // `onSuccess` returns null → `setStreamValues(null)` → `thread.values`
+  // falls back to the history snapshot (no `__interrupt__`). In both cases
+  // `rawInterrupt` empties while the run is still paused, so clearing here
+  // would dismiss the form the instant it appears ("一闪而过"). The latch is
+  // cleared explicitly on user action instead: resume (`resumeClarification`),
+  // dismiss, a new/regenerate submit (`sendMessage` / `regenerateMessage`),
+  // and thread switch (the effect below). We do NOT clear on run finish: see
+  // `onFinish` above for why a pause is indistinguishable from a terminal
+  // state there.
+  const rawInterrupt = (thread.values as { __interrupt__?: unknown })
+    .__interrupt__;
+  useEffect(() => {
+    if (!Array.isArray(rawInterrupt) || rawInterrupt.length === 0) return;
+    const last = rawInterrupt[rawInterrupt.length - 1] as
+      | { value?: unknown }
+      | undefined;
+    const value = last?.value;
+    if (
+      value &&
+      typeof value === "object" &&
+      (value as { type?: string }).type === "clarification_request"
+    ) {
+      const req = value as ClarificationInterruptRequest;
+      // Don't re-open the modal for an interrupt we already answered — the
+      // resumed run may replay the paused checkpoint before producing its
+      // first value chunk.
+      if (req.tool_call_id === submittedInterruptIdRef.current) return;
+      setClarificationInterruptValue(req);
+      setClarificationDismissed(false);
+    }
+  }, [rawInterrupt]);
+
+  // Clear latch + dismissed when switching threads so no modal leaks across
+  // threads. The server-side paused run is NOT cancelled (on_disconnect:
+  // "continue"); switching back reconnects via joinStream and re-latches.
+  useEffect(() => {
+    setClarificationInterruptValue(null);
+    setClarificationDismissed(false);
+    submittedInterruptIdRef.current = null;
+  }, [threadId]);
+
+  const clarificationInterrupt =
+    clarificationInterruptValue && !clarificationDismissed
+      ? clarificationInterruptValue
+      : null;
+
+  // User dismissed the modal without answering (ESC / overlay / cancel). Keep
+  // the run paused and resumable — only hide locally. A reconnect that
+  // re-streams the same interrupt is ignored because tool_call_id matches
+  // nothing here; to re-show after dismiss the user must switch away and back
+  // (threadId effect clears dismissed).
+  const dismissClarification = useCallback(() => {
+    setClarificationDismissed(true);
+  }, []);
+
+  // Resume a paused clarification interrupt with the user's answer. Sends
+  // Command(resume=answer) on the same thread so the agent continues the turn.
+  const resumeClarification = useCallback(
+    async (answer: string) => {
+      if (!threadId) return;
+      const interruptId = clarificationInterruptValue?.tool_call_id ?? null;
+      // Mark this interrupt as answered so a replayed stream chunk for the
+      // same paused checkpoint doesn't re-open the modal.
+      submittedInterruptIdRef.current = interruptId;
+      // Clear the latch immediately so the modal closes on submit rather than
+      // waiting for the resumed run's first value chunk.
+      setClarificationInterruptValue(null);
+      setClarificationDismissed(false);
+      await thread.submit(null, {
+        threadId: threadId,
+        streamSubgraphs: true,
+        streamResumable: true,
+        config: {
+          recursion_limit: 1000,
+        },
+        context: {
+          clarification_interrupt_enabled: true,
+          thread_id: threadId,
+        },
+        command: {
+          resume: answer,
+        },
+      });
+    },
+    [thread, threadId, clarificationInterruptValue],
+  );
+
   return {
     thread: mergedThread,
     pendingUsageMessages,
     sendMessage,
     regenerateMessage,
+    resumeClarification,
+    dismissClarification,
+    clarificationInterrupt,
     isUploading,
     isHistoryLoading,
     hasMoreHistory,

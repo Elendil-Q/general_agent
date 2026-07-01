@@ -22,6 +22,20 @@ class FakeSubagentStatus(Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
+    INTERRUPTED = "interrupted"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {
+            type(self).COMPLETED,
+            type(self).FAILED,
+            type(self).CANCELLED,
+            type(self).TIMED_OUT,
+        }
+
+    @property
+    def is_stopped(self) -> bool:
+        return self.is_terminal or self is type(self).INTERRUPTED
 
 
 def _make_runtime(*, app_config=None) -> SimpleNamespace:
@@ -60,6 +74,8 @@ def _make_result(
     result: str | None = None,
     error: str | None = None,
     token_usage_records: list[dict] | None = None,
+    interrupts: list[dict] | None = None,
+    subagent_thread_id: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         status=status,
@@ -68,6 +84,8 @@ def _make_result(
         error=error,
         token_usage_records=token_usage_records or [],
         usage_reported=False,
+        interrupts=interrupts,
+        subagent_thread_id=subagent_thread_id,
     )
 
 
@@ -241,6 +259,71 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     event_types = [e["type"] for e in events]
     assert event_types == ["task_started", "task_running", "task_running", "task_completed"]
     assert events[-1]["result"] == "all done"
+
+
+def test_task_tool_emits_interrupted_event_and_keeps_task_resident(monkeypatch):
+    """An INTERRUPTED subagent surfaces task_interrupted, returns a resume handle,
+    and is NOT cleaned up (stays resident for resume)."""
+    config = _make_subagent_config()
+    runtime = _make_runtime()
+    events = []
+    captured = {}
+    cleanup_calls: list[str] = []
+    get_available_tools = MagicMock(return_value=["tool-a"])
+
+    class DummyExecutor:
+        def __init__(self, **kwargs):
+            captured["executor_kwargs"] = kwargs
+
+        def execute_async(self, prompt, task_id=None):
+            captured["task_id"] = task_id
+            return task_id or "generated-task-id"
+
+    # First poll: RUNNING with a message; second poll: INTERRUPTED.
+    responses = iter(
+        [
+            _make_result(FakeSubagentStatus.RUNNING, ai_messages=[{"id": "m1", "content": "working"}]),
+            _make_result(
+                FakeSubagentStatus.INTERRUPTED,
+                ai_messages=[{"id": "m1", "content": "working"}],
+                interrupts=[{"value": "Approve plan?", "id": "int-1"}],
+                subagent_thread_id="subagent::thread-1::tc-int",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+    monkeypatch.setattr(task_tool_module, "get_background_task_result", lambda _: next(responses))
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(task_tool_module, "cleanup_background_task", cleanup_calls.append)
+    monkeypatch.setattr("deerflow.tools.get_available_tools", get_available_tools)
+
+    output = _run_task_tool(
+        runtime=runtime,
+        description="needs approval",
+        prompt="draft plan",
+        subagent_type="general-purpose",
+        tool_call_id="tc-int",
+    )
+
+    # task_id is threaded into the executor for a deterministic subagent_thread_id.
+    assert captured["executor_kwargs"]["task_id"] == "tc-int"
+    # Resume handle surfaced to the lead agent.
+    assert "task_id=tc-int" in output
+    # task_interrupted event emitted with the interrupt payload + subagent thread id.
+    interrupted_events = [e for e in events if e["type"] == "task_interrupted"]
+    assert len(interrupted_events) == 1
+    ev = interrupted_events[0]
+    assert ev["task_id"] == "tc-int"
+    assert ev["subagent_thread_id"] == "subagent::thread-1::tc-int"
+    assert ev["interrupts"] == [{"value": "Approve plan?", "id": "int-1"}]
+    # NOT cleaned up — the task must stay resident for resume.
+    assert cleanup_calls == []
+    # Event sequence: started, running, interrupted (no terminal cleanup event).
+    assert [e["type"] for e in events] == ["task_started", "task_running", "task_interrupted"]
 
 
 def test_task_tool_propagates_tool_groups_to_subagent(monkeypatch):

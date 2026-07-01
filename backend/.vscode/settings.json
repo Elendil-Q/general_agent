@@ -1,5 +1,12 @@
 {
   "window.title": "${activeEditorShort}${separator}${separator}deer-flow/backend",
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}/packages/harness"
+  ],
+  "python.analysis.autoImportCompletions": true,
   "[python]": {
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {

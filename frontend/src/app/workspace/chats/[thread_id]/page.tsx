@@ -26,6 +26,7 @@ import { useI18n } from "@/core/i18n/hooks";
 import { useModels } from "@/core/models/hooks";
 import { useNotification } from "@/core/notification/hooks";
 import { useLocalSettings, useThreadSettings } from "@/core/settings";
+import { isClarificationInterrupt } from "@/core/threads/clarification";
 import {
   useThreadMetadata,
   useThreadStream,
@@ -81,6 +82,9 @@ export default function ChatPage() {
     pendingUsageMessages,
     sendMessage,
     regenerateMessage,
+    resumeClarification,
+    dismissClarification,
+    clarificationInterrupt: clarificationInterruptRaw,
     isUploading,
     isHistoryLoading,
     hasMoreHistory,
@@ -121,6 +125,15 @@ export default function ChatPage() {
   });
 
   const hasThreadMessages = thread.messages.length > 0;
+
+  // `clarificationInterrupt` is latched in useThreadStream (stable across the
+  // SDK's loading window) so the modal doesn't flicker closed. Guard again here
+  // for type narrowing before passing to the modal.
+  const clarificationInterrupt = isClarificationInterrupt(
+    clarificationInterruptRaw,
+  )
+    ? clarificationInterruptRaw
+    : null;
 
   useEffect(() => {
     if (
@@ -172,7 +185,15 @@ export default function ChatPage() {
   const hasTodos = (thread.values.todos?.length ?? 0) > 0;
 
   return (
-    <ThreadContext.Provider value={{ thread, isMock }}>
+    <ThreadContext.Provider
+      value={{
+        thread,
+        isMock,
+        clarificationInterrupt,
+        resumeClarification,
+        dismissClarification,
+      }}
+    >
       <ChatBox threadId={threadId}>
         <div className="relative flex size-full min-h-0 justify-between">
           <header

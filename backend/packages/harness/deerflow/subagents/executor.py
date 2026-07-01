@@ -19,11 +19,14 @@ from langchain.agents import create_agent
 from langchain.tools import BaseTool
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from deerflow.agents.thread_state import SandboxState, ThreadDataState, ThreadState
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
 from deerflow.models import create_chat_model
+from deerflow.runtime.serialization import serialize_lc_object
 from deerflow.skills.tool_policy import filter_tools_by_skill_allowed_tools
 from deerflow.skills.types import Skill
 from deerflow.subagents.config import SubagentConfig, resolve_subagent_model_name
@@ -55,6 +58,9 @@ class SubagentStatus(Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
+    # Paused on ``interrupt()`` awaiting a ``Command(resume=...)``. Not terminal:
+    # the task is still resumable and must not be cleaned up.
+    INTERRUPTED = "interrupted"
 
     @property
     def is_terminal(self) -> bool:
@@ -64,6 +70,16 @@ class SubagentStatus(Enum):
             type(self).CANCELLED,
             type(self).TIMED_OUT,
         }
+
+    @property
+    def is_stopped(self) -> bool:
+        """Terminal or paused — the poll loop should stop waiting on this status.
+
+        ``INTERRUPTED`` is stopped-but-not-terminal: ``task_tool`` returns a
+        pause message to the lead agent, but the result/executor stay resident
+        for a later ``resume``.
+        """
+        return self.is_terminal or self is type(self).INTERRUPTED
 
 
 @dataclass
@@ -92,6 +108,14 @@ class SubagentResult:
     token_usage_records: list[dict[str, int | str | None]] = field(default_factory=list)
     usage_reported: bool = False
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    # Interrupt-resume state. ``interrupts`` holds the serialized ``__interrupt__``
+    # payload (list of ``{value, id}`` dicts); ``subagent_thread_id`` is the
+    # API-addressable identity the subagent's own checkpointer is keyed by;
+    # ``interrupted_at`` records the pause time (``completed_at`` stays None so
+    # cleanup heuristics do not treat an interrupted task as finished).
+    interrupts: list[dict[str, Any]] | None = None
+    subagent_thread_id: str | None = None
+    interrupted_at: datetime | None = None
     _state_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self):
@@ -134,10 +158,61 @@ class SubagentResult:
             self.status = status
             return True
 
+    def try_set_interrupted(
+        self,
+        *,
+        interrupts: list[dict[str, Any]] | None = None,
+        subagent_thread_id: str | None = None,
+        token_usage_records: list[dict[str, int | str | None]] | None = None,
+    ) -> bool:
+        """Transition a RUNNING subagent to INTERRUPTED exactly once.
+
+        Records the serialized ``__interrupt__`` payload and the subagent's own
+        thread_id so a later resume can address it. ``completed_at`` is left
+        None — an interrupted task is not finished and must not be cleaned up.
+        A terminal result refuses the transition (the first terminal state wins).
+        """
+        with self._state_lock:
+            if self.status.is_terminal or self.status is SubagentStatus.INTERRUPTED:
+                return False
+            if self.status is not SubagentStatus.RUNNING:
+                return False
+            if interrupts is not None:
+                self.interrupts = interrupts
+            if subagent_thread_id is not None:
+                self.subagent_thread_id = subagent_thread_id
+            if token_usage_records is not None:
+                self.token_usage_records = token_usage_records
+            self.interrupted_at = datetime.now()
+            self.status = SubagentStatus.INTERRUPTED
+            return True
+
+    def try_resume(self) -> bool:
+        """Transition an INTERRUPTED subagent back to RUNNING for a resume.
+
+        Clears the pause marker and the cooperative cancel flag so the new
+        ``astream(Command(resume=...))`` run starts clean. Only valid from
+        INTERRUPTED; any other status refuses.
+        """
+        with self._state_lock:
+            if self.status is not SubagentStatus.INTERRUPTED:
+                return False
+            self.interrupted_at = None
+            self.interrupts = None
+            self.status = SubagentStatus.RUNNING
+            self.cancel_event.clear()
+            return True
+
 
 # Global storage for background task results
 _background_tasks: dict[str, SubagentResult] = {}
 _background_tasks_lock = threading.Lock()
+
+# Executors keyed by task_id, kept resident so an INTERRUPTED subagent can be
+# resumed later via ``resume_background_subagent``. Removed only when the task
+# reaches a truly terminal state (see ``cleanup_background_task``). Guarded by
+# ``_background_tasks_lock`` to stay in sync with the result registry.
+_subagent_executors: dict[str, "SubagentExecutor"] = {}
 
 # Thread pool for background task scheduling and orchestration
 _scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-scheduler-")
@@ -293,6 +368,8 @@ class SubagentExecutor:
         oauth_provider: str | None = None,
         oauth_id: str | None = None,
         run_id: str | None = None,
+        task_id: str | None = None,
+        checkpointer: Any | None = None,
     ):
         """Initialize the executor.
 
@@ -315,6 +392,14 @@ class SubagentExecutor:
             oauth_id: Subject id at the external identity provider.
             run_id: Parent run id, so delegated guardrail decisions attribute to
                 the same run as the lead agent.
+            task_id: The dispatching tool_call_id. Used to derive a deterministic,
+                API-addressable ``subagent_thread_id`` so an interrupted subagent
+                can be resumed by ``task_id``.
+            checkpointer: Optional checkpointer for the subagent graph. Defaults
+                to a fresh ``InMemorySaver`` owned by this executor — never the
+                parent/Gateway checkpointer (cross-loop async savers break on the
+                isolated subagent loop). The saver is what makes
+                ``interrupt()``/``Command(resume=...)`` work.
         """
         self.config = config
         self.app_config = app_config
@@ -337,6 +422,23 @@ class SubagentExecutor:
         self.oauth_provider = oauth_provider
         self.oauth_id = oauth_id
         self.run_id = run_id
+
+        # Independent thread identity for the subagent's own checkpointer. The
+        # parent thread_id stays in effect for sandbox/file isolation (context);
+        # this one keys the subagent checkpoint so interrupt/resume state is
+        # isolated from the parent thread's checkpoint.
+        if thread_id and task_id:
+            self.subagent_thread_id = f"subagent::{thread_id}::{task_id}"
+        else:
+            self.subagent_thread_id = f"subagent::{uuid.uuid4()}"
+        # The subagent owns its own async-capable, loop-safe checkpointer. It must
+        # NOT inherit the parent run's checkpointer (sync savers raise on async
+        # methods) nor the Gateway's main-loop-bound async saver (breaks on the
+        # isolated subagent loop). InMemorySaver implements both sync + async APIs.
+        self._checkpointer: Any = checkpointer if checkpointer is not None else InMemorySaver()
+        # Compiled agent is cached so a resume reuses the exact same graph +
+        # checkpointer instance against the existing checkpoint.
+        self._agent: Any | None = None
 
         self._base_tools = _filter_tools(
             tools,
@@ -372,7 +474,7 @@ class SubagentExecutor:
             middleware=middlewares,
             system_prompt=None,
             state_schema=ThreadState,
-            checkpointer=False,
+            checkpointer=self._checkpointer,
         )
 
     async def _load_skills(self) -> list[Skill]:
@@ -538,6 +640,9 @@ class SubagentExecutor:
         try:
             state, final_tools, deferred_setup = await self._build_initial_state(task)
             agent = self._create_agent(final_tools, deferred_setup=deferred_setup)
+            # Cache the compiled agent so a later resume reuses the exact same
+            # graph + checkpointer instance against the existing checkpoint.
+            self._agent = agent
 
             # Token collector for subagent LLM calls
             collector_caller = f"subagent:{self.config.name}"
@@ -580,8 +685,13 @@ class SubagentExecutor:
             )
 
             context: dict[str, Any] = {}
+            # Split thread identity: the checkpointer (configurable.thread_id)
+            # keys the subagent's OWN checkpoint so interrupt/resume state is
+            # isolated from the parent thread; the runtime context keeps the
+            # PARENT thread_id so sandbox/file tools keep writing to the parent's
+            # workspace.
+            run_config["configurable"] = {"thread_id": self.subagent_thread_id}
             if self.thread_id:
-                run_config["configurable"] = {"thread_id": self.thread_id}
                 context["thread_id"] = self.thread_id
             if self.app_config is not None:
                 context["app_config"] = self.app_config
@@ -601,6 +711,10 @@ class SubagentExecutor:
             # Use stream instead of invoke to get real-time updates
             # This allows us to collect AI messages as they are generated
             final_state = None
+            # Captured ``__interrupt__`` payload (if the subagent called
+            # ``interrupt()``). With ``stream_mode="values"`` LangGraph yields a
+            # final chunk carrying ``__interrupt__`` then ends the stream.
+            interrupts: Any = None
 
             # Pre-check: bail out immediately if already cancelled before streaming starts
             if result.cancel_event.is_set():
@@ -628,6 +742,14 @@ class SubagentExecutor:
 
                 final_state = chunk
 
+                # Detect an interrupt: LangGraph surfaces ``__interrupt__`` (a
+                # tuple of Interrupt objects) on the values chunk that pauses
+                # execution. Capture it; the stream will end right after.
+                if isinstance(chunk, dict):
+                    chunk_interrupts = chunk.get("__interrupt__")
+                    if chunk_interrupts:
+                        interrupts = chunk_interrupts
+
                 # Extract AI messages from the current state
                 messages = chunk.get("messages", [])
                 if messages:
@@ -651,82 +773,29 @@ class SubagentExecutor:
                                 seen_message_ids.add(message_id)
                             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(ai_messages)}")
 
+            # Stream ended. Determine why: cancel takes precedence over an
+            # interrupt (an explicit user stop wins over a pause), then an
+            # interrupt pauses for human input, otherwise the run completed.
+            if result.cancel_event.is_set():
+                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} cancelled after stream end")
+                result.try_set_terminal(
+                    SubagentStatus.CANCELLED,
+                    error="Cancelled by user",
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+            if interrupts:
+                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} interrupted awaiting human input")
+                result.try_set_interrupted(
+                    interrupts=serialize_lc_object(interrupts),
+                    subagent_thread_id=self.subagent_thread_id,
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed async execution")
             token_usage_records = collector.snapshot_records()
-            final_result: str | None = None
-
-            if final_state is None:
-                logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no final state")
-                final_result = "No response generated"
-            else:
-                # Extract the final message - find the last AIMessage
-                messages = final_state.get("messages", [])
-                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} final messages count: {len(messages)}")
-
-                # Find the last AIMessage in the conversation
-                last_ai_message = None
-                for msg in reversed(messages):
-                    if isinstance(msg, AIMessage):
-                        last_ai_message = msg
-                        break
-
-                if last_ai_message is not None:
-                    content = last_ai_message.content
-                    # Handle both str and list content types for the final result
-                    if isinstance(content, str):
-                        final_result = content
-                    elif isinstance(content, list):
-                        # Extract text from list of content blocks for final result only.
-                        # Concatenate raw string chunks directly, but preserve separation
-                        # between full text blocks for readability.
-                        text_parts = []
-                        pending_str_parts = []
-                        for block in content:
-                            if isinstance(block, str):
-                                pending_str_parts.append(block)
-                            elif isinstance(block, dict):
-                                if pending_str_parts:
-                                    text_parts.append("".join(pending_str_parts))
-                                    pending_str_parts.clear()
-                                text_val = block.get("text")
-                                if isinstance(text_val, str):
-                                    text_parts.append(text_val)
-                        if pending_str_parts:
-                            text_parts.append("".join(pending_str_parts))
-                        final_result = "\n".join(text_parts) if text_parts else "No text content in response"
-                    else:
-                        final_result = str(content)
-                elif messages:
-                    # Fallback: use the last message if no AIMessage found
-                    last_message = messages[-1]
-                    logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no AIMessage found, using last message: {type(last_message)}")
-                    raw_content = last_message.content if hasattr(last_message, "content") else str(last_message)
-                    if isinstance(raw_content, str):
-                        final_result = raw_content
-                    elif isinstance(raw_content, list):
-                        parts = []
-                        pending_str_parts = []
-                        for block in raw_content:
-                            if isinstance(block, str):
-                                pending_str_parts.append(block)
-                            elif isinstance(block, dict):
-                                if pending_str_parts:
-                                    parts.append("".join(pending_str_parts))
-                                    pending_str_parts.clear()
-                                text_val = block.get("text")
-                                if isinstance(text_val, str):
-                                    parts.append(text_val)
-                        if pending_str_parts:
-                            parts.append("".join(pending_str_parts))
-                        final_result = "\n".join(parts) if parts else "No text content in response"
-                    else:
-                        final_result = str(raw_content)
-                else:
-                    logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no messages in final state")
-                    final_result = "No response generated"
-
-            if final_result is None:
-                final_result = "No response generated"
+            final_result = self._extract_final_result(final_state)
 
             result.try_set_terminal(
                 SubagentStatus.COMPLETED,
@@ -849,6 +918,9 @@ class SubagentExecutor:
 
         with _background_tasks_lock:
             _background_tasks[task_id] = result
+            # Keep the executor resident so an INTERRUPTED subagent can be resumed
+            # in-place (same agent + checkpointer + subagent_thread_id).
+            _subagent_executors[task_id] = self
 
         parent_context = copy_context()
 
@@ -883,6 +955,271 @@ class SubagentExecutor:
                 with _background_tasks_lock:
                     task_result = _background_tasks[task_id]
                 task_result.try_set_terminal(SubagentStatus.FAILED, error=str(e))
+
+        _scheduler_pool.submit(run_task)
+        return task_id
+
+    async def _aresume(self, resume_value: Any, result_holder: SubagentResult) -> SubagentResult:
+        """Resume an INTERRUPTED subagent with a ``Command(resume=...)`` value.
+
+        Reuses the cached compiled agent (and thus its checkpointer) and the
+        same ``subagent_thread_id`` so LangGraph resumes from the paused
+        checkpoint. The astream loop and interrupt/cancel/completion detection
+        mirror ``_aexecute`` — a resumed run may itself interrupt again.
+        """
+        result = result_holder
+        ai_messages = result.ai_messages if result.ai_messages is not None else []
+        result.ai_messages = ai_messages
+        seen_message_ids: set[str] = {mid for msg in ai_messages if (mid := msg.get("id"))}
+
+        collector: SubagentTokenCollector | None = None
+        try:
+            agent = self._agent
+            if agent is None:
+                raise RuntimeError("Cannot resume: subagent has no cached compiled agent (was it interrupted?)")
+
+            collector_caller = f"subagent:{self.config.name}"
+            collector = SubagentTokenCollector(caller=collector_caller)
+
+            run_config: RunnableConfig = {
+                "recursion_limit": self.config.max_turns,
+                "callbacks": [collector],
+                "tags": [collector_caller],
+                "configurable": {"thread_id": self.subagent_thread_id},
+            }
+            tracing_callbacks = build_tracing_callbacks()
+            if tracing_callbacks:
+                existing_callbacks = list(run_config.get("callbacks") or [])
+                run_config["callbacks"] = [*existing_callbacks, *tracing_callbacks]
+
+            if self.config.name:
+                normalized_name = self.config.name.strip().lower().replace("_", "-")
+                assistant_id = f"subagent:{normalized_name}"
+            else:
+                assistant_id = "subagent"
+            inject_langfuse_metadata(
+                run_config,
+                thread_id=self.thread_id,
+                user_id=self.user_id,
+                assistant_id=assistant_id,
+                model_name=self.model_name,
+                environment=os.environ.get("DEER_FLOW_ENV") or os.environ.get("ENVIRONMENT"),
+            )
+
+            context: dict[str, Any] = {}
+            if self.thread_id:
+                context["thread_id"] = self.thread_id
+            if self.app_config is not None:
+                context["app_config"] = self.app_config
+            context["user_id"] = self.user_id
+            context["user_role"] = self.user_role
+            context["oauth_provider"] = self.oauth_provider
+            context["oauth_id"] = self.oauth_id
+            context["run_id"] = self.run_id
+            context["is_subagent"] = True
+
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} resuming after interrupt")
+
+            # Resume input: Command(resume=...) tells LangGraph to resume from
+            # the paused checkpoint, feeding ``resume_value`` back to ``interrupt()``.
+            graph_input = Command(resume=resume_value)
+
+            final_state = None
+            interrupts: Any = None
+
+            if result.cancel_event.is_set():
+                result.try_set_terminal(
+                    SubagentStatus.CANCELLED,
+                    error="Cancelled by user",
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+
+            async for chunk in agent.astream(graph_input, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
+                if result.cancel_event.is_set():
+                    result.try_set_terminal(
+                        SubagentStatus.CANCELLED,
+                        error="Cancelled by user",
+                        token_usage_records=collector.snapshot_records(),
+                    )
+                    return result
+
+                final_state = chunk
+                if isinstance(chunk, dict):
+                    chunk_interrupts = chunk.get("__interrupt__")
+                    if chunk_interrupts:
+                        interrupts = chunk_interrupts
+
+                messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
+                if messages:
+                    last_message = messages[-1]
+                    if isinstance(last_message, AIMessage):
+                        message_dict = last_message.model_dump()
+                        message_id = message_dict.get("id")
+                        if message_id:
+                            is_duplicate = message_id in seen_message_ids
+                        else:
+                            is_duplicate = message_dict in ai_messages
+                        if not is_duplicate:
+                            ai_messages.append(message_dict)
+                            if message_id:
+                                seen_message_ids.add(message_id)
+
+            if result.cancel_event.is_set():
+                result.try_set_terminal(
+                    SubagentStatus.CANCELLED,
+                    error="Cancelled by user",
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+            if interrupts:
+                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} re-interrupted after resume")
+                result.try_set_interrupted(
+                    interrupts=serialize_lc_object(interrupts),
+                    subagent_thread_id=self.subagent_thread_id,
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed after resume")
+            token_usage_records = collector.snapshot_records()
+            final_result = self._extract_final_result(final_state)
+            result.try_set_terminal(
+                SubagentStatus.COMPLETED,
+                result=final_result,
+                token_usage_records=token_usage_records,
+            )
+
+        except Exception as e:
+            logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} resume failed")
+            result.try_set_terminal(
+                SubagentStatus.FAILED,
+                error=str(e),
+                token_usage_records=collector.snapshot_records() if collector is not None else None,
+            )
+
+        return result
+
+    def _extract_final_result(self, final_state: Any) -> str:
+        """Extract the final result string from the subagent's final state.
+
+        Pulled out of ``_aexecute`` so the resume path reuses the same logic.
+        """
+        if final_state is None:
+            logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no final state")
+            return "No response generated"
+
+        messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
+        logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} final messages count: {len(messages)}")
+
+        last_ai_message = None
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage):
+                last_ai_message = msg
+                break
+
+        if last_ai_message is not None:
+            content = last_ai_message.content
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                pending_str_parts: list[str] = []
+                for block in content:
+                    if isinstance(block, str):
+                        pending_str_parts.append(block)
+                    elif isinstance(block, dict):
+                        if pending_str_parts:
+                            text_parts.append("".join(pending_str_parts))
+                            pending_str_parts.clear()
+                        text_val = block.get("text")
+                        if isinstance(text_val, str):
+                            text_parts.append(text_val)
+                if pending_str_parts:
+                    text_parts.append("".join(pending_str_parts))
+                return "\n".join(text_parts) if text_parts else "No text content in response"
+            return str(content)
+
+        if messages:
+            last_message = messages[-1]
+            logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no AIMessage found, using last message: {type(last_message)}")
+            raw_content = last_message.content if hasattr(last_message, "content") else str(last_message)
+            if isinstance(raw_content, str):
+                return raw_content
+            if isinstance(raw_content, list):
+                parts: list[str] = []
+                pending: list[str] = []
+                for block in raw_content:
+                    if isinstance(block, str):
+                        pending.append(block)
+                    elif isinstance(block, dict):
+                        if pending:
+                            parts.append("".join(pending))
+                            pending.clear()
+                        text_val = block.get("text")
+                        if isinstance(text_val, str):
+                            parts.append(text_val)
+                if pending:
+                    parts.append("".join(pending))
+                return "\n".join(parts) if parts else "No text content in response"
+            return str(raw_content)
+
+        logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no messages in final state")
+        return "No response generated"
+
+    def resume_async(self, resume_value: Any, task_id: str) -> str:
+        """Resume an INTERRUPTED background subagent.
+
+        Mirrors ``execute_async``: transitions the result INTERRUPTED→RUNNING,
+        submits ``_aresume`` to the persistent isolated loop, and returns the
+        ``task_id`` so the caller can poll the same ``SubagentResult`` for the
+        resumed run's progress.
+
+        Args:
+            resume_value: The value to feed back to ``interrupt()`` via
+                ``Command(resume=...)``.
+            task_id: The task_id of the interrupted subagent.
+
+        Returns:
+            The same ``task_id``.
+        """
+        with _background_tasks_lock:
+            result_holder = _background_tasks.get(task_id)
+            if result_holder is None:
+                raise KeyError(f"Unknown subagent task {task_id}")
+            if not result_holder.try_resume():
+                raise RuntimeError(f"Subagent task {task_id} is not interrupted (status={result_holder.status.value}); cannot resume")
+            result_holder.started_at = datetime.now()
+
+        logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} resuming, task_id={task_id}, timeout={self.config.timeout_seconds}s")
+
+        parent_context = copy_context()
+
+        def run_task():
+            with _background_tasks_lock:
+                _background_tasks[task_id].status = SubagentStatus.RUNNING
+
+            try:
+                execution_future = _submit_to_isolated_loop_in_context(
+                    parent_context,
+                    lambda: self._aresume(resume_value, _background_tasks[task_id]),
+                )
+                try:
+                    execution_future.result(timeout=self.config.timeout_seconds)
+                except FuturesTimeoutError:
+                    logger.error(f"[trace={self.trace_id}] Subagent {self.config.name} resume timed out after {self.config.timeout_seconds}s")
+                    with _background_tasks_lock:
+                        holder = _background_tasks[task_id]
+                    holder.cancel_event.set()
+                    holder.try_set_terminal(
+                        SubagentStatus.TIMED_OUT,
+                        error=f"Resume timed out after {self.config.timeout_seconds} seconds",
+                    )
+                    execution_future.cancel()
+            except Exception as e:
+                logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} resume failed")
+                with _background_tasks_lock:
+                    _background_tasks[task_id].try_set_terminal(SubagentStatus.FAILED, error=str(e))
 
         _scheduler_pool.submit(run_task)
         return task_id
@@ -938,8 +1275,10 @@ def cleanup_background_task(task_id: str) -> None:
     Should be called by task_tool after it finishes polling and returns the result.
     This prevents memory leaks from accumulated completed tasks.
 
-    Only removes tasks that are in a terminal state (COMPLETED/FAILED/TIMED_OUT)
-    to avoid race conditions with the background executor still updating the task entry.
+    Only removes tasks that are in a truly terminal state
+    (COMPLETED/FAILED/CANCELLED/TIMED_OUT) to avoid race conditions with the
+    background executor still updating the task entry, and to keep
+    INTERRUPTED subagents resident for a later resume.
 
     Args:
         task_id: The task ID to remove.
@@ -951,10 +1290,14 @@ def cleanup_background_task(task_id: str) -> None:
             logger.debug("Requested cleanup for unknown background task %s", task_id)
             return
 
-        # Only clean up tasks that are in a terminal state to avoid races with
-        # the background executor still updating the task entry.
-        if result.status.is_terminal or result.completed_at is not None:
+        # Only clean up tasks that are truly terminal. INTERRUPTED is NOT
+        # terminal — the task is paused and must stay resident (result +
+        # executor) so ``resume_background_subagent`` can resume it. Do not
+        # key off ``completed_at`` alone: an interrupted task never sets it,
+        # but a future field change must not accidentally make cleanup greedy.
+        if result.status.is_terminal:
             del _background_tasks[task_id]
+            _subagent_executors.pop(task_id, None)
             logger.debug("Cleaned up background task: %s", task_id)
         else:
             logger.debug(
@@ -962,3 +1305,57 @@ def cleanup_background_task(task_id: str) -> None:
                 task_id,
                 result.status.value if hasattr(result.status, "value") else result.status,
             )
+
+
+def get_subagent_executor(task_id: str) -> SubagentExecutor | None:
+    """Return the resident executor for a background task, if any.
+
+    Returns ``None`` for unknown or already-cleaned-up tasks. The executor is
+    kept resident specifically so an INTERRUPTED subagent can be resumed.
+    """
+    with _background_tasks_lock:
+        return _subagent_executors.get(task_id)
+
+
+def get_subagent_interrupt(task_id: str) -> dict[str, Any] | None:
+    """Return interrupt metadata for a paused subagent, or ``None`` if not paused.
+
+    Used by the resume endpoint to (a) verify the task is actually interrupted
+    and (b) surface the interrupt question to the caller. Returns ``None`` when
+    the task is unknown or not in the INTERRUPTED state.
+    """
+    with _background_tasks_lock:
+        result = _background_tasks.get(task_id)
+    if result is None or result.status is not SubagentStatus.INTERRUPTED:
+        return None
+    return {
+        "task_id": result.task_id,
+        "subagent_thread_id": result.subagent_thread_id,
+        "interrupts": result.interrupts,
+        "interrupted_at": result.interrupted_at.isoformat() if result.interrupted_at else None,
+    }
+
+
+def resume_background_subagent(task_id: str, resume_value: Any) -> str:
+    """Resume an INTERRUPTED background subagent by ``task_id``.
+
+    Looks up the resident executor and delegates to
+    ``SubagentExecutor.resume_async``. The caller polls the same
+    ``SubagentResult`` (via ``get_background_task_result``) for the resumed
+    run's progress.
+
+    Raises:
+        KeyError: Unknown task_id.
+        RuntimeError: The task is not currently INTERRUPTED.
+
+    Returns:
+        The same ``task_id``.
+    """
+    with _background_tasks_lock:
+        executor = _subagent_executors.get(task_id)
+        result = _background_tasks.get(task_id)
+    if executor is None or result is None:
+        raise KeyError(f"Unknown subagent task {task_id}")
+    if result.status is not SubagentStatus.INTERRUPTED:
+        raise RuntimeError(f"Subagent task {task_id} is not interrupted (status={result.status.value}); cannot resume")
+    return executor.resume_async(resume_value, task_id)

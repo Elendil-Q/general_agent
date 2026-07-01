@@ -262,6 +262,16 @@ export interface Translations {
     failed: string;
   };
 
+  // Clarification interrupt modal
+  clarification: {
+    title: string;
+    description: string;
+    submit: string;
+    other: string;
+    supplement: string;
+    fillPlaceholder: string;
+  };
+
   // Token Usage
   tokenUsage: {
     title: string;

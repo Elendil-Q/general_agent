@@ -41,10 +41,12 @@ import type { AgentThreadState } from "@/core/threads";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
+import { ClarificationInlineForm } from "../clarification-inline-form";
 import { CopyButton } from "../copy-button";
 import { StreamingIndicator } from "../streaming-indicator";
 import { Tooltip } from "../tooltip";
 
+import { useThread } from "./context";
 import { MarkdownContent } from "./markdown-content";
 import { MessageGroup } from "./message-group";
 import { MessageListItem } from "./message-list-item";
@@ -191,6 +193,8 @@ export function MessageList({
   canRegenerate?: boolean;
 }) {
   const { t } = useI18n();
+  const { clarificationInterrupt, resumeClarification, dismissClarification } =
+    useThread();
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
   const prevIsLoading = useRef(thread.isLoading);
 
@@ -590,6 +594,20 @@ export function MessageList({
             </div>
           );
         })}
+        {clarificationInterrupt &&
+          resumeClarification &&
+          dismissClarification && (
+            <div className="w-full">
+              <ClarificationInlineForm
+                interrupt={clarificationInterrupt}
+                onSubmit={(answer) => {
+                  void resumeClarification(answer);
+                }}
+                onDismiss={dismissClarification}
+                disabled={thread.isLoading}
+              />
+            </div>
+          )}
         {thread.isLoading && !hasActiveAssistantText && (
           <div className="w-full">
             <Reasoning isStreaming={true} startTimeProp={turnStartTime}>
