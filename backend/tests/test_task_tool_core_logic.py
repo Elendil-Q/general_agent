@@ -261,9 +261,12 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     assert events[-1]["result"] == "all done"
 
 
-def test_task_tool_emits_interrupted_event_and_keeps_task_resident(monkeypatch):
-    """An INTERRUPTED subagent surfaces task_interrupted, returns a resume handle,
-    and is NOT cleaned up (stays resident for resume)."""
+def test_task_tool_keeps_polling_through_interrupted_until_completed(monkeypatch):
+    """Route 甲: an INTERRUPTED subagent surfaces task_interrupted ONCE but the
+    tool does NOT return a pause string — it keeps polling until the subagent
+    is resumed and reaches COMPLETED, then returns the result so the lead model
+    continues in the SAME turn. Previously the tool returned a pause string and
+    the lead turn ended (no synthesis of the clarified result)."""
     config = _make_subagent_config()
     runtime = _make_runtime()
     events = []
@@ -279,7 +282,9 @@ def test_task_tool_emits_interrupted_event_and_keeps_task_resident(monkeypatch):
             captured["task_id"] = task_id
             return task_id or "generated-task-id"
 
-    # First poll: RUNNING with a message; second poll: INTERRUPTED.
+    # RUNNING -> INTERRUPTED (paused) -> INTERRUPTED (still paused, polling) ->
+    # COMPLETED (resumed). Two consecutive INTERRUPTED polls prove
+    # task_interrupted is emitted exactly once, not on every 5s poll.
     responses = iter(
         [
             _make_result(FakeSubagentStatus.RUNNING, ai_messages=[{"id": "m1", "content": "working"}]),
@@ -288,6 +293,17 @@ def test_task_tool_emits_interrupted_event_and_keeps_task_resident(monkeypatch):
                 ai_messages=[{"id": "m1", "content": "working"}],
                 interrupts=[{"value": "Approve plan?", "id": "int-1"}],
                 subagent_thread_id="subagent::thread-1::tc-int",
+            ),
+            _make_result(
+                FakeSubagentStatus.INTERRUPTED,
+                ai_messages=[{"id": "m1", "content": "working"}],
+                interrupts=[{"value": "Approve plan?", "id": "int-1"}],
+                subagent_thread_id="subagent::thread-1::tc-int",
+            ),
+            _make_result(
+                FakeSubagentStatus.COMPLETED,
+                ai_messages=[{"id": "m1", "content": "working"}, {"id": "m2", "content": "resumed"}],
+                result="plan approved and executed",
             ),
         ]
     )
@@ -311,19 +327,138 @@ def test_task_tool_emits_interrupted_event_and_keeps_task_resident(monkeypatch):
 
     # task_id is threaded into the executor for a deterministic subagent_thread_id.
     assert captured["executor_kwargs"]["task_id"] == "tc-int"
-    # Resume handle surfaced to the lead agent.
-    assert "task_id=tc-int" in output
-    # task_interrupted event emitted with the interrupt payload + subagent thread id.
+    # The tool returns the COMPLETED result (NOT a pause string), so the lead
+    # model continues in the same turn instead of ending on a "paused" message.
+    assert output == "Task Succeeded. Result: plan approved and executed"
+    # task_interrupted emitted exactly once across the two INTERRUPTED polls.
     interrupted_events = [e for e in events if e["type"] == "task_interrupted"]
     assert len(interrupted_events) == 1
     ev = interrupted_events[0]
     assert ev["task_id"] == "tc-int"
     assert ev["subagent_thread_id"] == "subagent::thread-1::tc-int"
     assert ev["interrupts"] == [{"value": "Approve plan?", "id": "int-1"}]
-    # NOT cleaned up — the task must stay resident for resume.
-    assert cleanup_calls == []
-    # Event sequence: started, running, interrupted (no terminal cleanup event).
-    assert [e["type"] for e in events] == ["task_started", "task_running", "task_interrupted"]
+    # Event sequence: started, running(m1), interrupted, running(m2 after resume), completed.
+    assert [e["type"] for e in events] == ["task_started", "task_running", "task_interrupted", "task_running", "task_completed"]
+    assert events[-1]["result"] == "plan approved and executed"
+    # Cleaned up at completion (stayed resident while paused, now removed).
+    assert cleanup_calls == ["tc-int"]
+
+
+def test_task_tool_timeout_suspended_while_subagent_interrupted(monkeypatch):
+    """Route 甲: the execution-timeout countdown is suspended while the
+    subagent is INTERRUPTED, so a slow human reply never trips it. Only RUNNING
+    polls advance the countdown. With timeout_seconds=1 -> max_poll_count=12,
+    we serve 20 INTERRUPTED polls then COMPLETED and expect success (no
+    polling-timeout)."""
+    config = _make_subagent_config()
+    config.timeout_seconds = 1  # max_poll_count = (1 + 60) // 5 = 12
+    runtime = _make_runtime()
+    events = []
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(
+        task_tool_module,
+        "SubagentExecutor",
+        type("DummyExecutor", (), {"__init__": lambda self, **kwargs: None, "execute_async": lambda self, prompt, task_id=None: task_id}),
+    )
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+
+    interrupted = _make_result(
+        FakeSubagentStatus.INTERRUPTED,
+        interrupts=[{"value": "Approve?", "id": "i1"}],
+        subagent_thread_id="subagent::thread-1::tc-to",
+    )
+    completed = _make_result(FakeSubagentStatus.COMPLETED, result="done")
+
+    polls = 0
+
+    def get_result(_):
+        nonlocal polls
+        polls += 1
+        if polls <= 20:
+            return interrupted
+        return completed
+
+    monkeypatch.setattr(task_tool_module, "get_background_task_result", get_result)
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(task_tool_module, "cleanup_background_task", lambda _: None)
+    monkeypatch.setattr("deerflow.tools.get_available_tools", lambda **kwargs: [])
+
+    output = _run_task_tool(
+        runtime=runtime,
+        description="needs approval",
+        prompt="draft plan",
+        subagent_type="general-purpose",
+        tool_call_id="tc-to",
+    )
+
+    # 20 INTERRUPTED polls exceeded max_poll_count (12); without suspending the
+    # clock while paused, the tool would have returned the polling-timeout string.
+    assert output == "Task Succeeded. Result: done"
+    assert not any(e["type"] == "task_timed_out" for e in events)
+    interrupted_events = [e for e in events if e["type"] == "task_interrupted"]
+    assert len(interrupted_events) == 1
+
+
+def test_task_tool_cancel_propagates_to_interrupted_subagent(monkeypatch):
+    """Route 甲: cancelling the lead run while a subagent is INTERRUPTED
+    requests cancellation of the paused subagent — the '全部取消' behavior for a
+    parallel cohort when the user leaves / switches threads. The cancel handler
+    calls request_cancel_background_task(task_id) before the shielded
+    terminal-wait, so a paused (non-terminal) subagent is cancelled too."""
+    config = _make_subagent_config()
+    events = []
+    cancel_requests: list[str] = []
+    scheduled_cleanups = []
+
+    class DummyCleanupTask:
+        def add_done_callback(self, _callback):
+            return None
+
+    def fake_create_task(coro):
+        scheduled_cleanups.append(coro)
+        coro.close()
+        return DummyCleanupTask()
+
+    interrupted = _make_result(
+        FakeSubagentStatus.INTERRUPTED,
+        interrupts=[{"value": "Approve?", "id": "i1"}],
+        subagent_thread_id="subagent::thread-1::tc-cint",
+    )
+
+    async def cancel_on_first_sleep(_: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
+    monkeypatch.setattr(
+        task_tool_module,
+        "SubagentExecutor",
+        type("DummyExecutor", (), {"__init__": lambda self, **kwargs: None, "execute_async": lambda self, prompt, task_id=None: task_id}),
+    )
+    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda _: config)
+    monkeypatch.setattr(task_tool_module, "get_background_task_result", lambda _: interrupted)
+    monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(task_tool_module.asyncio, "sleep", cancel_on_first_sleep)
+    monkeypatch.setattr(task_tool_module.asyncio, "create_task", fake_create_task)
+    monkeypatch.setattr(task_tool_module, "_report_subagent_usage", lambda *_: None)
+    monkeypatch.setattr(task_tool_module, "request_cancel_background_task", cancel_requests.append)
+    monkeypatch.setattr(task_tool_module, "cleanup_background_task", lambda _: None)
+    monkeypatch.setattr("deerflow.tools.get_available_tools", lambda **kwargs: [])
+
+    with pytest.raises(asyncio.CancelledError):
+        _run_task_tool(
+            runtime=_make_runtime(),
+            description="needs approval",
+            prompt="draft plan",
+            subagent_type="general-purpose",
+            tool_call_id="tc-cint",
+        )
+
+    # The paused subagent was asked to cancel.
+    assert cancel_requests == ["tc-cint"]
+    # INTERRUPTED is non-terminal, so a deferred cleanup is scheduled (no direct cleanup).
+    assert len(scheduled_cleanups) == 1
 
 
 def test_task_tool_propagates_tool_groups_to_subagent(monkeypatch):

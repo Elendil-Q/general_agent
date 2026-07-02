@@ -20,13 +20,18 @@ import { getBackendBaseURL } from "../config";
 import { useI18n } from "../i18n/hooks";
 import { isHiddenFromUIMessage } from "../messages/utils";
 import type { FileInMessage } from "../messages/utils";
+import { useEffectiveModesConfig, resolveModeFlags } from "../modes/hooks";
 import type { LocalSettings } from "../settings";
 import { useUpdateSubtask } from "../tasks/context";
 import type { UploadedFileInfo } from "../uploads";
 import { promptInputFilePartToFile, uploadFiles } from "../uploads";
 
 import { fetchThreadTokenUsage } from "./api";
-import type { ClarificationInterruptRequest } from "./clarification";
+import {
+  type ClarificationInterruptRequest,
+  isClarificationInterrupt,
+} from "./clarification";
+import { resumeSubagent } from "./subagent-resume";
 import {
   buildThreadsSearchQueryOptions,
   DEFAULT_THREAD_SEARCH_PARAMS,
@@ -684,6 +689,10 @@ export function useThreadStream({
   onToolEnd,
 }: ThreadStreamOptions) {
   const { t } = useI18n();
+  // Mode presets drive the mode -> runtime-flags mapping (thinking_enabled,
+  // is_plan_mode, subagent_enabled, reasoning_effort). Falls back to the
+  // built-in four when the backend is older (404) or before the fetch resolves.
+  const { presets: modePresets, defaultMode } = useEffectiveModesConfig();
   const currentViewThreadId = displayThreadId ?? threadId ?? null;
   const currentViewThreadIdRef = useRef(currentViewThreadId);
   currentViewThreadIdRef.current = currentViewThreadId;
@@ -793,6 +802,23 @@ export function useThreadStream({
   // a reconnected stream replaying the same paused interrupt doesn't re-open
   // the modal after the user already answered.
   const submittedInterruptIdRef = useRef<string | null>(null);
+
+  // --- Subagent clarification queue (Route 甲) -------------------------------
+  // When a subagent pauses on ask_clarification, the lead ``task`` tool emits a
+  // ``task_interrupted`` custom event whose interrupts[].value is a
+  // ClarificationInterruptRequest. Unlike the lead's own clarification (which
+  // resumes via Command(resume) on the thread), a subagent resumes via the
+  // per-subagent endpoint POST /api/threads/{id}/subagents/{task_id}/resume.
+  // The lead run stays open while the subagent is paused, so these forms are
+  // presented serially: one at a time, head of queue first. ``taskId`` is the
+  // dispatching ``task`` tool_call_id (the resume handle), distinct from the
+  // subagent's ask_clarification tool_call_id carried inside the request.
+  const [subagentClarificationQueue, setSubagentClarificationQueue] = useState<
+    Array<{ request: ClarificationInterruptRequest; taskId: string }>
+  >([]);
+  // task_ids the user dismissed without answering, so a reconnect replaying
+  // the same task_interrupted event does not re-open the form.
+  const dismissedSubagentIdsRef = useRef<Set<string>>(new Set());
 
   const thread = useStream<AgentThreadState>({
     client: getAPIClient(isMock),
@@ -932,6 +958,41 @@ export function useThreadStream({
           message: AIMessage;
         };
         updateSubtask({ id: e.task_id, latestMessage: e.message });
+        return;
+      }
+
+      if (
+        typeof event === "object" &&
+        event !== null &&
+        "type" in event &&
+        event.type === "task_interrupted" &&
+        "task_id" in event &&
+        typeof (event as { task_id: unknown }).task_id === "string" &&
+        "interrupts" in event &&
+        Array.isArray((event as { interrupts: unknown }).interrupts)
+      ) {
+        const e = event as {
+          type: "task_interrupted";
+          task_id: string;
+          interrupts: Array<{ value: unknown; id: string }>;
+        };
+        // A subagent paused on ask_clarification: its interrupt value is a
+        // ClarificationInterruptRequest. Latch it as a serial form. Ignore
+        // non-clarification interrupts (handled elsewhere) and any task_id the
+        // user already dismissed, so a reconnect replay does not re-open it.
+        if (dismissedSubagentIdsRef.current.has(e.task_id)) return;
+        for (const intr of e.interrupts) {
+          if (isClarificationInterrupt(intr.value)) {
+            // Capture the narrowed value into a const so the type guard survives
+            // the setState closure (property-access narrowing does not).
+            const request = intr.value;
+            setSubagentClarificationQueue((q) => {
+              if (q.some((item) => item.taskId === e.task_id)) return q;
+              return [...q, { request, taskId: e.task_id }];
+            });
+            break;
+          }
+        }
         return;
       }
 
@@ -1292,26 +1353,29 @@ export function useThreadStream({
             config: {
               recursion_limit: 1000,
             },
-            context: {
-              ...extraContext,
-              ...context,
-              thinking_enabled: context.mode !== "flash",
-              is_plan_mode: context.mode === "pro" || context.mode === "ultra",
-              subagent_enabled: context.mode === "ultra",
-              // Enable structured clarification interrupts (single/multi/text form)
-              // on the web. IM channels don't set this and fall back to goto=END.
-              clarification_interrupt_enabled: true,
-              reasoning_effort:
-                context.reasoning_effort ??
-                (context.mode === "ultra"
-                  ? "high"
-                  : context.mode === "pro"
-                    ? "medium"
-                    : context.mode === "thinking"
-                      ? "low"
-                      : undefined),
-              thread_id: threadId,
-            },
+            context: (() => {
+              // Derive runtime flags from the selected mode's preset (config-
+              // driven). A user-selected reasoning_effort still wins over the
+              // preset default.
+              const flags = resolveModeFlags(
+                context.mode,
+                modePresets,
+                defaultMode,
+              );
+              return {
+                ...extraContext,
+                ...context,
+                thinking_enabled: flags.thinking_enabled,
+                is_plan_mode: flags.is_plan_mode,
+                subagent_enabled: flags.subagent_enabled,
+                reasoning_effort:
+                  context.reasoning_effort ?? flags.reasoning_effort,
+                // Enable structured clarification interrupts (single/multi/text form)
+                // on the web. IM channels don't set this and fall back to goto=END.
+                clarification_interrupt_enabled: true,
+                thread_id: threadId,
+              };
+            })(),
           },
         );
         void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
@@ -1335,6 +1399,8 @@ export function useThreadStream({
       queryClient,
       humanMessageCount,
       persistedMessages,
+      modePresets,
+      defaultMode,
     ],
   );
 
@@ -1405,22 +1471,22 @@ export function useThreadStream({
           config: {
             recursion_limit: 1000,
           },
-          context: {
-            ...context,
-            thinking_enabled: context.mode !== "flash",
-            is_plan_mode: context.mode === "pro" || context.mode === "ultra",
-            subagent_enabled: context.mode === "ultra",
-            reasoning_effort:
-              context.reasoning_effort ??
-              (context.mode === "ultra"
-                ? "high"
-                : context.mode === "pro"
-                  ? "medium"
-                  : context.mode === "thinking"
-                    ? "low"
-                    : undefined),
-            thread_id: threadId,
-          },
+          context: (() => {
+            const flags = resolveModeFlags(
+              context.mode,
+              modePresets,
+              defaultMode,
+            );
+            return {
+              ...context,
+              thinking_enabled: flags.thinking_enabled,
+              is_plan_mode: flags.is_plan_mode,
+              subagent_enabled: flags.subagent_enabled,
+              reasoning_effort:
+                context.reasoning_effort ?? flags.reasoning_effort,
+              thread_id: threadId,
+            };
+          })(),
         });
         void queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
         void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
@@ -1446,7 +1512,15 @@ export function useThreadStream({
         sendInFlightRef.current = false;
       }
     },
-    [context, humanMessageCount, persistedMessages, queryClient, thread],
+    [
+      context,
+      humanMessageCount,
+      persistedMessages,
+      queryClient,
+      thread,
+      modePresets,
+      defaultMode,
+    ],
   );
 
   // Cache the latest thread messages in a ref to compare against incoming history messages for deduplication,
@@ -1538,6 +1612,8 @@ export function useThreadStream({
     setClarificationInterruptValue(null);
     setClarificationDismissed(false);
     submittedInterruptIdRef.current = null;
+    setSubagentClarificationQueue([]);
+    dismissedSubagentIdsRef.current = new Set();
   }, [threadId]);
 
   const clarificationInterrupt =
@@ -1586,6 +1662,38 @@ export function useThreadStream({
     [thread, threadId, clarificationInterruptValue],
   );
 
+  // The head of the subagent clarification queue — the one form shown next
+  // (serial presentation). null when the queue is empty.
+  const subagentClarification = subagentClarificationQueue[0] ?? null;
+
+  // Submit an answer to the active subagent clarification. Unlike the lead's
+  // resumeClarification (Command(resume) on the thread), a subagent resumes via
+  // the per-subagent endpoint. The lead run is still open and the ``task`` tool
+  // will return the result once the subagent completes, so the lead model
+  // continues in the same turn — we only need to kick the subagent here. The
+  // form closes optimistically on submit (matching the lead behaviour); if the
+  // subagent pauses again with the same task_id, task_interrupted re-enqueues.
+  const resumeSubagentClarification = useCallback(
+    async (taskId: string, answer: string) => {
+      if (!threadId) return;
+      setSubagentClarificationQueue((q) =>
+        q.filter((item) => item.taskId !== taskId),
+      );
+      await resumeSubagent(threadId, taskId, answer);
+    },
+    [threadId],
+  );
+
+  // Hide the active subagent clarification without answering; the subagent
+  // stays paused and resumable server-side. Record dismissal so a reconnect
+  // replaying the same task_interrupted does not re-open it.
+  const dismissSubagentClarification = useCallback((taskId: string) => {
+    dismissedSubagentIdsRef.current.add(taskId);
+    setSubagentClarificationQueue((q) =>
+      q.filter((item) => item.taskId !== taskId),
+    );
+  }, []);
+
   return {
     thread: mergedThread,
     pendingUsageMessages,
@@ -1594,6 +1702,9 @@ export function useThreadStream({
     resumeClarification,
     dismissClarification,
     clarificationInterrupt,
+    subagentClarification,
+    resumeSubagentClarification,
+    dismissSubagentClarification,
     isUploading,
     isHistoryLoading,
     hasMoreHistory,

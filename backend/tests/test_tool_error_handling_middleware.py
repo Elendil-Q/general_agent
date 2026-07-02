@@ -142,15 +142,19 @@ def test_build_subagent_runtime_middlewares_threads_app_config_to_llm_middleware
     assert captured["app_config"] is app_config
     # 8 baseline (InputSanitization, ToolOutputBudget, ThreadData, Sandbox,
     # DanglingToolCall, LLMErrorHandling, SandboxAudit, ToolErrorHandling)
-    # + 1 SafetyFinishReasonMiddleware (enabled by default).
+    # + 1 SafetyFinishReasonMiddleware (enabled by default)
+    # + 1 ClarificationMiddleware (last, so subagents can ask_clarification).
+    from deerflow.agents.middlewares.clarification_middleware import ClarificationMiddleware
     from deerflow.agents.middlewares.safety_finish_reason_middleware import SafetyFinishReasonMiddleware
     from deerflow.agents.middlewares.tool_output_budget_middleware import ToolOutputBudgetMiddleware
 
-    assert len(middlewares) == 9
+    assert len(middlewares) == 10
     assert isinstance(middlewares[0], FakeMiddleware)  # InputSanitizationMiddleware stub
     assert isinstance(middlewares[1], ToolOutputBudgetMiddleware)
     assert any(isinstance(m, ToolErrorHandlingMiddleware) for m in middlewares)
-    assert isinstance(middlewares[-1], SafetyFinishReasonMiddleware)
+    # ClarificationMiddleware is last; SafetyFinishReason now second-to-last.
+    assert isinstance(middlewares[-1], ClarificationMiddleware)
+    assert isinstance(middlewares[-2], SafetyFinishReasonMiddleware)
 
 
 def test_build_lead_runtime_middlewares_orders_thread_data_before_uploads():
@@ -218,6 +222,26 @@ def test_build_lead_runtime_middlewares_chain_order_matches_agents_md():
 
     for (name_a, idx_a), (name_b, idx_b) in zip(actual, actual[1:]):
         assert idx_a < idx_b, f"{name_a} (idx {idx_a}) must come before {name_b} (idx {idx_b}); full chain: {actual}"
+
+
+def test_build_subagent_runtime_middlewares_appends_clarification_last():
+    """Subagents can use ask_clarification: ClarificationMiddleware is appended
+    last to the subagent chain (mirrors the lead agent's tail), so a subagent's
+    ask_clarification call interrupts() instead of returning the placeholder
+    string. The lead ``task`` tool stays open (Route 甲) while the subagent is
+    resumed via the per-subagent endpoint, so the subagent must intercept
+    ask_clarification exactly as the lead does. Must be last so it is the
+    outermost tool-call wrapper.
+    """
+    from deerflow.agents.middlewares.clarification_middleware import ClarificationMiddleware
+
+    app_config = _make_app_config()
+    middlewares = build_subagent_runtime_middlewares(app_config=app_config)
+
+    clarification_indices = [i for i, m in enumerate(middlewares) if isinstance(m, ClarificationMiddleware)]
+    assert clarification_indices, "ClarificationMiddleware missing from subagent chain"
+    assert len(clarification_indices) == 1, f"expected exactly one ClarificationMiddleware, got {clarification_indices}"
+    assert clarification_indices[0] == len(middlewares) - 1, f"ClarificationMiddleware must be last in the subagent chain (got idx {clarification_indices[0]} of {len(middlewares) - 1}); full chain: {[type(m).__name__ for m in middlewares]}"
 
 
 def test_wrap_tool_call_passthrough_on_success():

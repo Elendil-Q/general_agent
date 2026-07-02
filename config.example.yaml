@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 15
+config_version: 16
 
 # ============================================================================
 # Logging
@@ -999,6 +999,61 @@ sandbox:
 #   provisioner_url: http://provisioner:8002
 #   # Note: provisioner-created Pods use the provisioner's SANDBOX_IMAGE
 #   # environment variable, not sandbox.image from this config file.
+
+# ============================================================================
+# Modes Configuration
+# ============================================================================
+# Mode presets are a frontend concept: the user picks a "mode" in the input
+# box, and the frontend derives the runtime flags (thinking_enabled,
+# is_plan_mode, subagent_enabled, reasoning_effort) from the matching preset.
+# The backend never receives the mode name — only the derived flags.
+#
+# With no `modes:` section, four built-in presets are used (flash / thinking /
+# pro / ultra), preserving the default behavior. Uncomment and edit to
+# customize existing presets or add your own (e.g. a mode that enables the
+# `task` tool without plan mode). The frontend fetches these via
+# `GET /api/modes/config` and renders the selector dynamically.
+#
+# `default` is the mode used when the user has not selected one; it applies
+# only when the selected model supports thinking (non-thinking models fall
+# back to the first preset with thinking_enabled=false).
+
+# modes:
+#   default: pro
+#   presets:
+#     - name: flash
+#       thinking_enabled: false
+#       is_plan_mode: false
+#       subagent_enabled: false
+#       reasoning_effort: minimal      # minimal/low/medium/high (or null to leave unset)
+#       icon: zap                       # frontend icon name; unknown names fall back to default
+#       # label: Flash                  # optional, overrides i18n display label
+#       # description: Fast and efficient, but may not be accurate
+#     - name: thinking
+#       thinking_enabled: true
+#       is_plan_mode: false
+#       subagent_enabled: false
+#       reasoning_effort: low
+#       icon: lightbulb
+#     - name: pro
+#       thinking_enabled: true
+#       is_plan_mode: true
+#       subagent_enabled: false
+#       reasoning_effort: medium
+#       icon: graduation-cap
+#     - name: ultra
+#       thinking_enabled: true
+#       is_plan_mode: true
+#       subagent_enabled: true          # enables the `task` (subagent delegation) tool
+#       reasoning_effort: high
+#       icon: rocket
+#     # Example custom mode: task tool without plan mode
+#     # - name: task-only
+#     #   thinking_enabled: true
+#     #   is_plan_mode: false
+#     #   subagent_enabled: true
+#     #   reasoning_effort: medium
+#     #   icon: rocket
 
 # ============================================================================
 # Subagents Configuration

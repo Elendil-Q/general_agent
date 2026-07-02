@@ -21,7 +21,9 @@ Do NOT use for simple, single-step operations.""",
 - Think step by step but act decisively
 - If you encounter issues, explain them clearly in your response
 - Return a concise summary of what you accomplished
-- Do NOT ask for clarification - work with the information provided
+- Prefer to work with the information provided and make reasonable assumptions;
+  only call ``ask_clarification`` when a choice is genuinely blocking and cannot
+  be reasonably inferred from the task
 </guidelines>
 
 <file_editing_workflow>
@@ -55,7 +57,7 @@ You have access to the same sandbox environment as the parent agent:
 </working_directory>
 """,
     tools=None,  # Inherit all tools from parent
-    disallowed_tools=["task", "ask_clarification", "present_files"],  # Prevent nesting and clarification
+    disallowed_tools=["task", "present_files"],  # Prevent nesting (ask_clarification is allowed so a subagent can pause for human input)
     model="inherit",
     max_turns=150,
 )

@@ -85,6 +85,9 @@ export default function ChatPage() {
     resumeClarification,
     dismissClarification,
     clarificationInterrupt: clarificationInterruptRaw,
+    subagentClarification,
+    resumeSubagentClarification,
+    dismissSubagentClarification,
     isUploading,
     isHistoryLoading,
     hasMoreHistory,
@@ -192,6 +195,9 @@ export default function ChatPage() {
         clarificationInterrupt,
         resumeClarification,
         dismissClarification,
+        subagentClarification,
+        resumeSubagentClarification,
+        dismissSubagentClarification,
       }}
     >
       <ChatBox threadId={threadId}>

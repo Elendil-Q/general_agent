@@ -23,7 +23,8 @@ export function Welcome({
   mode,
 }: {
   className?: string;
-  mode?: "ultra" | "pro" | "thinking" | "flash";
+  /** Mode name is config-driven; only the "ultra" styling branch matters here. */
+  mode?: string;
 }) {
   const { t } = useI18n();
   const searchParams = useSearchParams();

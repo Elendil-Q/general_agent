@@ -368,6 +368,7 @@ class SubagentExecutor:
         oauth_provider: str | None = None,
         oauth_id: str | None = None,
         run_id: str | None = None,
+        clarification_interrupt_enabled: bool | None = None,
         task_id: str | None = None,
         checkpointer: Any | None = None,
     ):
@@ -422,6 +423,12 @@ class SubagentExecutor:
         self.oauth_provider = oauth_provider
         self.oauth_id = oauth_id
         self.run_id = run_id
+        # Whether structured clarification interrupts are enabled for this run.
+        # Mirrors the parent (lead) runtime's ``clarification_interrupt_enabled``
+        # flag so ClarificationMiddleware on the subagent takes the structured
+        # interrupt path (web) or the free goto=END path (IM) consistently with
+        # the lead agent. Without this the subagent always falls back to free.
+        self.clarification_interrupt_enabled = clarification_interrupt_enabled
 
         # Independent thread identity for the subagent's own checkpointer. The
         # parent thread_id stays in effect for sandbox/file isolation (context);
@@ -449,7 +456,12 @@ class SubagentExecutor:
 
         logger.info(f"[trace={self.trace_id}] SubagentExecutor initialized: {config.name} with {len(self.tools)} tools")
 
-    def _create_agent(self, tools: list[BaseTool] | None = None, *, deferred_setup: "DeferredToolSetup | None" = None):
+    def _create_agent(
+        self,
+        tools: list[BaseTool] | None = None,
+        *,
+        deferred_setup: "DeferredToolSetup | None" = None,
+    ):
         """Create the agent instance.
 
         ``deferred_setup`` (assembled in ``_build_initial_state``) carries the
@@ -459,12 +471,24 @@ class SubagentExecutor:
         app_config = self.app_config or get_app_config()
         if self.model_name is None:
             self.model_name = resolve_subagent_model_name(self.config, self.parent_model, app_config=app_config)
-        model = create_chat_model(name=self.model_name, thinking_enabled=False, app_config=app_config, attach_tracing=False)
+        model = create_chat_model(
+            name=self.model_name,
+            thinking_enabled=False,
+            app_config=app_config,
+            attach_tracing=False,
+        )
 
-        from deerflow.agents.middlewares.tool_error_handling_middleware import build_subagent_runtime_middlewares
+        from deerflow.agents.middlewares.tool_error_handling_middleware import (
+            build_subagent_runtime_middlewares,
+        )
 
         # Reuse shared middleware composition with lead agent.
-        middlewares = build_subagent_runtime_middlewares(app_config=app_config, model_name=self.model_name, lazy_init=True, deferred_setup=deferred_setup)
+        middlewares = build_subagent_runtime_middlewares(
+            app_config=app_config,
+            model_name=self.model_name,
+            lazy_init=True,
+            deferred_setup=deferred_setup,
+        )
 
         # system_prompt is included in initial state messages (see _build_initial_state)
         # to avoid multiple SystemMessages which some LLM APIs don't support.
@@ -535,7 +559,10 @@ class SubagentExecutor:
                     messages.append(SystemMessage(content=f'<skill name="{skill.name}">\n{content}\n</skill>'))
                     logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} loaded skill: {skill.name}")
             except Exception:
-                logger.debug(f"[trace={self.trace_id}] Failed to read skill {skill.name}", exc_info=True)
+                logger.debug(
+                    f"[trace={self.trace_id}] Failed to read skill {skill.name}",
+                    exc_info=True,
+                )
 
         return messages
 
@@ -555,7 +582,10 @@ class SubagentExecutor:
         # Lazy import: see the TYPE_CHECKING note at the top of this module -
         # importing tool_search runs tools/builtins/__init__, which would
         # re-enter this package during its own initialization.
-        from deerflow.tools.builtins.tool_search import assemble_deferred_tools, get_deferred_tools_prompt_section
+        from deerflow.tools.builtins.tool_search import (
+            assemble_deferred_tools,
+            get_deferred_tools_prompt_section,
+        )
 
         # Load skills as conversation items (Codex pattern)
         skills = await self._load_skills()
@@ -705,6 +735,12 @@ class SubagentExecutor:
             context["oauth_id"] = self.oauth_id
             context["run_id"] = self.run_id
             context["is_subagent"] = True
+            # Forward the structured-clarification gate so the subagent's
+            # ClarificationMiddleware takes the same path (interrupt vs free)
+            # as the lead agent. Set only when truthy: IM/absent stays unset
+            # and the middleware falls back to the free goto=END path.
+            if self.clarification_interrupt_enabled:
+                context["clarification_interrupt_enabled"] = self.clarification_interrupt_enabled
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution with max_turns={self.config.max_turns}")
 
@@ -784,6 +820,7 @@ class SubagentExecutor:
                     token_usage_records=collector.snapshot_records(),
                 )
                 return result
+
             if interrupts:
                 logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} interrupted awaiting human input")
                 result.try_set_interrupted(
@@ -808,7 +845,7 @@ class SubagentExecutor:
             result.try_set_terminal(
                 SubagentStatus.FAILED,
                 error=str(e),
-                token_usage_records=collector.snapshot_records() if collector is not None else None,
+                token_usage_records=(collector.snapshot_records() if collector is not None else None),
             )
 
         return result
@@ -1017,6 +1054,8 @@ class SubagentExecutor:
             context["oauth_id"] = self.oauth_id
             context["run_id"] = self.run_id
             context["is_subagent"] = True
+            if self.clarification_interrupt_enabled:
+                context["clarification_interrupt_enabled"] = self.clarification_interrupt_enabled
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} resuming after interrupt")
 
@@ -1095,7 +1134,7 @@ class SubagentExecutor:
             result.try_set_terminal(
                 SubagentStatus.FAILED,
                 error=str(e),
-                token_usage_records=collector.snapshot_records() if collector is not None else None,
+                token_usage_records=(collector.snapshot_records() if collector is not None else None),
             )
 
         return result
@@ -1303,7 +1342,7 @@ def cleanup_background_task(task_id: str) -> None:
             logger.debug(
                 "Skipping cleanup for non-terminal background task %s (status=%s)",
                 task_id,
-                result.status.value if hasattr(result.status, "value") else result.status,
+                (result.status.value if hasattr(result.status, "value") else result.status),
             )
 
 
@@ -1332,7 +1371,7 @@ def get_subagent_interrupt(task_id: str) -> dict[str, Any] | None:
         "task_id": result.task_id,
         "subagent_thread_id": result.subagent_thread_id,
         "interrupts": result.interrupts,
-        "interrupted_at": result.interrupted_at.isoformat() if result.interrupted_at else None,
+        "interrupted_at": (result.interrupted_at.isoformat() if result.interrupted_at else None),
     }
 
 

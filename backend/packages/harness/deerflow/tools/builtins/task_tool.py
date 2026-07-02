@@ -325,6 +325,10 @@ async def task_tool(
     oauth_provider = parent_context.get("oauth_provider")
     oauth_id = parent_context.get("oauth_id")
     run_id = parent_context.get("run_id")
+    # Forward the structured-clarification gate so a subagent's
+    # ClarificationMiddleware interrupts (web) instead of silently taking the
+    # free goto=END path. Mirrors the lead agent's context flag.
+    clarification_interrupt_enabled = parent_context.get("clarification_interrupt_enabled")
 
     parent_available_skills = metadata.get("available_skills")
     if parent_available_skills is not None:
@@ -368,6 +372,7 @@ async def task_tool(
         "oauth_provider": oauth_provider,
         "oauth_id": oauth_id,
         "run_id": run_id,
+        "clarification_interrupt_enabled": clarification_interrupt_enabled,
         # tool_call_id becomes the task_id; passing it here lets the executor
         # derive a deterministic, API-addressable subagent_thread_id so an
         # interrupted subagent can be resumed by task_id.
@@ -385,7 +390,15 @@ async def task_tool(
     poll_count = 0
     last_status = None
     last_message_count = 0  # Track how many AI messages we've already sent
-    # Polling timeout: execution timeout + 60s buffer, checked every 5s
+    # Route 甲: when the subagent pauses on interrupt() we keep polling (the
+    # lead run stays open, blocked in this tool) instead of returning a pause
+    # string, so the lead model continues in the SAME turn once the subagent
+    # resumes and completes. ``interrupt_announced`` ensures the
+    # ``task_interrupted`` SSE event fires once per pause (not every 5s poll);
+    # it resets when the subagent leaves INTERRUPTED so a re-interrupt re-announces.
+    interrupt_announced = False
+    # Polling timeout: execution timeout + 60s buffer, checked every 5s. Only
+    # RUNNING polls advance the countdown (INTERRUPTED polls suspend it — see below).
     max_poll_count = (config.timeout_seconds + 60) // 5
 
     logger.info(f"[trace={trace_id}] Started background task {task_id} (subagent={subagent_type}, timeout={config.timeout_seconds}s, polling_limit={max_poll_count} polls)")
@@ -407,6 +420,11 @@ async def task_tool(
             # Log status changes for debugging
             if result.status != last_status:
                 logger.info(f"[trace={trace_id}] Task {task_id} status: {result.status.value}")
+                # Reset the interrupt-announce latch whenever the subagent
+                # transitions OUT of INTERRUPTED (e.g. resumed -> RUNNING) so a
+                # later re-interrupt fires task_interrupted again.
+                if last_status is SubagentStatus.INTERRUPTED:
+                    interrupt_announced = False
                 last_status = result.status
 
             # Check for new AI messages and send task_running events
@@ -459,29 +477,39 @@ async def task_tool(
                 cleanup_background_task(task_id)
                 return f"Task timed out. Error: {result.error}"
             elif result.status == SubagentStatus.INTERRUPTED:
-                # The subagent called interrupt() and is paused awaiting human
-                # input. Surface the interrupt question to the frontend and return
-                # a pause message so the lead agent's turn can end naturally. The
-                # result + executor stay resident (NOT cleaned up) so the subagent
-                # can be resumed via POST /api/threads/{parent}/subagents/{task_id}/resume.
-                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
-                _report_subagent_usage(runtime, result)
-                writer(
-                    {
-                        "type": "task_interrupted",
-                        "task_id": task_id,
-                        "subagent_thread_id": result.subagent_thread_id,
-                        "description": description,
-                        "interrupts": result.interrupts,
-                    }
-                )
-                logger.info(f"[trace={trace_id}] Task {task_id} interrupted awaiting human input")
-                interrupt_summary = _summarize_interrupts(result.interrupts)
-                return f"Task paused awaiting human input. task_id={task_id}. Question: {interrupt_summary} Resume by providing an answer to this task_id."
+                # Route 甲: the subagent paused on interrupt() awaiting human
+                # input. Announce the interrupt ONCE (so the frontend shows the
+                # form) but do NOT return — keep polling so the lead run stays
+                # open (blocked in this tool) while the user answers. The
+                # subagent is resumed via
+                # POST /api/threads/{parent}/subagents/{task_id}/resume; when it
+                # reaches COMPLETED the branch above returns the result and the
+                # lead model continues in the SAME turn (no continuation-turn
+                # mechanism). Token-usage reporting is deferred to COMPLETED (or
+                # the cancel path) to avoid double-counting the paused turn.
+                if not interrupt_announced:
+                    writer(
+                        {
+                            "type": "task_interrupted",
+                            "task_id": task_id,
+                            "subagent_thread_id": result.subagent_thread_id,
+                            "description": description,
+                            "interrupts": result.interrupts,
+                        }
+                    )
+                    logger.info(f"[trace={trace_id}] Task {task_id} interrupted awaiting human input: {_summarize_interrupts(result.interrupts)}")
+                    interrupt_announced = True
+                # Fall through to the sleep + (suspended) timeout below; do NOT return.
 
-            # Still running, wait before next poll
+            # Wait before the next poll (covers both still-RUNNING and paused-
+            # INTERRUPTED states — the latter keeps the lead run open while the
+            # user answers, re-checking every 5s whether the subagent was resumed).
             await asyncio.sleep(5)
-            poll_count += 1
+            # Suspend the execution-timeout clock while INTERRUPTED: a slow
+            # human reply must never trip the execution timeout, which exists to
+            # catch a stuck *running* subagent. Only RUNNING polls advance it.
+            if result.status != SubagentStatus.INTERRUPTED:
+                poll_count += 1
 
             # Polling timeout as a safety net (in case thread pool timeout doesn't work)
             # Set to execution timeout + 60s buffer, in 5s poll intervals

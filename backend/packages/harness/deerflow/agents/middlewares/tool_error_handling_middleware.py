@@ -256,4 +256,16 @@ def build_subagent_runtime_middlewares(
 
         middlewares.append(SafetyFinishReasonMiddleware.from_config(safety_config))
 
+    # ClarificationMiddleware must be last (mirrors the lead agent's chain in
+    # ``lead_agent/agent.py``). With ``ask_clarification`` now permitted on
+    # subagents (e.g. general-purpose), a subagent can pause on ``interrupt()``
+    # for human input; the lead ``task`` tool stays open (Route 甲) while the
+    # subagent is resumed via the per-subagent endpoint, so the subagent must
+    # intercept ``ask_clarification`` exactly as the lead does. The
+    # ``clarification_interrupt_enabled`` gate is forwarded into the subagent
+    # runtime context by ``SubagentExecutor`` (sourced from the parent runtime).
+    from deerflow.agents.middlewares.clarification_middleware import ClarificationMiddleware
+
+    middlewares.append(ClarificationMiddleware())
+
     return middlewares

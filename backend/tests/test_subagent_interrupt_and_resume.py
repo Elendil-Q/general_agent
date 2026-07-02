@@ -280,3 +280,38 @@ class TestResume:
         assert executor_module.get_subagent_interrupt("nope") is None
 
         executor_module._background_tasks.pop("t", None)
+
+
+@pytest.mark.anyio
+async def test_aexecute_forwards_clarification_interrupt_enabled_into_context(_setup_executor_classes):
+    """clarification_interrupt_enabled is written into the subagent runtime
+    context (passed to astream as ``context=``) so ClarificationMiddleware takes
+    the structured interrupt path on web runs. When falsy it is omitted so the
+    middleware falls back to the free goto=END path (matching IM behaviour)."""
+    classes = _setup_executor_classes
+    HumanMessage = classes["HumanMessage"]
+
+    captured: dict[str, object] = {}
+
+    async def _astream(graph_input, *a, **kw):
+        captured["context"] = kw.get("context")
+        yield {"messages": [HumanMessage(content="do it")]}
+
+    agent = MagicMock()
+    agent.astream = _astream
+
+    config = _base_config(classes)
+
+    async def run_with_flag(flag):
+        executor = classes["SubagentExecutor"](config=config, tools=[], thread_id="parent", task_id="call_1", clarification_interrupt_enabled=flag)
+        with patch.object(executor, "_create_agent", return_value=agent):
+            await executor._aexecute("do it")
+
+    # Truthy flag -> present in the forwarded context.
+    await run_with_flag(True)
+    assert captured["context"].get("clarification_interrupt_enabled") is True
+
+    # Falsy flag -> omitted (middleware falls back to the free path).
+    captured.clear()
+    await run_with_flag(False)
+    assert "clarification_interrupt_enabled" not in captured["context"]

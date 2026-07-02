@@ -82,6 +82,9 @@ export default function AgentChatPage() {
     resumeClarification,
     dismissClarification,
     clarificationInterrupt,
+    subagentClarification,
+    resumeSubagentClarification,
+    dismissSubagentClarification,
   } = useThreadStream({
     threadId: isNewThread ? undefined : threadId,
     displayThreadId: threadId,
@@ -173,6 +176,9 @@ export default function AgentChatPage() {
         clarificationInterrupt,
         resumeClarification,
         dismissClarification,
+        subagentClarification,
+        resumeSubagentClarification,
+        dismissSubagentClarification,
       }}
     >
       <ChatBox threadId={threadId}>

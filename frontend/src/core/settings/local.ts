@@ -41,7 +41,7 @@ export interface LocalSettings {
     | "reasoning_effort"
   > & {
     model_name?: string | undefined;
-    mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
+    mode: string | undefined;
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
   };
 }

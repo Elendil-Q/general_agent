@@ -4,6 +4,7 @@ import type { ChatStatus } from "ai";
 import {
   CheckIcon,
   GraduationCapIcon,
+  type LucideIcon,
   LightbulbIcon,
   PaperclipIcon,
   PlusIcon,
@@ -61,8 +62,11 @@ import {
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 import { useI18n } from "@/core/i18n/hooks";
+import type { Translations } from "@/core/i18n/locales/types";
 import { isHiddenFromUIMessage } from "@/core/messages/utils";
 import { useModels } from "@/core/models/hooks";
+import { useEffectiveModesConfig } from "@/core/modes/hooks";
+import type { ModePreset } from "@/core/modes/types";
 import type { Skill } from "@/core/skills";
 import { useSkills } from "@/core/skills/hooks";
 import { useSuggestionsConfig } from "@/core/suggestions/hooks";
@@ -92,7 +96,84 @@ import { useThread } from "./messages/context";
 import { ModeHoverGuide } from "./mode-hover-guide";
 import { Tooltip } from "./tooltip";
 
-type InputMode = "flash" | "thinking" | "pro" | "ultra";
+/**
+ * Mode name is now config-driven (served by `GET /api/modes/config`), so it
+ * is a plain string rather than a closed union. Validation that the name
+ * exists in the active presets happens in `getResolvedMode` /
+ * `resolveModeFlags`, which fall back to the default preset for unknown names.
+ */
+type InputMode = string;
+
+/**
+ * Map backend icon names to lucide components. Unknown icon names fall back
+ * to {@link SparklesIcon}. The icon is the only mode-UI asset that cannot be
+ * fully config-driven (lucide icons are tree-shaken JSX, not strings), so the
+ * mapping table stays in code; adding a new icon is a one-line edit here.
+ */
+const MODE_ICONS: Record<string, LucideIcon> = {
+  zap: ZapIcon,
+  lightbulb: LightbulbIcon,
+  "graduation-cap": GraduationCapIcon,
+  rocket: RocketIcon,
+};
+
+function getModeIcon(icon: string | null | undefined): LucideIcon {
+  if (!icon) {
+    return SparklesIcon;
+  }
+  return MODE_ICONS[icon] ?? SparklesIcon;
+}
+
+/**
+ * i18n fallback for the four built-in modes. Typed narrowly so the indexed
+ * value is always a string key (Translations["inputBox"] also contains
+ * non-string members which would widen the type).
+ */
+type InputBoxStringKey =
+  | "flashMode"
+  | "reasoningMode"
+  | "proMode"
+  | "ultraMode";
+type InputBoxDescriptionKey =
+  | "flashModeDescription"
+  | "reasoningModeDescription"
+  | "proModeDescription"
+  | "ultraModeDescription";
+
+const MODE_I18N_LABEL: Record<string, InputBoxStringKey> = {
+  flash: "flashMode",
+  thinking: "reasoningMode",
+  pro: "proMode",
+  ultra: "ultraMode",
+};
+const MODE_I18N_DESCRIPTION: Record<string, InputBoxDescriptionKey> = {
+  flash: "flashModeDescription",
+  thinking: "reasoningModeDescription",
+  pro: "proModeDescription",
+  ultra: "ultraModeDescription",
+};
+
+function getModeLabel(preset: ModePreset, t: Translations): string {
+  if (preset.label) {
+    return preset.label;
+  }
+  const key = MODE_I18N_LABEL[preset.name];
+  if (key && t.inputBox[key]) {
+    return t.inputBox[key];
+  }
+  return preset.name;
+}
+
+function getModeDescription(preset: ModePreset, t: Translations): string {
+  if (preset.description) {
+    return preset.description;
+  }
+  const key = MODE_I18N_DESCRIPTION[preset.name];
+  if (key && t.inputBox[key]) {
+    return t.inputBox[key];
+  }
+  return "";
+}
 
 const MAX_SKILL_SUGGESTIONS = 6;
 const SUGGESTION_TEMPLATE_PLACEHOLDER_PATTERN =
@@ -153,14 +234,27 @@ function getMatchingSkillSuggestions(skills: Skill[], query: string): Skill[] {
 function getResolvedMode(
   mode: InputMode | undefined,
   supportsThinking: boolean,
+  presets: ModePreset[],
+  defaultMode: string,
 ): InputMode {
-  if (!supportsThinking && mode !== "flash") {
-    return "flash";
+  // A non-thinking model cannot use a preset that requires thinking; fall
+  // back to the first non-thinking preset (legacy behavior fell back to "flash").
+  const firstNonThinking = presets.find((p) => !p.thinking_enabled);
+  if (!supportsThinking) {
+    if (mode) {
+      const selected = presets.find((p) => p.name === mode);
+      if (selected && !selected.thinking_enabled) {
+        return selected.name;
+      }
+    }
+    return firstNonThinking?.name ?? defaultMode;
   }
-  if (mode) {
+  // Thinking-capable model: honor an explicitly selected valid mode, else the
+  // configured default (legacy behavior fell back to "pro").
+  if (mode && presets.some((p) => p.name === mode)) {
     return mode;
   }
-  return supportsThinking ? "pro" : "flash";
+  return defaultMode;
 }
 
 export function InputBox({
@@ -186,7 +280,7 @@ export function InputBox({
     AgentThreadContext,
     "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
   > & {
-    mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
+    mode: string | undefined;
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
   };
   extraHeader?: React.ReactNode;
@@ -203,7 +297,7 @@ export function InputBox({
       AgentThreadContext,
       "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
     > & {
-      mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
+      mode: string | undefined;
       reasoning_effort?: "minimal" | "low" | "medium" | "high";
     },
   ) => void;
@@ -224,6 +318,13 @@ export function InputBox({
   const promptHistoryDraftRef = useRef("");
 
   const [followups, setFollowups] = useState<string[]>([]);
+  const { presets: modePresets, defaultMode } = useEffectiveModesConfig();
+  // The preset currently in effect (falls back to the first preset for an
+  // unknown / not-yet-selected mode). Used to gate the reasoning-effort
+  // picker on the active preset's `thinking_enabled` rather than a hard-coded
+  // mode name, so renaming "flash" in config still hides the picker.
+  const activeModePreset =
+    modePresets.find((p) => p.name === context.mode) ?? modePresets[0];
   const { data: suggestionsConfig } = useSuggestionsConfig();
   const suggestionsConfigLoaded = suggestionsConfig !== undefined;
   const suggestionsEnabled = suggestionsConfig?.enabled;
@@ -250,7 +351,12 @@ export function InputBox({
     const fallbackModel = currentModel ?? models[0]!;
     const supportsThinking = fallbackModel.supports_thinking ?? false;
     const nextModelName = fallbackModel.name;
-    const nextMode = getResolvedMode(context.mode, supportsThinking);
+    const nextMode = getResolvedMode(
+      context.mode,
+      supportsThinking,
+      modePresets,
+      defaultMode,
+    );
 
     if (context.model_name === nextModelName && context.mode === nextMode) {
       return;
@@ -261,7 +367,7 @@ export function InputBox({
       model_name: nextModelName,
       mode: nextMode,
     });
-  }, [context, models, onContextChange]);
+  }, [context, models, onContextChange, modePresets, defaultMode]);
 
   const selectedModel = useMemo(() => {
     if (models.length === 0) {
@@ -329,30 +435,40 @@ export function InputBox({
       onContextChange?.({
         ...context,
         model_name,
-        mode: getResolvedMode(context.mode, model.supports_thinking ?? false),
+        mode: getResolvedMode(
+          context.mode,
+          model.supports_thinking ?? false,
+          modePresets,
+          defaultMode,
+        ),
         reasoning_effort: context.reasoning_effort,
       });
       setModelDialogOpen(false);
     },
-    [onContextChange, context, models],
+    [onContextChange, context, models, modePresets, defaultMode],
   );
 
   const handleModeSelect = useCallback(
     (mode: InputMode) => {
+      const preset = modePresets.find((p) => p.name === mode);
+      const resolvedMode = getResolvedMode(
+        mode,
+        supportThinking,
+        modePresets,
+        defaultMode,
+      );
+      // Use the selected preset's default reasoning_effort (falling back to
+      // minimal for unknown modes), matching the legacy per-mode defaults.
+      const effort =
+        preset?.reasoning_effort ??
+        (resolvedMode === mode ? "minimal" : undefined);
       onContextChange?.({
         ...context,
-        mode: getResolvedMode(mode, supportThinking),
-        reasoning_effort:
-          mode === "ultra"
-            ? "high"
-            : mode === "pro"
-              ? "medium"
-              : mode === "thinking"
-                ? "low"
-                : "minimal",
+        mode: resolvedMode,
+        reasoning_effort: effort,
       });
     },
-    [onContextChange, context, supportThinking],
+    [onContextChange, context, supportThinking, modePresets, defaultMode],
   );
 
   const handleReasoningEffortSelect = useCallback(
@@ -404,6 +520,8 @@ export function InputBox({
           mode: getResolvedMode(
             context.mode,
             selectedModel?.supports_thinking ?? false,
+            modePresets,
+            defaultMode,
           ),
         });
         return new Promise<void>((resolve, reject) => {
@@ -424,6 +542,8 @@ export function InputBox({
       selectedModel?.supports_thinking,
       status,
       t.inputBox.suggestionPlaceholderRequired,
+      modePresets,
+      defaultMode,
     ],
   );
 
@@ -891,27 +1011,20 @@ export function InputBox({
             <AddAttachmentsButton className="px-2!" />
             <PromptInputActionMenu>
               <ModeHoverGuide
-                mode={
-                  context.mode === "flash" ||
-                  context.mode === "thinking" ||
-                  context.mode === "pro" ||
-                  context.mode === "ultra"
-                    ? context.mode
-                    : "flash"
-                }
+                mode={activeModePreset?.name ?? "flash"}
+                presets={modePresets}
               >
                 <PromptInputActionMenuTrigger className="max-w-28 gap-1! px-2! sm:max-w-none">
                   <div>
-                    {context.mode === "flash" && <ZapIcon className="size-3" />}
-                    {context.mode === "thinking" && (
-                      <LightbulbIcon className="size-3" />
-                    )}
-                    {context.mode === "pro" && (
-                      <GraduationCapIcon className="size-3" />
-                    )}
-                    {context.mode === "ultra" && (
-                      <RocketIcon className="size-3 text-[#dabb5e]" />
-                    )}
+                    {(() => {
+                      const Icon = getModeIcon(activeModePreset?.icon);
+                      const isUltra = activeModePreset?.name === "ultra";
+                      return (
+                        <Icon
+                          className={cn("size-3", isUltra && "text-[#dabb5e]")}
+                        />
+                      );
+                    })()}
                   </div>
                   <div
                     className={cn(
@@ -919,11 +1032,7 @@ export function InputBox({
                       context.mode === "ultra" ? "golden-text" : "",
                     )}
                   >
-                    {(context.mode === "flash" && t.inputBox.flashMode) ||
-                      (context.mode === "thinking" &&
-                        t.inputBox.reasoningMode) ||
-                      (context.mode === "pro" && t.inputBox.proMode) ||
-                      (context.mode === "ultra" && t.inputBox.ultraMode)}
+                    {activeModePreset ? getModeLabel(activeModePreset, t) : ""}
                   </div>
                 </PromptInputActionMenuTrigger>
               </ModeHoverGuide>
@@ -933,134 +1042,56 @@ export function InputBox({
                     {t.inputBox.mode}
                   </DropdownMenuLabel>
                   <PromptInputActionMenu>
-                    <PromptInputActionMenuItem
-                      className={cn(
-                        context.mode === "flash"
-                          ? "text-accent-foreground"
-                          : "text-muted-foreground/65",
-                      )}
-                      onSelect={() => handleModeSelect("flash")}
-                    >
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-1 font-bold">
-                          <ZapIcon
-                            className={cn(
-                              "mr-2 size-4",
-                              context.mode === "flash" &&
-                                "text-accent-foreground",
-                            )}
-                          />
-                          {t.inputBox.flashMode}
-                        </div>
-                        <div className="pl-7 text-xs">
-                          {t.inputBox.flashModeDescription}
-                        </div>
-                      </div>
-                      {context.mode === "flash" ? (
-                        <CheckIcon className="ml-auto size-4" />
-                      ) : (
-                        <div className="ml-auto size-4" />
-                      )}
-                    </PromptInputActionMenuItem>
-                    {supportThinking && (
-                      <PromptInputActionMenuItem
-                        className={cn(
-                          context.mode === "thinking"
-                            ? "text-accent-foreground"
-                            : "text-muted-foreground/65",
-                        )}
-                        onSelect={() => handleModeSelect("thinking")}
-                      >
-                        <div className="flex flex-col gap-2">
-                          <div className="flex items-center gap-1 font-bold">
-                            <LightbulbIcon
-                              className={cn(
-                                "mr-2 size-4",
-                                context.mode === "thinking" &&
-                                  "text-accent-foreground",
-                              )}
-                            />
-                            {t.inputBox.reasoningMode}
+                    {modePresets.map((preset) => {
+                      // Hide thinking-requiring presets when the model cannot
+                      // think (mirrors the legacy `supportThinking` gate).
+                      if (preset.thinking_enabled && !supportThinking) {
+                        return null;
+                      }
+                      const isActive = context.mode === preset.name;
+                      const Icon = getModeIcon(preset.icon);
+                      const isUltra = preset.name === "ultra";
+                      return (
+                        <PromptInputActionMenuItem
+                          key={preset.name}
+                          className={cn(
+                            isActive
+                              ? "text-accent-foreground"
+                              : "text-muted-foreground/65",
+                          )}
+                          onSelect={() => handleModeSelect(preset.name)}
+                        >
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-1 font-bold">
+                              <Icon
+                                className={cn(
+                                  "mr-2 size-4",
+                                  isUltra
+                                    ? "text-[#dabb5e]"
+                                    : isActive && "text-accent-foreground",
+                                )}
+                              />
+                              <div className={cn(isUltra && "golden-text")}>
+                                {getModeLabel(preset, t)}
+                              </div>
+                            </div>
+                            <div className="pl-7 text-xs">
+                              {getModeDescription(preset, t)}
+                            </div>
                           </div>
-                          <div className="pl-7 text-xs">
-                            {t.inputBox.reasoningModeDescription}
-                          </div>
-                        </div>
-                        {context.mode === "thinking" ? (
-                          <CheckIcon className="ml-auto size-4" />
-                        ) : (
-                          <div className="ml-auto size-4" />
-                        )}
-                      </PromptInputActionMenuItem>
-                    )}
-                    <PromptInputActionMenuItem
-                      className={cn(
-                        context.mode === "pro"
-                          ? "text-accent-foreground"
-                          : "text-muted-foreground/65",
-                      )}
-                      onSelect={() => handleModeSelect("pro")}
-                    >
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-1 font-bold">
-                          <GraduationCapIcon
-                            className={cn(
-                              "mr-2 size-4",
-                              context.mode === "pro" &&
-                                "text-accent-foreground",
-                            )}
-                          />
-                          {t.inputBox.proMode}
-                        </div>
-                        <div className="pl-7 text-xs">
-                          {t.inputBox.proModeDescription}
-                        </div>
-                      </div>
-                      {context.mode === "pro" ? (
-                        <CheckIcon className="ml-auto size-4" />
-                      ) : (
-                        <div className="ml-auto size-4" />
-                      )}
-                    </PromptInputActionMenuItem>
-                    <PromptInputActionMenuItem
-                      className={cn(
-                        context.mode === "ultra"
-                          ? "text-accent-foreground"
-                          : "text-muted-foreground/65",
-                      )}
-                      onSelect={() => handleModeSelect("ultra")}
-                    >
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center gap-1 font-bold">
-                          <RocketIcon
-                            className={cn(
-                              "mr-2 size-4",
-                              context.mode === "ultra" && "text-[#dabb5e]",
-                            )}
-                          />
-                          <div
-                            className={cn(
-                              context.mode === "ultra" && "golden-text",
-                            )}
-                          >
-                            {t.inputBox.ultraMode}
-                          </div>
-                        </div>
-                        <div className="pl-7 text-xs">
-                          {t.inputBox.ultraModeDescription}
-                        </div>
-                      </div>
-                      {context.mode === "ultra" ? (
-                        <CheckIcon className="ml-auto size-4" />
-                      ) : (
-                        <div className="ml-auto size-4" />
-                      )}
-                    </PromptInputActionMenuItem>
+                          {isActive ? (
+                            <CheckIcon className="ml-auto size-4" />
+                          ) : (
+                            <div className="ml-auto size-4" />
+                          )}
+                        </PromptInputActionMenuItem>
+                      );
+                    })}
                   </PromptInputActionMenu>
                 </DropdownMenuGroup>
               </PromptInputActionMenuContent>
             </PromptInputActionMenu>
-            {supportReasoningEffort && context.mode !== "flash" && (
+            {supportReasoningEffort && activeModePreset?.thinking_enabled && (
               <PromptInputActionMenu>
                 <PromptInputActionMenuTrigger className="hidden gap-1! px-2! sm:inline-flex">
                   <div className="text-xs font-normal">

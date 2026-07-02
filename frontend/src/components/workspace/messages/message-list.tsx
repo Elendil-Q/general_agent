@@ -193,8 +193,14 @@ export function MessageList({
   canRegenerate?: boolean;
 }) {
   const { t } = useI18n();
-  const { clarificationInterrupt, resumeClarification, dismissClarification } =
-    useThread();
+  const {
+    clarificationInterrupt,
+    resumeClarification,
+    dismissClarification,
+    subagentClarification,
+    resumeSubagentClarification,
+    dismissSubagentClarification,
+  } = useThread();
   const [turnStartTime, setTurnStartTime] = useState<number | null>(null);
   const prevIsLoading = useRef(thread.isLoading);
 
@@ -594,6 +600,30 @@ export function MessageList({
             </div>
           );
         })}
+        {subagentClarification &&
+          resumeSubagentClarification &&
+          dismissSubagentClarification && (
+            <div className="w-full">
+              <ClarificationInlineForm
+                interrupt={subagentClarification.request}
+                onSubmit={(answer) => {
+                  void resumeSubagentClarification(
+                    subagentClarification.taskId,
+                    answer,
+                  );
+                }}
+                onDismiss={() => {
+                  dismissSubagentClarification(subagentClarification.taskId);
+                }}
+                // The lead run is NOT paused here (Route 甲: it is blocked in
+                // the task tool awaiting this answer), so thread.isLoading
+                // stays true and must NOT gate the form — the user must be able
+                // to answer. The form unmounts on submit (dequeued), which
+                // already prevents double-submit.
+                disabled={false}
+              />
+            </div>
+          )}
         {clarificationInterrupt &&
           resumeClarification &&
           dismissClarification && (
