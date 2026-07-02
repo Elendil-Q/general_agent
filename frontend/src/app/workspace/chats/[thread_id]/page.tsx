@@ -306,7 +306,9 @@ export default function ChatPage() {
                     }
                     context={settings.context}
                     extraHeader={
-                      isWelcomeMode && <Welcome mode={settings.context.mode} />
+                      isWelcomeMode && (
+                        <Welcome effort={settings.context.effort} />
+                      )
                     }
                     disabled={
                       isMock ||

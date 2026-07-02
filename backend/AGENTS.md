@@ -585,7 +585,7 @@ Returns `{}` when Langfuse is not in the enabled providers — LangSmith-only de
 - `title` - Auto-title generation (enabled, max_words, max_chars, prompt_template)
 - `summarization` - Context summarization (enabled, trigger conditions, keep policy)
 - `subagents` - Subagent runtime config (timeouts, max_turns, per-agent overrides, custom_agents). The `task` tool is bound at runtime via `subagent_enabled` in `config.configurable` (the frontend derives it from the selected mode preset), not from a config switch — there is no `subagents.enabled` field
-- `modes` - Mode presets served to the frontend via `GET /api/modes/config`. Each preset maps a mode name to the runtime flags (`thinking_enabled`, `is_plan_mode`, `subagent_enabled`, `reasoning_effort`) the frontend derives and sends in `config.context`. With no `modes:` section, four built-in presets are used (flash / thinking / pro / ultra); operators can customize, add, or remove presets in `config.yaml`. The backend never receives a mode name — only the derived flags
+- `efforts` - Effort presets served to the frontend via `GET /api/efforts/config`. Each of the four fixed efforts (flash / thinking / pro / ultra) maps to runtime flags (`thinking_enabled`, `is_plan_mode`, `subagent_enabled`, `reasoning_effort`) the frontend derives and sends in `config.context`. Operators can override the flags of any effort in `config.yaml`; the effort names themselves are hard-coded. The backend never receives an effort name — only the derived flags
 - `memory` - Memory system (enabled, storage_path, debounce_seconds, model_name, max_facts, fact_confidence_threshold, injection_enabled, max_injection_tokens)
 
 **`extensions_config.json`**:

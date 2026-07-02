@@ -18,11 +18,11 @@ from app.gateway.routers import (
     auth,
     channel_connections,
     channels,
+    efforts,
     feedback,
     mcp,
     memory,
     models,
-    modes,
     runs,
     skills,
     suggestions,
@@ -367,8 +367,8 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Models API is mounted at /api/models
     app.include_router(models.router)
 
-    # Modes API is mounted at /api/modes/config
-    app.include_router(modes.router)
+    # Efforts API is mounted at /api/efforts/config
+    app.include_router(efforts.router)
 
     # MCP API is mounted at /api/mcp
     app.include_router(mcp.router)

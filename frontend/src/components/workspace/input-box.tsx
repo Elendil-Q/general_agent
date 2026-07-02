@@ -61,12 +61,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
+import { useEffectiveEffortsConfig, EFFORT_ORDER } from "@/core/effort/hooks";
+import type { EffortFlags } from "@/core/effort/types";
 import { useI18n } from "@/core/i18n/hooks";
 import type { Translations } from "@/core/i18n/locales/types";
 import { isHiddenFromUIMessage } from "@/core/messages/utils";
 import { useModels } from "@/core/models/hooks";
-import { useEffectiveModesConfig } from "@/core/modes/hooks";
-import type { ModePreset } from "@/core/modes/types";
 import type { Skill } from "@/core/skills";
 import { useSkills } from "@/core/skills/hooks";
 import { useSuggestionsConfig } from "@/core/suggestions/hooks";
@@ -92,83 +92,70 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 
+import { EffortHoverGuide } from "./effort-hover-guide";
 import { useThread } from "./messages/context";
-import { ModeHoverGuide } from "./mode-hover-guide";
 import { Tooltip } from "./tooltip";
 
 /**
- * Mode name is now config-driven (served by `GET /api/modes/config`), so it
- * is a plain string rather than a closed union. Validation that the name
- * exists in the active presets happens in `getResolvedMode` /
- * `resolveModeFlags`, which fall back to the default preset for unknown names.
+ * The four built-in efforts are a closed set. Each effort maps to a bundle of
+ * runtime flags fetched from the backend via `GET /api/efforts/config`.
  */
-type InputMode = string;
+type InputEffort = "flash" | "thinking" | "pro" | "ultra";
 
 /**
- * Map backend icon names to lucide components. Unknown icon names fall back
- * to {@link SparklesIcon}. The icon is the only mode-UI asset that cannot be
- * fully config-driven (lucide icons are tree-shaken JSX, not strings), so the
- * mapping table stays in code; adding a new icon is a one-line edit here.
+ * Map effort names to lucide components. All four built-in efforts have
+ * hard-coded icons; the fallback {@link SparklesIcon} is defensive only.
  */
-const MODE_ICONS: Record<string, LucideIcon> = {
-  zap: ZapIcon,
-  lightbulb: LightbulbIcon,
-  "graduation-cap": GraduationCapIcon,
-  rocket: RocketIcon,
+const EFFORT_ICONS: Record<InputEffort, LucideIcon> = {
+  flash: ZapIcon,
+  thinking: LightbulbIcon,
+  pro: GraduationCapIcon,
+  ultra: RocketIcon,
 };
 
-function getModeIcon(icon: string | null | undefined): LucideIcon {
-  if (!icon) {
-    return SparklesIcon;
-  }
-  return MODE_ICONS[icon] ?? SparklesIcon;
+function getEffortIcon(effort: InputEffort): LucideIcon {
+  return EFFORT_ICONS[effort] ?? SparklesIcon;
 }
 
 /**
- * i18n fallback for the four built-in modes. Typed narrowly so the indexed
- * value is always a string key (Translations["inputBox"] also contains
- * non-string members which would widen the type).
+ * i18n keys for the four built-in efforts. Keys are aligned to the internal
+ * effort name (`thinking` → `thinkingEffort`) to avoid colliding with the
+ * existing `reasoningEffort` key used by the reasoning-effort slider.
  */
 type InputBoxStringKey =
-  | "flashMode"
-  | "reasoningMode"
-  | "proMode"
-  | "ultraMode";
+  | "flashEffort"
+  | "thinkingEffort"
+  | "proEffort"
+  | "ultraEffort";
 type InputBoxDescriptionKey =
-  | "flashModeDescription"
-  | "reasoningModeDescription"
-  | "proModeDescription"
-  | "ultraModeDescription";
+  | "flashEffortDescription"
+  | "thinkingEffortDescription"
+  | "proEffortDescription"
+  | "ultraEffortDescription";
 
-const MODE_I18N_LABEL: Record<string, InputBoxStringKey> = {
-  flash: "flashMode",
-  thinking: "reasoningMode",
-  pro: "proMode",
-  ultra: "ultraMode",
+const EFFORT_I18N_LABEL: Record<InputEffort, InputBoxStringKey> = {
+  flash: "flashEffort",
+  thinking: "thinkingEffort",
+  pro: "proEffort",
+  ultra: "ultraEffort",
 };
-const MODE_I18N_DESCRIPTION: Record<string, InputBoxDescriptionKey> = {
-  flash: "flashModeDescription",
-  thinking: "reasoningModeDescription",
-  pro: "proModeDescription",
-  ultra: "ultraModeDescription",
+const EFFORT_I18N_DESCRIPTION: Record<InputEffort, InputBoxDescriptionKey> = {
+  flash: "flashEffortDescription",
+  thinking: "thinkingEffortDescription",
+  pro: "proEffortDescription",
+  ultra: "ultraEffortDescription",
 };
 
-function getModeLabel(preset: ModePreset, t: Translations): string {
-  if (preset.label) {
-    return preset.label;
-  }
-  const key = MODE_I18N_LABEL[preset.name];
+function getEffortLabel(effort: InputEffort, t: Translations): string {
+  const key = EFFORT_I18N_LABEL[effort];
   if (key && t.inputBox[key]) {
     return t.inputBox[key];
   }
-  return preset.name;
+  return effort;
 }
 
-function getModeDescription(preset: ModePreset, t: Translations): string {
-  if (preset.description) {
-    return preset.description;
-  }
-  const key = MODE_I18N_DESCRIPTION[preset.name];
+function getEffortDescription(effort: InputEffort, t: Translations): string {
+  const key = EFFORT_I18N_DESCRIPTION[effort];
   if (key && t.inputBox[key]) {
     return t.inputBox[key];
   }
@@ -231,30 +218,25 @@ function getMatchingSkillSuggestions(skills: Skill[], query: string): Skill[] {
     .map(({ skill }) => skill);
 }
 
-function getResolvedMode(
-  mode: InputMode | undefined,
+function getResolvedEffort(
+  effort: InputEffort | undefined,
   supportsThinking: boolean,
-  presets: ModePreset[],
-  defaultMode: string,
-): InputMode {
-  // A non-thinking model cannot use a preset that requires thinking; fall
-  // back to the first non-thinking preset (legacy behavior fell back to "flash").
-  const firstNonThinking = presets.find((p) => !p.thinking_enabled);
+  efforts: Record<InputEffort, EffortFlags>,
+): InputEffort {
+  // A non-thinking model cannot use an effort that requires thinking; fall
+  // back to flash (the only built-in effort with thinking_enabled=false).
   if (!supportsThinking) {
-    if (mode) {
-      const selected = presets.find((p) => p.name === mode);
-      if (selected && !selected.thinking_enabled) {
-        return selected.name;
-      }
+    if (effort && !efforts[effort].thinking_enabled) {
+      return effort;
     }
-    return firstNonThinking?.name ?? defaultMode;
+    return "flash";
   }
-  // Thinking-capable model: honor an explicitly selected valid mode, else the
-  // configured default (legacy behavior fell back to "pro").
-  if (mode && presets.some((p) => p.name === mode)) {
-    return mode;
+  // Thinking-capable model: honor an explicitly selected effort, else default
+  // to "pro" (legacy behavior).
+  if (effort) {
+    return effort;
   }
-  return defaultMode;
+  return "pro";
 }
 
 export function InputBox({
@@ -280,7 +262,7 @@ export function InputBox({
     AgentThreadContext,
     "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
   > & {
-    mode: string | undefined;
+    effort: InputEffort | undefined;
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
   };
   extraHeader?: React.ReactNode;
@@ -297,7 +279,7 @@ export function InputBox({
       AgentThreadContext,
       "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
     > & {
-      mode: string | undefined;
+      effort: InputEffort | undefined;
       reasoning_effort?: "minimal" | "low" | "medium" | "high";
     },
   ) => void;
@@ -318,13 +300,12 @@ export function InputBox({
   const promptHistoryDraftRef = useRef("");
 
   const [followups, setFollowups] = useState<string[]>([]);
-  const { presets: modePresets, defaultMode } = useEffectiveModesConfig();
-  // The preset currently in effect (falls back to the first preset for an
-  // unknown / not-yet-selected mode). Used to gate the reasoning-effort
-  // picker on the active preset's `thinking_enabled` rather than a hard-coded
-  // mode name, so renaming "flash" in config still hides the picker.
-  const activeModePreset =
-    modePresets.find((p) => p.name === context.mode) ?? modePresets[0];
+  const { efforts } = useEffectiveEffortsConfig();
+  // The effort flags currently in effect (used to gate the reasoning-effort
+  // picker on the active effort's `thinking_enabled`).
+  const activeEffortFlags = context.effort
+    ? efforts[context.effort]
+    : efforts.flash;
   const { data: suggestionsConfig } = useSuggestionsConfig();
   const suggestionsConfigLoaded = suggestionsConfig !== undefined;
   const suggestionsEnabled = suggestionsConfig?.enabled;
@@ -351,23 +332,22 @@ export function InputBox({
     const fallbackModel = currentModel ?? models[0]!;
     const supportsThinking = fallbackModel.supports_thinking ?? false;
     const nextModelName = fallbackModel.name;
-    const nextMode = getResolvedMode(
-      context.mode,
+    const nextEffort = getResolvedEffort(
+      context.effort,
       supportsThinking,
-      modePresets,
-      defaultMode,
+      efforts,
     );
 
-    if (context.model_name === nextModelName && context.mode === nextMode) {
+    if (context.model_name === nextModelName && context.effort === nextEffort) {
       return;
     }
 
     onContextChange?.({
       ...context,
       model_name: nextModelName,
-      mode: nextMode,
+      effort: nextEffort,
     });
-  }, [context, models, onContextChange, modePresets, defaultMode]);
+  }, [context, models, onContextChange, efforts]);
 
   const selectedModel = useMemo(() => {
     if (models.length === 0) {
@@ -435,40 +415,35 @@ export function InputBox({
       onContextChange?.({
         ...context,
         model_name,
-        mode: getResolvedMode(
-          context.mode,
+        effort: getResolvedEffort(
+          context.effort,
           model.supports_thinking ?? false,
-          modePresets,
-          defaultMode,
+          efforts,
         ),
         reasoning_effort: context.reasoning_effort,
       });
       setModelDialogOpen(false);
     },
-    [onContextChange, context, models, modePresets, defaultMode],
+    [onContextChange, context, models, efforts],
   );
 
-  const handleModeSelect = useCallback(
-    (mode: InputMode) => {
-      const preset = modePresets.find((p) => p.name === mode);
-      const resolvedMode = getResolvedMode(
-        mode,
+  const handleEffortSelect = useCallback(
+    (effort: InputEffort) => {
+      const flags = efforts[effort];
+      const resolvedEffort = getResolvedEffort(
+        effort,
         supportThinking,
-        modePresets,
-        defaultMode,
+        efforts,
       );
-      // Use the selected preset's default reasoning_effort (falling back to
-      // minimal for unknown modes), matching the legacy per-mode defaults.
-      const effort =
-        preset?.reasoning_effort ??
-        (resolvedMode === mode ? "minimal" : undefined);
       onContextChange?.({
         ...context,
-        mode: resolvedMode,
-        reasoning_effort: effort,
+        effort: resolvedEffort,
+        reasoning_effort:
+          flags.reasoning_effort ??
+          (resolvedEffort === effort ? "minimal" : undefined),
       });
     },
-    [onContextChange, context, supportThinking, modePresets, defaultMode],
+    [onContextChange, context, supportThinking, efforts],
   );
 
   const handleReasoningEffortSelect = useCallback(
@@ -517,11 +492,10 @@ export function InputBox({
         onContextChange?.({
           ...context,
           model_name: resolvedModelName,
-          mode: getResolvedMode(
-            context.mode,
+          effort: getResolvedEffort(
+            context.effort,
             selectedModel?.supports_thinking ?? false,
-            modePresets,
-            defaultMode,
+            efforts,
           ),
         });
         return new Promise<void>((resolve, reject) => {
@@ -542,8 +516,7 @@ export function InputBox({
       selectedModel?.supports_thinking,
       status,
       t.inputBox.suggestionPlaceholderRequired,
-      modePresets,
-      defaultMode,
+      efforts,
     ],
   );
 
@@ -1010,15 +983,13 @@ export function InputBox({
           </PromptInputActionMenu> */}
             <AddAttachmentsButton className="px-2!" />
             <PromptInputActionMenu>
-              <ModeHoverGuide
-                mode={activeModePreset?.name ?? "flash"}
-                presets={modePresets}
-              >
+              <EffortHoverGuide effort={context.effort ?? "flash"}>
                 <PromptInputActionMenuTrigger className="max-w-28 gap-1! px-2! sm:max-w-none">
                   <div>
                     {(() => {
-                      const Icon = getModeIcon(activeModePreset?.icon);
-                      const isUltra = activeModePreset?.name === "ultra";
+                      const effort = context.effort ?? "flash";
+                      const Icon = getEffortIcon(effort);
+                      const isUltra = effort === "ultra";
                       return (
                         <Icon
                           className={cn("size-3", isUltra && "text-[#dabb5e]")}
@@ -1029,37 +1000,40 @@ export function InputBox({
                   <div
                     className={cn(
                       "truncate text-xs font-normal",
-                      context.mode === "ultra" ? "golden-text" : "",
+                      context.effort === "ultra" ? "golden-text" : "",
                     )}
                   >
-                    {activeModePreset ? getModeLabel(activeModePreset, t) : ""}
+                    {context.effort ? getEffortLabel(context.effort, t) : ""}
                   </div>
                 </PromptInputActionMenuTrigger>
-              </ModeHoverGuide>
+              </EffortHoverGuide>
               <PromptInputActionMenuContent className="w-80">
                 <DropdownMenuGroup>
                   <DropdownMenuLabel className="text-muted-foreground text-xs">
-                    {t.inputBox.mode}
+                    {t.inputBox.effort}
                   </DropdownMenuLabel>
                   <PromptInputActionMenu>
-                    {modePresets.map((preset) => {
-                      // Hide thinking-requiring presets when the model cannot
+                    {EFFORT_ORDER.map((effort) => {
+                      // Hide thinking-requiring efforts when the model cannot
                       // think (mirrors the legacy `supportThinking` gate).
-                      if (preset.thinking_enabled && !supportThinking) {
+                      if (
+                        efforts[effort].thinking_enabled &&
+                        !supportThinking
+                      ) {
                         return null;
                       }
-                      const isActive = context.mode === preset.name;
-                      const Icon = getModeIcon(preset.icon);
-                      const isUltra = preset.name === "ultra";
+                      const isActive = context.effort === effort;
+                      const Icon = getEffortIcon(effort);
+                      const isUltra = effort === "ultra";
                       return (
                         <PromptInputActionMenuItem
-                          key={preset.name}
+                          key={effort}
                           className={cn(
                             isActive
                               ? "text-accent-foreground"
                               : "text-muted-foreground/65",
                           )}
-                          onSelect={() => handleModeSelect(preset.name)}
+                          onSelect={() => handleEffortSelect(effort)}
                         >
                           <div className="flex flex-col gap-2">
                             <div className="flex items-center gap-1 font-bold">
@@ -1072,11 +1046,11 @@ export function InputBox({
                                 )}
                               />
                               <div className={cn(isUltra && "golden-text")}>
-                                {getModeLabel(preset, t)}
+                                {getEffortLabel(effort, t)}
                               </div>
                             </div>
                             <div className="pl-7 text-xs">
-                              {getModeDescription(preset, t)}
+                              {getEffortDescription(effort, t)}
                             </div>
                           </div>
                           {isActive ? (
@@ -1091,7 +1065,7 @@ export function InputBox({
                 </DropdownMenuGroup>
               </PromptInputActionMenuContent>
             </PromptInputActionMenu>
-            {supportReasoningEffort && activeModePreset?.thinking_enabled && (
+            {supportReasoningEffort && activeEffortFlags?.thinking_enabled && (
               <PromptInputActionMenu>
                 <PromptInputActionMenuTrigger className="hidden gap-1! px-2! sm:inline-flex">
                   <div className="text-xs font-normal">

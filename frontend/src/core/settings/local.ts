@@ -11,7 +11,7 @@ export const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
   },
   context: {
     model_name: undefined,
-    mode: undefined,
+    effort: undefined,
     reasoning_effort: undefined,
   },
 };
@@ -41,7 +41,7 @@ export interface LocalSettings {
     | "reasoning_effort"
   > & {
     model_name?: string | undefined;
-    mode: string | undefined;
+    effort: "flash" | "thinking" | "pro" | "ultra" | undefined;
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
   };
 }

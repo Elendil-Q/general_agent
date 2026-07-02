@@ -20,15 +20,15 @@ function WelcomeDescription({ children }: { children: string }) {
 
 export function Welcome({
   className,
-  mode,
+  effort,
 }: {
   className?: string;
-  /** Mode name is config-driven; only the "ultra" styling branch matters here. */
-  mode?: string;
+  /** Effort name; only the "ultra" styling branch matters here. */
+  effort?: "flash" | "thinking" | "pro" | "ultra";
 }) {
   const { t } = useI18n();
   const searchParams = useSearchParams();
-  const isUltra = useMemo(() => mode === "ultra", [mode]);
+  const isUltra = useMemo(() => effort === "ultra", [effort]);
   const colors = useMemo(() => {
     if (isUltra) {
       return ["#efefbb", "#e9c665", "#e3a812"];

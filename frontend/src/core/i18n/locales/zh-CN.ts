@@ -84,16 +84,17 @@ export const zhCN: Translations = {
     createSkillPrompt:
       "我们一起用 skill-creator 技能来创建一个技能吧。先问问我希望这个技能能做什么。",
     addAttachments: "添加附件",
-    mode: "模式",
-    flashMode: "闪速",
-    flashModeDescription: "快速且高效的完成任务，但可能不够精准",
-    reasoningMode: "思考",
-    reasoningModeDescription: "思考后再行动，在时间与准确性之间取得平衡",
-    proMode: "Pro",
-    proModeDescription: "思考、计划再执行，获得更精准的结果，可能需要更多时间",
-    ultraMode: "Ultra",
-    ultraModeDescription:
-      "继承自 Pro 模式，可调用子代理分工协作，适合复杂多步骤任务，能力最强",
+    effort: "effort",
+    flashEffort: "闪速",
+    flashEffortDescription: "快速且高效的完成任务，但可能不够精准",
+    thinkingEffort: "思考",
+    thinkingEffortDescription: "思考后再行动，在时间与准确性之间取得平衡",
+    proEffort: "Pro",
+    proEffortDescription:
+      "思考、计划再执行，获得更精准的结果，可能需要更多时间",
+    ultraEffort: "Ultra",
+    ultraEffortDescription:
+      "继承自 Pro，可调用子代理分工协作，适合复杂多步骤任务，能力最强",
     reasoningEffort: "推理深度",
     reasoningEffortMinimal: "最低",
     reasoningEffortMinimalDescription: "检索 + 直接输出",

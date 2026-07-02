@@ -17,10 +17,10 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { getAPIClient } from "../api";
 import { fetch } from "../api/fetcher";
 import { getBackendBaseURL } from "../config";
+import { useEffectiveEffortsConfig, resolveEffortFlags } from "../effort/hooks";
 import { useI18n } from "../i18n/hooks";
 import { isHiddenFromUIMessage } from "../messages/utils";
 import type { FileInMessage } from "../messages/utils";
-import { useEffectiveModesConfig, resolveModeFlags } from "../modes/hooks";
 import type { LocalSettings } from "../settings";
 import { useUpdateSubtask } from "../tasks/context";
 import type { UploadedFileInfo } from "../uploads";
@@ -689,10 +689,10 @@ export function useThreadStream({
   onToolEnd,
 }: ThreadStreamOptions) {
   const { t } = useI18n();
-  // Mode presets drive the mode -> runtime-flags mapping (thinking_enabled,
+  // Effort presets drive the effort -> runtime-flags mapping (thinking_enabled,
   // is_plan_mode, subagent_enabled, reasoning_effort). Falls back to the
   // built-in four when the backend is older (404) or before the fetch resolves.
-  const { presets: modePresets, defaultMode } = useEffectiveModesConfig();
+  const { efforts } = useEffectiveEffortsConfig();
   const currentViewThreadId = displayThreadId ?? threadId ?? null;
   const currentViewThreadIdRef = useRef(currentViewThreadId);
   currentViewThreadIdRef.current = currentViewThreadId;
@@ -1354,13 +1354,12 @@ export function useThreadStream({
               recursion_limit: 1000,
             },
             context: (() => {
-              // Derive runtime flags from the selected mode's preset (config-
+              // Derive runtime flags from the selected effort's preset (config-
               // driven). A user-selected reasoning_effort still wins over the
               // preset default.
-              const flags = resolveModeFlags(
-                context.mode,
-                modePresets,
-                defaultMode,
+              const flags = resolveEffortFlags(
+                context.effort ?? "pro",
+                efforts,
               );
               return {
                 ...extraContext,
@@ -1399,8 +1398,7 @@ export function useThreadStream({
       queryClient,
       humanMessageCount,
       persistedMessages,
-      modePresets,
-      defaultMode,
+      efforts,
     ],
   );
 
@@ -1472,11 +1470,7 @@ export function useThreadStream({
             recursion_limit: 1000,
           },
           context: (() => {
-            const flags = resolveModeFlags(
-              context.mode,
-              modePresets,
-              defaultMode,
-            );
+            const flags = resolveEffortFlags(context.effort ?? "pro", efforts);
             return {
               ...context,
               thinking_enabled: flags.thinking_enabled,
@@ -1518,8 +1512,7 @@ export function useThreadStream({
       persistedMessages,
       queryClient,
       thread,
-      modePresets,
-      defaultMode,
+      efforts,
     ],
   );
 
