@@ -90,7 +90,7 @@ fi
 # ── Hand off to uvicorn ─────────────────────────────────────────────────────
 
 PYTHONPATH=. exec uv run uvicorn app.gateway.app:app \
-    --host 0.0.0.0 --port 8001 \
+    --host 0.0.0.0 --port ${GATEWAY_PORT:-8001} \
     --reload \
     --reload-include='*.yaml' \
     --reload-include='.env' \

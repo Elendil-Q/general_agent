@@ -17,10 +17,29 @@ ARG UV_INDEX_URL
 # Usage: docker build --build-arg UV_EXTRAS=postgres ...
 ARG UV_EXTRAS
 
-# Optionally override apt mirror for restricted networks (e.g. APT_MIRROR=mirrors.aliyun.com)
+# Optionally override apt mirror for restricted networks.
+# Accepts a bare hostname or a URL/path — normalized to a bare hostname before
+# use, so all of the following resolve equivalently:
+#   APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+#   APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+#   APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/
+#   APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+#   APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian/
+# Anything that still contains a path separator or shell metacharacter after
+# normalization is rejected with a hard error, so a malformed value (e.g. a
+# full InRelease URL pasted by mistake) fails the build up front instead of
+# silently producing broken sources.list entries.
 RUN if [ -n "${APT_MIRROR}" ]; then \
-      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
-      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
+      APT_MIRROR_HOST=$(printf '%s' "${APT_MIRROR}" | sed -E 's|^[a-zA-Z]+://||; s|^//||; s|/+$||; s|/debian$||'); \
+      case "$APT_MIRROR_HOST" in \
+        "" | *[!A-Za-z0-9.:-]* | .* | -* | *.) \
+          echo "ERROR: APT_MIRROR value '${APT_MIRROR}' is not a valid bare hostname after normalization ('$APT_MIRROR_HOST'). Set it to a bare host like 'mirrors.tuna.tsinghua.edu.cn'." >&2; \
+          exit 1; \
+          ;; \
+      esac; \
+      echo "[apt] using mirror host: $APT_MIRROR_HOST (raw input: ${APT_MIRROR})"; \
+      sed -i "s|deb.debian.org|${APT_MIRROR_HOST}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+      sed -i "s|deb.debian.org|${APT_MIRROR_HOST}|g" /etc/apt/sources.list 2>/dev/null || true; \
     fi
 
 # Install build tools + Node.js (build-essential needed for native Python extensions)

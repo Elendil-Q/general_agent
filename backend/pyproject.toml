@@ -21,6 +21,7 @@ dependencies = [
     "bcrypt>=4.0.0",
     "pyjwt>=2.13.0",
     "email-validator>=2.0.0",
+    "langchain-ollama>=1.1.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,10 @@ dev = [
     # the dev group so the terminal workbench can be run and tested locally / in CI.
     "textual>=0.80",
 ]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
 
 [tool.pytest.ini_options]
 markers = [

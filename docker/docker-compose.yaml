@@ -33,7 +33,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
     command: >
-      sh -c "cp /etc/nginx/nginx.conf.template /etc/nginx/nginx.conf
+      sh -c "sed -e 's|__GATEWAY_PORT__|${GATEWAY_PORT:-8001}|g' -e 's|__FRONTEND_PORT__|${FRONTEND_PORT:-3000}|g' -e 's|__PROVISIONER_PORT__|${PROVISIONER_PORT:-8002}|g' /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
       && nginx -g 'daemon off;'"
     depends_on:
       - frontend
@@ -54,7 +54,8 @@ services:
     container_name: deer-flow-frontend
     environment:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-      - DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://gateway:8001
+      - DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://gateway:${GATEWAY_PORT:-8001}
+      - PORT=${FRONTEND_PORT:-3000}
     env_file:
       - ../frontend/.env
     networks:
@@ -78,7 +79,7 @@ services:
     # reconnect, request dedup, and per-worker IM channel services all break
     # across workers until a shared (e.g. redis) stream bridge lands, which is
     # not yet implemented. Override GATEWAY_WORKERS only once that is in place.
-    command: sh -c "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers ${GATEWAY_WORKERS:-1}"
+    command: sh -c "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port ${GATEWAY_PORT:-8001} --workers ${GATEWAY_WORKERS:-1}"
     volumes:
       - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
       - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
@@ -102,8 +103,8 @@ services:
       - DEER_FLOW_HOME=/app/backend/.deer-flow
       - DEER_FLOW_CONFIG_PATH=/app/backend/config.yaml
       - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/backend/extensions_config.json
-      - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://gateway:8001/api}
-      - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
+      - DEER_FLOW_CHANNELS_LANGGRAPH_URL=http://gateway:${GATEWAY_PORT:-8001}/api
+      - DEER_FLOW_CHANNELS_GATEWAY_URL=http://gateway:${GATEWAY_PORT:-8001}
       - DEER_FLOW_INTERNAL_AUTH_TOKEN=${DEER_FLOW_INTERNAL_AUTH_TOKEN}
       # DooD path/network translation
       - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME}
