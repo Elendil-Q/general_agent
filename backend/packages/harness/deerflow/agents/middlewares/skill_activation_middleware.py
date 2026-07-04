@@ -64,7 +64,7 @@ def _is_user_activation_target(message: object) -> bool:
 
 
 class SkillActivationMiddleware(AgentMiddleware):
-    """Inject full SKILL.md content when the user explicitly types /skill-name."""
+    """Inject full SKILL.md content when the user explicitly types /skill:skill-name."""
 
     def __init__(
         self,

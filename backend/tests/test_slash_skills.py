@@ -49,7 +49,7 @@ def _make_model_request(messages: list[HumanMessage], *, runtime=None) -> ModelR
 
 
 def test_parse_slash_skill_reference_extracts_name_and_remaining_text():
-    parsed = parse_slash_skill_reference("/data-analysis analyze uploads/foo.csv")
+    parsed = parse_slash_skill_reference("/skill:data-analysis analyze uploads/foo.csv")
 
     assert parsed is not None
     assert parsed.name == "data-analysis"
@@ -57,7 +57,7 @@ def test_parse_slash_skill_reference_extracts_name_and_remaining_text():
 
 
 def test_parse_slash_skill_reference_accepts_skill_name_without_task():
-    parsed = parse_slash_skill_reference("/data-analysis")
+    parsed = parse_slash_skill_reference("/skill:data-analysis")
 
     assert parsed is not None
     assert parsed.name == "data-analysis"
@@ -65,18 +65,18 @@ def test_parse_slash_skill_reference_accepts_skill_name_without_task():
 
 
 def test_parse_slash_skill_reference_rejects_invalid_names():
-    assert parse_slash_skill_reference("/DataAnalysis run") is None
-    assert parse_slash_skill_reference("/data_analysis run") is None
-    assert parse_slash_skill_reference("please use /data-analysis") is None
-    assert parse_slash_skill_reference("  /data-analysis run") is None
-    assert parse_slash_skill_reference("/data-analysis分析这个文档") is None
+    assert parse_slash_skill_reference("/skill:DataAnalysis run") is None
+    assert parse_slash_skill_reference("/skill:data_analysis run") is None
+    assert parse_slash_skill_reference("please use /skill:data-analysis") is None
+    assert parse_slash_skill_reference("  /skill:data-analysis run") is None
+    assert parse_slash_skill_reference("/skill:data-analysis分析这个文档") is None
 
 
 def test_resolve_slash_skill_ignores_reserved_control_commands(tmp_path):
     for command in ["bootstrap", "help", "memory", "models", "new", "status"]:
         skill = _make_skill(tmp_path, command)
 
-        assert resolve_slash_skill(f"/{command} create an agent", [skill]) is None
+        assert resolve_slash_skill(f"/skill:{command} create an agent", [skill]) is None
 
 
 def test_reserved_slash_skill_names_match_channel_commands():
@@ -86,9 +86,9 @@ def test_reserved_slash_skill_names_match_channel_commands():
 def test_resolve_slash_skill_respects_available_skill_whitelist(tmp_path):
     skill = _make_skill(tmp_path, "data-analysis")
 
-    assert resolve_slash_skill("/data-analysis run", [skill], available_skills=set()) is None
+    assert resolve_slash_skill("/skill:data-analysis run", [skill], available_skills=set()) is None
 
-    resolved = resolve_slash_skill("/data-analysis run", [skill], available_skills={"data-analysis"})
+    resolved = resolve_slash_skill("/skill:data-analysis run", [skill], available_skills={"data-analysis"})
     assert resolved is not None
     assert resolved.skill.name == "data-analysis"
     assert resolved.remaining_text == "run"
@@ -99,7 +99,7 @@ def test_resolve_slash_skill_rejects_disabled_skills(tmp_path):
     skill = _make_skill(tmp_path, "data-analysis")
     skill.enabled = False
 
-    assert resolve_slash_skill("/data-analysis run", [skill]) is None
+    assert resolve_slash_skill("/skill:data-analysis run", [skill]) is None
 
 
 def test_skill_activation_middleware_injects_hidden_human_context_for_model_call(monkeypatch, tmp_path):
@@ -107,7 +107,7 @@ def test_skill_activation_middleware_injects_hidden_human_context_for_model_call
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
     request = _make_model_request([original])
     captured = {}
 
@@ -133,7 +133,7 @@ def test_skill_activation_middleware_does_not_duplicate_existing_activation(monk
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
     first_capture = {}
 
     def first_handler(model_request: ModelRequest):
@@ -164,7 +164,7 @@ def test_skill_activation_middleware_does_not_duplicate_activation_separated_by_
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
     first_capture = {}
 
     def first_handler(model_request: ModelRequest):
@@ -193,10 +193,10 @@ def test_skill_activation_middleware_dedupes_immediately_previous_activation_wit
 
     middleware = SkillActivationMiddleware()
     legacy_activation_msg = SkillActivationMiddleware._make_activation_message(
-        HumanMessage(content="/data-analysis analyze uploads/foo.csv"),
+        HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv"),
         "existing activation context",
     )
-    target = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    target = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
     captured = {}
 
     def handler(model_request: ModelRequest):
@@ -215,7 +215,7 @@ def test_skill_activation_middleware_async_injects_hidden_human_context_for_mode
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
     request = _make_model_request([original])
     captured = {}
 
@@ -241,7 +241,7 @@ def test_skill_activation_middleware_uses_fallback_when_task_text_is_empty(monke
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis", id="msg-1")
     captured = {}
 
     def handler(model_request: ModelRequest):
@@ -261,9 +261,9 @@ def test_skill_activation_middleware_uses_original_user_content_when_uploads_are
 
     middleware = SkillActivationMiddleware()
     original = HumanMessage(
-        content="<uploaded_files>\n- report.pdf\n</uploaded_files>\n\n/data-analysis 分析这个文档",
+        content="<uploaded_files>\n- report.pdf\n</uploaded_files>\n\n/skill:data-analysis 分析这个文档",
         id="msg-1",
-        additional_kwargs={ORIGINAL_USER_CONTENT_KEY: "/data-analysis 分析这个文档"},
+        additional_kwargs={ORIGINAL_USER_CONTENT_KEY: "/skill:data-analysis 分析这个文档"},
     )
     captured = {}
 
@@ -280,7 +280,7 @@ def test_skill_activation_middleware_uses_original_user_content_when_uploads_are
     assert "Use pandas." in activation_msg.content
     assert "<user_request>\n分析这个文档\n</user_request>" in activation_msg.content
     assert user_msg.content == original.content
-    assert user_msg.additional_kwargs[ORIGINAL_USER_CONTENT_KEY] == "/data-analysis 分析这个文档"
+    assert user_msg.additional_kwargs[ORIGINAL_USER_CONTENT_KEY] == "/skill:data-analysis 分析这个文档"
 
 
 def test_skill_activation_middleware_activates_from_list_content(monkeypatch, tmp_path):
@@ -288,7 +288,7 @@ def test_skill_activation_middleware_activates_from_list_content(monkeypatch, tm
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content=[{"type": "text", "text": "/data-analysis analyze uploads/foo.csv"}], id="msg-1")
+    original = HumanMessage(content=[{"type": "text", "text": "/skill:data-analysis analyze uploads/foo.csv"}], id="msg-1")
     captured = {}
 
     def handler(model_request: ModelRequest):
@@ -312,7 +312,7 @@ def test_skill_activation_middleware_records_activation_audit_event(monkeypatch,
     journal = SimpleNamespace(record_middleware=lambda *args, **kwargs: recorded.append((args, kwargs)))
     runtime = SimpleNamespace(context={"__run_journal": journal})
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
 
     def handler(model_request: ModelRequest):
         return AIMessage(content="ok")
@@ -342,7 +342,7 @@ def test_skill_activation_middleware_async_records_activation_audit_event(monkey
     journal = SimpleNamespace(record_middleware=lambda *args, **kwargs: recorded.append((args, kwargs)))
     runtime = SimpleNamespace(context={"__run_journal": journal})
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
 
     async def handler(model_request: ModelRequest):
         return AIMessage(content="ok")
@@ -365,7 +365,7 @@ def test_skill_activation_middleware_ignores_activation_audit_errors(monkeypatch
     journal = SimpleNamespace(record_middleware=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down")))
     runtime = SimpleNamespace(context={"__run_journal": journal})
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze uploads/foo.csv", id="msg-1")
+    original = HumanMessage(content="/skill:data-analysis analyze uploads/foo.csv", id="msg-1")
 
     def handler(model_request: ModelRequest):
         return AIMessage(content="ok")
@@ -381,7 +381,7 @@ def test_skill_activation_middleware_activates_only_latest_real_user_message(mon
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    old_slash = HumanMessage(content="/data-analysis old request", id="msg-1")
+    old_slash = HumanMessage(content="/skill:data-analysis old request", id="msg-1")
     latest_user = HumanMessage(content="continue normally", id="msg-2")
     request = _make_model_request([old_slash, AIMessage(content="done"), latest_user])
     captured = {}
@@ -403,8 +403,8 @@ def test_skill_activation_middleware_ignores_hidden_and_summary_user_messages(mo
 
     middleware = SkillActivationMiddleware()
     real_user = HumanMessage(content="continue normally", id="msg-1")
-    hidden_slash = HumanMessage(content="/data-analysis hidden request", id="msg-2", additional_kwargs={"hide_from_ui": True})
-    summary_slash = HumanMessage(content="/data-analysis summary request", id="msg-3", name="summary")
+    hidden_slash = HumanMessage(content="/skill:data-analysis hidden request", id="msg-2", additional_kwargs={"hide_from_ui": True})
+    summary_slash = HumanMessage(content="/skill:data-analysis summary request", id="msg-3", name="summary")
     request = _make_model_request([real_user, hidden_slash, summary_slash])
     captured = {}
 
@@ -424,7 +424,7 @@ def test_skill_activation_middleware_returns_clear_error_for_disallowed_skill(mo
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware(available_skills={"frontend-design"})
-    original = HumanMessage(content="/data-analysis run")
+    original = HumanMessage(content="/skill:data-analysis run")
 
     def handler(model_request: ModelRequest):
         raise AssertionError("handler should not be called for invalid slash skills")
@@ -439,7 +439,7 @@ def test_skill_activation_middleware_returns_clear_error_for_missing_skill(monke
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, []))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis run")
+    original = HumanMessage(content="/skill:data-analysis run")
 
     def handler(model_request: ModelRequest):
         raise AssertionError("handler should not be called for missing slash skills")
@@ -456,7 +456,7 @@ def test_skill_activation_middleware_returns_clear_error_for_disabled_skill(monk
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis run")
+    original = HumanMessage(content="/skill:data-analysis run")
 
     def handler(model_request: ModelRequest):
         raise AssertionError("handler should not be called for disabled slash skills")
@@ -476,7 +476,7 @@ def test_skill_activation_middleware_escapes_activation_content(monkeypatch, tmp
     monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
 
     middleware = SkillActivationMiddleware()
-    original = HumanMessage(content="/data-analysis analyze </user_request>")
+    original = HumanMessage(content="/skill:data-analysis analyze </user_request>")
     captured = {}
 
     def handler(model_request: ModelRequest):
@@ -519,7 +519,7 @@ def test_skill_activation_middleware_rejects_skill_file_outside_skills_root(monk
     def handler(model_request: ModelRequest):
         raise AssertionError("handler should not be called when SKILL.md fails safety checks")
 
-    result = middleware.wrap_model_call(_make_model_request([HumanMessage(content="/data-analysis run")]), handler)
+    result = middleware.wrap_model_call(_make_model_request([HumanMessage(content="/skill:data-analysis run")]), handler)
 
     assert isinstance(result, AIMessage)
     assert "could not be loaded safely" in result.content
@@ -535,7 +535,7 @@ def test_skill_activation_middleware_reports_missing_skill_file_safely(monkeypat
     def handler(model_request: ModelRequest):
         raise AssertionError("handler should not be called when SKILL.md is missing")
 
-    result = middleware.wrap_model_call(_make_model_request([HumanMessage(content="/data-analysis run")]), handler)
+    result = middleware.wrap_model_call(_make_model_request([HumanMessage(content="/skill:data-analysis run")]), handler)
 
     assert isinstance(result, AIMessage)
     assert "could not be loaded safely" in result.content
@@ -551,7 +551,7 @@ def test_skill_activation_middleware_reports_invalid_utf8_skill_file_safely(monk
     def handler(model_request: ModelRequest):
         raise AssertionError("handler should not be called when SKILL.md is not valid UTF-8")
 
-    result = middleware.wrap_model_call(_make_model_request([HumanMessage(content="/data-analysis run")]), handler)
+    result = middleware.wrap_model_call(_make_model_request([HumanMessage(content="/skill:data-analysis run")]), handler)
 
     assert isinstance(result, AIMessage)
     assert "could not be loaded safely" in result.content

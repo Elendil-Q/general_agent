@@ -178,32 +178,49 @@ function findSuggestionTemplatePlaceholder(text: string) {
   };
 }
 
-function getLeadingSlashSkillQuery(value: string): string | null {
+interface SlashCommand {
+  name: string;
+  description: string;
+  category?: string;
+}
+
+function getSlashCommandQuery(value: string): string | null {
   if (!value.startsWith("/")) {
     return null;
   }
-
   const query = value.slice(1);
   if (query.includes("/") || /\s/.test(query)) {
     return null;
   }
-
   return query;
 }
 
-function getMatchingSkillSuggestions(skills: Skill[], query: string): Skill[] {
+function buildSlashCommands(skills: Skill[]): SlashCommand[] {
+  const commands: SlashCommand[] = [];
+  for (const skill of skills) {
+    if (!skill.enabled) continue;
+    commands.push({
+      name: `skill:${skill.name}`,
+      description: skill.description,
+      category: skill.category,
+    });
+  }
+  return commands;
+}
+
+function getMatchingSlashCommands(
+  commands: SlashCommand[],
+  query: string,
+): SlashCommand[] {
   const normalizedQuery = query.toLowerCase();
 
-  return skills
-    .map((skill, index) => ({
-      skill,
+  return commands
+    .map((command, index) => ({
+      command,
       index,
-      name: skill.name.toLowerCase(),
+      name: command.name.toLowerCase(),
     }))
-    .filter(({ skill, name }) => {
-      if (!skill.enabled) {
-        return false;
-      }
+    .filter(({ name }) => {
       return !normalizedQuery || name.includes(normalizedQuery);
     })
     .sort((a, b) => {
@@ -215,7 +232,7 @@ function getMatchingSkillSuggestions(skills: Skill[], query: string): Skill[] {
       return a.index - b.index;
     })
     .slice(0, MAX_SKILL_SUGGESTIONS)
-    .map(({ skill }) => skill);
+    .map(({ command }) => command);
 }
 
 function getResolvedEffort(
@@ -571,31 +588,32 @@ export function InputBox({
     setTimeout(() => requestFormSubmit(), 0);
   }, [pendingSuggestion, requestFormSubmit, textInput]);
 
-  const slashSkillQuery = useMemo(
-    () => getLeadingSlashSkillQuery(textInput.value ?? ""),
+  const slashCommandQuery = useMemo(
+    () => getSlashCommandQuery(textInput.value ?? ""),
     [textInput.value],
   );
-  const skillSuggestions = useMemo(
+  const slashCommands = useMemo(() => buildSlashCommands(skills), [skills]);
+  const slashCommandSuggestions = useMemo(
     () =>
-      slashSkillQuery === null
+      slashCommandQuery === null
         ? []
-        : getMatchingSkillSuggestions(skills, slashSkillQuery),
-    [skills, slashSkillQuery],
+        : getMatchingSlashCommands(slashCommands, slashCommandQuery),
+    [slashCommands, slashCommandQuery],
   );
-  const showSkillSuggestions =
+  const showSlashCommandSuggestions =
     !disabled &&
     textareaFocused &&
-    slashSkillQuery !== null &&
-    skillSuggestions.length > 0 &&
+    slashCommandQuery !== null &&
+    slashCommandSuggestions.length > 0 &&
     dismissedSkillSuggestionValue !== textInput.value;
 
   useEffect(() => {
     setSkillSuggestionIndex(0);
-  }, [slashSkillQuery, skillSuggestions.length]);
+  }, [slashCommandQuery, slashCommandSuggestions.length]);
 
-  const applySkillSuggestion = useCallback(
-    (skill: Skill) => {
-      const nextValue = `/${skill.name} `;
+  const applySlashCommandSuggestion = useCallback(
+    (command: SlashCommand) => {
+      const nextValue = `/${command.name} `;
       textInput.setInput(nextValue);
       setDismissedSkillSuggestionValue(nextValue);
       requestAnimationFrame(() => {
@@ -610,16 +628,16 @@ export function InputBox({
     [textInput],
   );
 
-  const handleSkillSuggestionKeyDown = useCallback(
+  const handleSlashCommandSuggestionKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (!showSkillSuggestions) {
+      if (!showSlashCommandSuggestions) {
         return;
       }
 
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setSkillSuggestionIndex(
-          (index) => (index + 1) % skillSuggestions.length,
+          (index) => (index + 1) % slashCommandSuggestions.length,
         );
         return;
       }
@@ -628,7 +646,8 @@ export function InputBox({
         event.preventDefault();
         setSkillSuggestionIndex(
           (index) =>
-            (index - 1 + skillSuggestions.length) % skillSuggestions.length,
+            (index - 1 + slashCommandSuggestions.length) %
+            slashCommandSuggestions.length,
         );
         return;
       }
@@ -638,9 +657,9 @@ export function InputBox({
           return;
         }
         event.preventDefault();
-        const selectedSkill = skillSuggestions[skillSuggestionIndex];
-        if (selectedSkill) {
-          applySkillSuggestion(selectedSkill);
+        const selectedCommand = slashCommandSuggestions[skillSuggestionIndex];
+        if (selectedCommand) {
+          applySlashCommandSuggestion(selectedCommand);
         }
         return;
       }
@@ -651,10 +670,10 @@ export function InputBox({
       }
     },
     [
-      applySkillSuggestion,
-      showSkillSuggestions,
+      applySlashCommandSuggestion,
+      showSlashCommandSuggestions,
       skillSuggestionIndex,
-      skillSuggestions,
+      slashCommandSuggestions,
       textInput.value,
     ],
   );
@@ -730,13 +749,13 @@ export function InputBox({
 
   const handlePromptTextareaKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      handleSkillSuggestionKeyDown(event);
+      handleSlashCommandSuggestionKeyDown(event);
       if (event.defaultPrevented) {
         return;
       }
       handlePromptHistoryKeyDown(event);
     },
-    [handlePromptHistoryKeyDown, handleSkillSuggestionKeyDown],
+    [handlePromptHistoryKeyDown, handleSlashCommandSuggestionKeyDown],
   );
 
   const handlePromptTextareaChange = useCallback(() => {
@@ -747,7 +766,7 @@ export function InputBox({
   const showFollowups =
     !disabled &&
     !isWelcomeMode &&
-    !showSkillSuggestions &&
+    !showSlashCommandSuggestions &&
     !followupsHidden &&
     (followupsLoading || followups.length > 0);
 
@@ -893,14 +912,14 @@ export function InputBox({
           </div>
         </div>
       )}
-      {showSkillSuggestions && (
+      {showSlashCommandSuggestions && (
         <div className="absolute right-0 bottom-full left-0 z-40 mb-2 px-1">
           <div
-            aria-label="Skill suggestions"
+            aria-label="Slash command suggestions"
             className="bg-popover/95 text-popover-foreground border-border max-h-72 overflow-y-auto rounded-xl border p-1 shadow-lg backdrop-blur-sm"
             role="listbox"
           >
-            {skillSuggestions.map((skill, index) => {
+            {slashCommandSuggestions.map((command, index) => {
               const selected = index === skillSuggestionIndex;
               return (
                 <button
@@ -911,8 +930,8 @@ export function InputBox({
                       ? "bg-accent text-accent-foreground"
                       : "text-popover-foreground hover:bg-accent/70 hover:text-accent-foreground",
                   )}
-                  key={skill.name}
-                  onClick={() => applySkillSuggestion(skill)}
+                  key={command.name}
+                  onClick={() => applySlashCommandSuggestion(command)}
                   onMouseDown={(event) => event.preventDefault()}
                   onMouseEnter={() => setSkillSuggestionIndex(index)}
                   role="option"
@@ -921,11 +940,11 @@ export function InputBox({
                   <SparklesIcon className="text-muted-foreground size-4 shrink-0" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">
-                      /{skill.name}
+                      /{command.name}
                     </span>
-                    {skill.description && (
+                    {command.description && (
                       <span className="text-muted-foreground block truncate text-xs">
-                        {skill.description}
+                        {command.description}
                       </span>
                     )}
                   </span>
@@ -1236,7 +1255,7 @@ export function InputBox({
 
       {isWelcomeMode &&
         searchParams.get("mode") !== "skill" &&
-        !showSkillSuggestions && (
+        !showSlashCommandSuggestions && (
           <div className="flex items-center justify-center pt-2">
             <SuggestionList textareaRef={textareaRef} />
           </div>

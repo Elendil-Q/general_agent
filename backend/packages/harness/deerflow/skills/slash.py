@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from deerflow.skills.types import Skill
 
 RESERVED_SLASH_SKILL_NAMES = frozenset({"bootstrap", "help", "memory", "models", "new", "status"})
-_SLASH_SKILL_RE = re.compile(r"^/([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s+|$)")
+_SLASH_SKILL_RE = re.compile(r"^/skill:([a-z0-9]+(?:-[a-z0-9]+)*)(?:\s+|$)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,7 @@ class ResolvedSlashSkill:
 
 
 def parse_slash_skill_reference(text: str) -> SlashSkillReference | None:
-    """Parse strict `/skill-name task` syntax, ignoring reserved control commands."""
+    """Parse strict `/skill:skill-name task` syntax, ignoring reserved control commands."""
     match = _SLASH_SKILL_RE.match(text)
     if not match:
         return None
