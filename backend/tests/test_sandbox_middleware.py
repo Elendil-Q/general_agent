@@ -184,7 +184,7 @@ async def test_default_lazy_tool_acquisition_uses_async_provider() -> None:
             store=None,
         )
 
-        result = await ls_tool.ainvoke({"runtime": runtime, "description": "list workspace", "path": "/mnt/user-data/workspace"})
+        result = await ls_tool.ainvoke({"runtime": runtime, "path": "/mnt/user-data/workspace"})
     finally:
         reset_sandbox_provider()
 

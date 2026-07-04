@@ -1448,11 +1448,10 @@ bash_tool.coroutine = _bash_tool_async
 
 
 @tool("ls", parse_docstring=True)
-def ls_tool(runtime: Runtime, description: str, path: str) -> str:
+def ls_tool(runtime: Runtime, path: str) -> str:
     """List the contents of a directory up to 2 levels deep in tree format.
 
     Args:
-        description: Explain why you are listing this directory in short words. ALWAYS PROVIDE THIS PARAMETER FIRST.
         path: The **absolute** path to the directory to list.
     """
     try:
@@ -1494,8 +1493,8 @@ def ls_tool(runtime: Runtime, description: str, path: str) -> str:
         return f"Error: Unexpected error listing directory: {_sanitize_error(e, runtime)}"
 
 
-async def _ls_tool_async(runtime: Runtime, description: str, path: str) -> str:
-    return await _run_sync_tool_after_async_sandbox_init(ls_tool.func, runtime, description, path)
+async def _ls_tool_async(runtime: Runtime, path: str) -> str:
+    return await _run_sync_tool_after_async_sandbox_init(ls_tool.func, runtime, path)
 
 
 ls_tool.coroutine = _ls_tool_async
@@ -1504,7 +1503,6 @@ ls_tool.coroutine = _ls_tool_async
 @tool("glob", parse_docstring=True)
 def glob_tool(
     runtime: Runtime,
-    description: str,
     pattern: str,
     path: str,
     include_dirs: bool = False,
@@ -1513,7 +1511,6 @@ def glob_tool(
     """Find files or directories that match a glob pattern under a root directory.
 
     Args:
-        description: Explain why you are searching for these paths in short words. ALWAYS PROVIDE THIS PARAMETER FIRST.
         pattern: The glob pattern to match relative to the root path, for example `**/*.py`.
         path: The **absolute** root directory to search under.
         include_dirs: Whether matching directories should also be returned. Default is False.
@@ -1553,7 +1550,6 @@ def glob_tool(
 
 async def _glob_tool_async(
     runtime: Runtime,
-    description: str,
     pattern: str,
     path: str,
     include_dirs: bool = False,
@@ -1562,7 +1558,6 @@ async def _glob_tool_async(
     return await _run_sync_tool_after_async_sandbox_init(
         glob_tool.func,
         runtime,
-        description,
         pattern,
         path,
         include_dirs,
@@ -1576,7 +1571,6 @@ glob_tool.coroutine = _glob_tool_async
 @tool("grep", parse_docstring=True)
 def grep_tool(
     runtime: Runtime,
-    description: str,
     pattern: str,
     path: str,
     glob: str | None = None,
@@ -1587,7 +1581,6 @@ def grep_tool(
     """Search for matching lines inside text files under a root directory.
 
     Args:
-        description: Explain why you are searching file contents in short words. ALWAYS PROVIDE THIS PARAMETER FIRST.
         pattern: The string or regex pattern to search for.
         path: The **absolute** root directory to search under.
         glob: Optional glob filter for candidate files, for example `**/*.py`.
@@ -1645,7 +1638,6 @@ def grep_tool(
 
 async def _grep_tool_async(
     runtime: Runtime,
-    description: str,
     pattern: str,
     path: str,
     glob: str | None = None,
@@ -1656,7 +1648,6 @@ async def _grep_tool_async(
     return await _run_sync_tool_after_async_sandbox_init(
         grep_tool.func,
         runtime,
-        description,
         pattern,
         path,
         glob,
@@ -1672,7 +1663,6 @@ grep_tool.coroutine = _grep_tool_async
 @tool("read_file", parse_docstring=True)
 def read_file_tool(
     runtime: Runtime,
-    description: str,
     path: str,
     start_line: int | None = None,
     end_line: int | None = None,
@@ -1680,7 +1670,6 @@ def read_file_tool(
     """Read the contents of a text file. Use this to examine source code, configuration files, logs, or any text-based file.
 
     Args:
-        description: Explain why you are reading this file in short words. ALWAYS PROVIDE THIS PARAMETER FIRST.
         path: The **absolute** path to the file to read.
         start_line: Optional starting line number (1-indexed, inclusive). Use with end_line to read a specific range.
         end_line: Optional ending line number (1-indexed, inclusive). Use with start_line to read a specific range.
@@ -1732,12 +1721,11 @@ def read_file_tool(
 
 async def _read_file_tool_async(
     runtime: Runtime,
-    description: str,
     path: str,
     start_line: int | None = None,
     end_line: int | None = None,
 ) -> str:
-    return await _run_sync_tool_after_async_sandbox_init(read_file_tool.func, runtime, description, path, start_line, end_line)
+    return await _run_sync_tool_after_async_sandbox_init(read_file_tool.func, runtime, path, start_line, end_line)
 
 
 read_file_tool.coroutine = _read_file_tool_async
@@ -1763,7 +1751,6 @@ def _effective_write_file_max_bytes() -> int:
 @tool("write_file", parse_docstring=True)
 def write_file_tool(
     runtime: Runtime,
-    description: str,
     path: str,
     content: str,
     append: bool = False,
@@ -1791,9 +1778,8 @@ def write_file_tool(
     (0 disables the guard entirely). Raising it risks streaming timeouts.
 
     Args:
-        description: Explain why you are writing to this file in short words. ALWAYS PROVIDE THIS PARAMETER FIRST.
-        path: The **absolute** path to the file to write to. ALWAYS PROVIDE THIS PARAMETER SECOND.
-        content: The content to write to the file. ALWAYS PROVIDE THIS PARAMETER THIRD.
+        path: The **absolute** path to the file to write to.
+        content: The content to write to the file.
         append: Whether to append content to the end of the file instead of overwriting it. Defaults to False.
     """
     if not append:
@@ -1842,12 +1828,11 @@ def write_file_tool(
 
 async def _write_file_tool_async(
     runtime: Runtime,
-    description: str,
     path: str,
     content: str,
     append: bool = False,
 ) -> str:
-    return await _run_sync_tool_after_async_sandbox_init(write_file_tool.func, runtime, description, path, content, append)
+    return await _run_sync_tool_after_async_sandbox_init(write_file_tool.func, runtime, path, content, append)
 
 
 write_file_tool.coroutine = _write_file_tool_async
@@ -1856,7 +1841,6 @@ write_file_tool.coroutine = _write_file_tool_async
 @tool("str_replace", parse_docstring=True)
 def str_replace_tool(
     runtime: Runtime,
-    description: str,
     path: str,
     old_str: str,
     new_str: str,
@@ -1866,10 +1850,9 @@ def str_replace_tool(
     If `replace_all` is False (default), the substring to replace must appear **exactly once** in the file.
 
     Args:
-        description: Explain why you are replacing the substring in short words. ALWAYS PROVIDE THIS PARAMETER FIRST.
-        path: The **absolute** path to the file to replace the substring in. ALWAYS PROVIDE THIS PARAMETER SECOND.
-        old_str: The substring to replace. ALWAYS PROVIDE THIS PARAMETER THIRD.
-        new_str: The new substring. ALWAYS PROVIDE THIS PARAMETER FOURTH.
+        path: The **absolute** path to the file to replace the substring in.
+        old_str: The substring to replace.
+        new_str: The new substring.
         replace_all: Whether to replace all occurrences of the substring. If False, only the first occurrence will be replaced. Default is False.
     """
     try:
@@ -1906,7 +1889,6 @@ def str_replace_tool(
 
 async def _str_replace_tool_async(
     runtime: Runtime,
-    description: str,
     path: str,
     old_str: str,
     new_str: str,
@@ -1915,7 +1897,6 @@ async def _str_replace_tool_async(
     return await _run_sync_tool_after_async_sandbox_init(
         str_replace_tool.func,
         runtime,
-        description,
         path,
         old_str,
         new_str,

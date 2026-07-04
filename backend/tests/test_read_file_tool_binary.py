@@ -39,7 +39,6 @@ def test_read_file_tool_binary_file_returns_actionable_hint(tmp_path, monkeypatc
 
     result = read_file_tool.func(
         runtime=runtime,
-        description="read uploaded excel",
         path="/mnt/user-data/uploads/data.xlsx",
     )
 
@@ -57,7 +56,6 @@ def test_read_file_tool_text_file_unaffected(tmp_path, monkeypatch) -> None:
 
     result = read_file_tool.func(
         runtime=runtime,
-        description="read notes",
         path="/mnt/user-data/uploads/notes.txt",
     )
 

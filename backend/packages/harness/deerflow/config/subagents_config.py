@@ -37,8 +37,9 @@ class CustomSubagentConfig(BaseModel):
     description: str = Field(
         description="When the lead agent should delegate to this subagent",
     )
-    system_prompt: str = Field(
-        description="System prompt that guides the subagent's behavior",
+    system_prompt: str | None = Field(
+        default=None,
+        description="System prompt that guides the subagent's behavior. Required for create_agent subagents; workflow subagents (see ``workflow``) omit it.",
     )
     tools: list[str] | None = Field(
         default=None,
@@ -65,6 +66,13 @@ class CustomSubagentConfig(BaseModel):
         default=900,
         ge=1,
         description="Maximum execution time in seconds",
+    )
+    workflow: str | None = Field(
+        default=None,
+        description='"module.path:object" reference to a LangGraph workflow factory '
+        "(e.g. 'deerflow.workflows.research_review:build_graph'). When set, the "
+        "subagent runs that workflow instead of a create_agent graph. The factory "
+        "signature is build_graph(*, model, tools, config) -> StateGraph.",
     )
 
 

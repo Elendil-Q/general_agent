@@ -467,7 +467,14 @@ class SubagentExecutor:
         ``deferred_setup`` (assembled in ``_build_initial_state``) carries the
         deferred MCP tool names + catalog hash so the subagent gets the same
         DeferredToolFilterMiddleware the lead agent has. ``None`` is a no-op.
+
+        When ``config.workflow`` is set, dispatches to ``_create_workflow_agent``
+        instead — the subagent runs a user-defined LangGraph ``StateGraph`` (a
+        strict flow) rather than a ``create_agent`` model↔tools loop.
         """
+        if self.config.workflow:
+            return self._create_workflow_agent(tools if tools is not None else self.tools)
+
         app_config = self.app_config or get_app_config()
         if self.model_name is None:
             self.model_name = resolve_subagent_model_name(self.config, self.parent_model, app_config=app_config)
@@ -499,6 +506,62 @@ class SubagentExecutor:
             system_prompt=None,
             state_schema=ThreadState,
             checkpointer=self._checkpointer,
+        )
+
+    def _create_workflow_agent(self, tools: list[BaseTool]):
+        """Build a subagent graph from a LangGraph workflow factory reference.
+
+        Used when ``config.workflow`` is set (a ``"module.path:object"`` ref).
+        The referenced object is a factory callable with signature
+        ``build_graph(*, model, tools, config) -> StateGraph`` — resolved with
+        the same ``resolve_variable`` loader used for ``config.tools[].use``.
+
+        The factory must return an **uncompiled** ``StateGraph`` (over a
+        ``ThreadState``-compatible schema) so the executor can attach its own
+        ``InMemorySaver`` checkpointer here. That checkpointer is what makes
+        ``interrupt()``/``Command(resume=...)`` work and is cached on the
+        executor so a resume reuses the exact same graph + checkpoint.
+
+        The rest of ``_aexecute``/``_aresume`` (astream polling, interrupt
+        detection, status/timeout/cancel) is workflow-agnostic and runs
+        unchanged — a workflow subagent just needs to be a
+        ``CompiledStateGraph`` that speaks the messages/sandbox/thread_data
+        state protocol.
+
+        Note: the shared ``build_subagent_runtime_middlewares`` chain does NOT
+        apply (langgraph ``StateGraph`` has no ``add_middleware``). The workflow
+        owns its nodes/edges; sandbox tools still work via ``ToolNode``'s
+        ``ToolRuntime`` injection from the ``context`` passed to ``astream``,
+        and ``interrupt()`` is available natively for HITL.
+        """
+        from langgraph.graph.state import CompiledStateGraph, StateGraph
+
+        from deerflow.reflection import resolve_variable
+
+        app_config = self.app_config or get_app_config()
+        if self.model_name is None:
+            self.model_name = resolve_subagent_model_name(self.config, self.parent_model, app_config=app_config)
+        model = create_chat_model(
+            name=self.model_name,
+            thinking_enabled=False,
+            app_config=app_config,
+            attach_tracing=False,
+        )
+
+        factory = resolve_variable(self.config.workflow)
+        if not callable(factory):
+            raise ValueError(f"workflow ref {self.config.workflow!r} resolved to {type(factory).__name__}, expected a callable factory build_graph(*, model, tools, config) -> StateGraph")
+
+        graph = factory(model=model, tools=tools, config=self.config)
+
+        if isinstance(graph, CompiledStateGraph):
+            raise ValueError(f"workflow factory {self.config.workflow!r} returned an already-compiled graph; return an uncompiled StateGraph so the executor can attach its own checkpointer (required for interrupt/resume isolation)")
+        if not isinstance(graph, StateGraph):
+            raise ValueError(f"workflow factory {self.config.workflow!r} returned {type(graph).__name__}, expected a StateGraph")
+
+        return graph.compile(
+            checkpointer=self._checkpointer,
+            name=f"subagent-workflow:{self.config.name}",
         )
 
     async def _load_skills(self) -> list[Skill]:
@@ -566,7 +629,7 @@ class SubagentExecutor:
 
         return messages
 
-    async def _build_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], "DeferredToolSetup"]:
+    async def _build_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], "DeferredToolSetup | None"]:
         """Build the initial state for agent execution.
 
         Args:
@@ -579,6 +642,11 @@ class SubagentExecutor:
             so the agent build and the injected ``<available-deferred-tools>``
             section share one catalog/hash.
         """
+        # Workflow subagents own their system prompt / skills / tool-routing
+        # inside the graph; seed only the task + parent sandbox/thread_data.
+        if self.config.workflow:
+            return await self._build_workflow_initial_state(task)
+
         # Lazy import: see the TYPE_CHECKING note at the top of this module -
         # importing tool_search runs tools/builtins/__init__, which would
         # re-enter this package during its own initialization.
@@ -632,6 +700,24 @@ class SubagentExecutor:
             state["thread_data"] = self.thread_data
 
         return state, final_tools, deferred_setup
+
+    async def _build_workflow_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], "DeferredToolSetup | None"]:
+        """Build a minimal initial state for a workflow subagent.
+
+        Workflow subagents own their system prompt, skills, and tool-routing
+        inside the graph, so the executor only seeds the conversation task plus
+        the parent's sandbox/thread_data passthrough. ``tools`` are returned
+        unmodified (already policy-filtered in ``__init__``) and
+        ``deferred_setup`` is ``None`` — no ``tool_search`` prompt section is
+        injected for workflows; the factory receives the tools directly and may
+        route them through a ``ToolNode`` if it wants tool-calling steps.
+        """
+        state: dict[str, Any] = {"messages": [HumanMessage(content=task)]}
+        if self.sandbox_state is not None:
+            state["sandbox"] = self.sandbox_state
+        if self.thread_data is not None:
+            state["thread_data"] = self.thread_data
+        return state, self.tools, None
 
     async def _aexecute(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
         """Execute a task asynchronously.

@@ -544,51 +544,24 @@ function ToolCall({
       </ChainOfThoughtStep>
     );
   } else if (name === "ls") {
-    let description: string | undefined = (args as { description: string })
-      ?.description;
-    if (!description) {
-      description = t.toolCalls.listFolder;
-    }
     const path: string | undefined = (args as { path: string })?.path;
     return (
       <ChainOfThoughtStep
         key={id}
-        label={resolveLabel(description)}
+        label={resolveLabel(`ls(${path ?? ""})`)}
         icon={FolderOpenIcon}
-      >
-        {path && (
-          <ChainOfThoughtSearchResult className="cursor-pointer">
-            {path}
-          </ChainOfThoughtSearchResult>
-        )}
-      </ChainOfThoughtStep>
+      />
     );
   } else if (name === "read_file") {
-    let description: string | undefined = (args as { description: string })
-      ?.description;
-    if (!description) {
-      description = t.toolCalls.readFile;
-    }
-    const { path } = args as { path: string; content: string };
+    const { path } = args as { path: string };
     return (
       <ChainOfThoughtStep
         key={id}
-        label={resolveLabel(description)}
+        label={resolveLabel(`read_file(${path ?? ""})`)}
         icon={BookOpenTextIcon}
-      >
-        {path && (
-          <ChainOfThoughtSearchResult className="cursor-pointer">
-            {path}
-          </ChainOfThoughtSearchResult>
-        )}
-      </ChainOfThoughtStep>
+      />
     );
   } else if (name === "write_file" || name === "str_replace") {
-    let description: string | undefined = (args as { description: string })
-      ?.description;
-    if (!description) {
-      description = t.toolCalls.writeFile;
-    }
     const path: string | undefined = (args as { path: string })?.path;
     if (isLoading && isLast && autoOpen && autoSelect && path && !result) {
       setTimeout(() => {
@@ -607,7 +580,7 @@ function ToolCall({
       <ChainOfThoughtStep
         key={id}
         className="cursor-pointer"
-        label={resolveLabel(description)}
+        label={resolveLabel(`${name}(${path ?? ""})`)}
         icon={NotebookPenIcon}
         onClick={() => {
           select(
@@ -617,13 +590,16 @@ function ToolCall({
           );
           setOpen(true);
         }}
-      >
-        {path && (
-          <ChainOfThoughtSearchResult className="cursor-pointer">
-            {path}
-          </ChainOfThoughtSearchResult>
-        )}
-      </ChainOfThoughtStep>
+      />
+    );
+  } else if (name === "glob" || name === "grep") {
+    const pattern: string | undefined = (args as { pattern: string })?.pattern;
+    return (
+      <ChainOfThoughtStep
+        key={id}
+        label={resolveLabel(`${name}(${pattern ?? ""})`)}
+        icon={SearchIcon}
+      />
     );
   } else if (name === "bash") {
     const description: string | undefined = (args as { description: string })

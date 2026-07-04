@@ -27,6 +27,15 @@ class SubagentConfig:
             effective limit is the global ``subagents.timeout_seconds`` (default
             1800 = 30 min), layered on by the registry; this 900 only applies
             when no differing global value exists.
+        workflow: Optional ``"module.path:object"`` reference to a LangGraph
+            workflow factory. When set, the subagent is built from that workflow
+            instead of via ``create_agent`` — for scenarios that need a strict,
+            deterministic node/edge flow. The factory is resolved with the same
+            ``resolve_variable`` loader used for ``config.tools[].use`` and must
+            satisfy the workflow-subagent contract (see backend/AGENTS.md): a
+            callable ``build_graph(*, model, tools, config) -> StateGraph`` over
+            a ``ThreadState``-compatible schema. ``system_prompt``/``skills``/
+            ``tools`` filtering do not apply to workflow subagents.
     """
 
     name: str
@@ -38,6 +47,7 @@ class SubagentConfig:
     model: str = "inherit"
     max_turns: int = 50
     timeout_seconds: int = 900
+    workflow: str | None = None
 
 
 def _default_model_name(app_config: "AppConfig") -> str:

@@ -49,12 +49,12 @@ def _make_runtime(context: dict) -> ToolRuntime:
 
 _TOOL_CASES = [
     (bash_tool, {"description": "list", "command": "ls"}),
-    (ls_tool, {"description": "list", "path": "/tmp"}),
-    (glob_tool, {"description": "find", "pattern": "*.py", "path": "/tmp"}),
-    (grep_tool, {"description": "search", "pattern": "x", "path": "/tmp"}),
-    (read_file_tool, {"description": "read", "path": "/tmp/x"}),
-    (write_file_tool, {"description": "write", "path": "/tmp/x", "content": "hi"}),
-    (str_replace_tool, {"description": "replace", "path": "/tmp/x", "old_str": "a", "new_str": "b"}),
+    (ls_tool, {"path": "/tmp"}),
+    (glob_tool, {"pattern": "*.py", "path": "/tmp"}),
+    (grep_tool, {"pattern": "x", "path": "/tmp"}),
+    (read_file_tool, {"path": "/tmp/x"}),
+    (write_file_tool, {"path": "/tmp/x", "content": "hi"}),
+    (str_replace_tool, {"path": "/tmp/x", "old_str": "a", "new_str": "b"}),
     (present_file_tool, {"filepaths": ["/tmp/x"], "tool_call_id": "call-1"}),
     (view_image_tool, {"image_path": "/tmp/img.png", "tool_call_id": "call-1"}),
     (task_tool, {"description": "do", "prompt": "go", "subagent_type": "general-purpose", "tool_call_id": "call-1"}),

@@ -1046,7 +1046,6 @@ def test_str_replace_parallel_updates_should_preserve_both_edits(monkeypatch) ->
         try:
             result = str_replace_tool.func(
                 runtime=runtime,
-                description="并发替换同一文件",
                 path="/mnt/user-data/workspace/shared.txt",
                 old_str=old_str,
                 new_str=new_str,
@@ -1125,7 +1124,6 @@ def test_str_replace_parallel_updates_in_isolated_sandboxes_should_not_share_pat
         try:
             result = str_replace_tool.func(
                 runtime=runtime,
-                description="隔离 sandbox 并发替换同一路径",
                 path="/mnt/user-data/workspace/shared.txt",
                 old_str=old_str,
                 new_str=new_str,
@@ -1189,7 +1187,6 @@ def test_str_replace_and_append_on_same_path_should_preserve_both_updates(monkey
         try:
             result = str_replace_tool.func(
                 runtime=runtimes[0],
-                description="替换旧内容",
                 path="/mnt/user-data/workspace/shared.txt",
                 old_str="alpha",
                 new_str="ALPHA",
@@ -1203,7 +1200,6 @@ def test_str_replace_and_append_on_same_path_should_preserve_both_updates(monkey
             sandbox.str_replace_has_snapshot.wait(0.05)
             result = write_file_tool.func(
                 runtime=runtimes[1],
-                description="追加新内容",
                 path="/mnt/user-data/workspace/shared.txt",
                 content="tail\n",
                 append=True,
@@ -1247,7 +1243,6 @@ def test_write_file_tool_bounds_large_oserror_and_masks_local_paths(monkeypatch)
 
     result = write_file_tool.func(
         runtime=runtime,
-        description="写入大文件失败",
         path="/mnt/user-data/workspace/output.txt",
         content="report body",
     )
@@ -1276,7 +1271,6 @@ def test_write_file_tool_preserves_short_oserror_without_truncation(monkeypatch)
 
     result = write_file_tool.func(
         runtime=runtime,
-        description="写入失败",
         path="/mnt/user-data/workspace/output.txt",
         content="tiny payload",
     )
@@ -1301,7 +1295,6 @@ def test_write_file_tool_bounds_large_sandbox_error(monkeypatch) -> None:
 
     result = write_file_tool.func(
         runtime=runtime,
-        description="远端写入失败",
         path="/mnt/user-data/workspace/output.txt",
         content="tiny payload",
     )
@@ -1353,7 +1346,6 @@ def test_write_file_tool_formats_all_other_failure_branches(
 
     result = write_file_tool.func(
         runtime=runtime,
-        description="验证错误分支格式化",
         path="/mnt/user-data/workspace/output.txt",
         content="tiny payload",
     )
@@ -1378,7 +1370,6 @@ def test_write_file_tool_handles_sandbox_init_failure(monkeypatch) -> None:
 
     result = write_file_tool.func(
         runtime=runtime,
-        description="sandbox 初始化失败",
         path="/mnt/user-data/workspace/output.txt",
         content="tiny payload",
     )

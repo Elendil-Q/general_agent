@@ -42,7 +42,6 @@ def _call_write_file(*, content: str, append: bool = False) -> str:
 
         return fn(
             runtime=runtime,
-            description="test write",
             path="/tmp/test.txt",
             content=content,
             append=append,

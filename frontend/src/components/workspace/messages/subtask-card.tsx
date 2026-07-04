@@ -51,6 +51,9 @@ export function SubtaskCard({
       return <Loader2Icon className="size-3 animate-spin" />;
     }
   }, [task.status]);
+  // Prefix the description with the delegated subagent type (bolded) so the user
+  // can perceive which kind of subagent is running at a glance.
+  const typeTag = <span className="font-bold">[{task.subagent_type}]</span>;
   return (
     <ChainOfThought
       className={cn("relative w-full gap-2 rounded-lg border py-0", className)}
@@ -82,11 +85,16 @@ export function SubtaskCard({
                 className="font-normal"
                 label={
                   task.status === "in_progress" ? (
-                    <Shimmer duration={3} spread={3}>
-                      {task.description}
-                    </Shimmer>
+                    <>
+                      {typeTag}{" "}
+                      <Shimmer as="span" duration={3} spread={3}>
+                        {task.description}
+                      </Shimmer>
+                    </>
                   ) : (
-                    task.description
+                    <>
+                      {typeTag} {task.description}
+                    </>
                   )
                 }
                 icon={<ClipboardListIcon />}

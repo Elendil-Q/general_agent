@@ -40,7 +40,6 @@ def test_glob_tool_returns_virtual_paths_and_ignores_common_dirs(tmp_path, monke
 
     result = glob_tool.func(
         runtime=runtime,
-        description="find python files",
         pattern="**/*.py",
         path="/mnt/user-data/workspace",
     )
@@ -65,7 +64,6 @@ def test_glob_tool_supports_skills_virtual_paths(tmp_path, monkeypatch) -> None:
     ):
         result = glob_tool.func(
             runtime=runtime,
-            description="find skills",
             pattern="**/SKILL.md",
             path="/mnt/skills",
         )
@@ -85,7 +83,6 @@ def test_grep_tool_filters_by_glob_and_skips_binary_files(tmp_path, monkeypatch)
 
     result = grep_tool.func(
         runtime=runtime,
-        description="find todo references",
         pattern="TODO",
         path="/mnt/user-data/workspace",
         glob="**/*.py",
@@ -108,7 +105,6 @@ def test_grep_tool_truncates_results(tmp_path, monkeypatch) -> None:
 
     result = grep_tool.func(
         runtime=runtime,
-        description="limit matches",
         pattern="TODO",
         path="/mnt/user-data/workspace",
         max_results=2,
@@ -133,7 +129,6 @@ def test_glob_tool_include_dirs_filters_nested_ignored_paths(tmp_path, monkeypat
 
     result = glob_tool.func(
         runtime=runtime,
-        description="find dirs",
         pattern="**",
         path="/mnt/user-data/workspace",
         include_dirs=True,
@@ -153,7 +148,6 @@ def test_grep_tool_literal_mode(tmp_path, monkeypatch) -> None:
     # literal=True should treat (a+b) as a plain string, not a regex group
     result = grep_tool.func(
         runtime=runtime,
-        description="literal search",
         pattern="(a+b)",
         path="/mnt/user-data/workspace",
         literal=True,
@@ -172,7 +166,6 @@ def test_grep_tool_case_sensitive(tmp_path, monkeypatch) -> None:
 
     result = grep_tool.func(
         runtime=runtime,
-        description="case sensitive search",
         pattern="TODO",
         path="/mnt/user-data/workspace",
         case_sensitive=True,
@@ -189,7 +182,6 @@ def test_grep_tool_invalid_regex_returns_error(tmp_path, monkeypatch) -> None:
 
     result = grep_tool.func(
         runtime=runtime,
-        description="bad pattern",
         pattern="[invalid",
         path="/mnt/user-data/workspace",
     )
@@ -331,7 +323,6 @@ def test_glob_tool_honors_smaller_requested_max_results(tmp_path, monkeypatch) -
 
     result = glob_tool.func(
         runtime=runtime,
-        description="limit glob matches",
         pattern="**/*.py",
         path="/mnt/user-data/workspace",
         max_results=2,
@@ -409,7 +400,6 @@ def test_ls_tool_masks_user_data_host_paths(tmp_path, monkeypatch) -> None:
 
     result = ls_tool.func(
         runtime=runtime,
-        description="list workspace",
         path="/mnt/user-data/workspace",
     )
 
@@ -435,7 +425,6 @@ def test_ls_tool_masks_skills_host_paths(tmp_path, monkeypatch) -> None:
     ):
         result = ls_tool.func(
             runtime=runtime,
-            description="list skills",
             path="/mnt/skills",
         )
 
@@ -454,7 +443,6 @@ def test_ls_tool_returns_empty_for_empty_directory(tmp_path, monkeypatch) -> Non
 
     result = ls_tool.func(
         runtime=runtime,
-        description="list empty dir",
         path="/mnt/user-data/workspace",
     )
 
