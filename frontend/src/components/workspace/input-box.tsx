@@ -60,6 +60,8 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { fetch } from "@/core/api/fetcher";
+import type { Chain } from "@/core/chains";
+import { useChains } from "@/core/chains/hooks";
 import { getBackendBaseURL } from "@/core/config";
 import { useEffectiveEffortsConfig, EFFORT_ORDER } from "@/core/effort/hooks";
 import type { EffortFlags } from "@/core/effort/types";
@@ -208,6 +210,17 @@ function buildSlashCommands(skills: Skill[]): SlashCommand[] {
   return commands;
 }
 
+function buildChainSlashCommands(chains: Chain[]): SlashCommand[] {
+  // Chains become `/chain:<name>` slash commands. They are the first non-skill
+  // command type in the web autocomplete — the generic SlashCommand interface
+  // already supported this, it just had no non-skill source until now.
+  return chains.map((chain) => ({
+    name: `chain:${chain.name}`,
+    description: chain.description,
+    category: "chain",
+  }));
+}
+
 function getMatchingSlashCommands(
   commands: SlashCommand[],
   query: string,
@@ -311,6 +324,7 @@ export function InputBox({
   const { thread, isMock } = useThread();
   const { textInput } = usePromptInputController();
   const { skills } = useSkills();
+  const { chains } = useChains();
   const promptRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHistoryIndexRef = useRef<number | null>(null);
@@ -592,7 +606,10 @@ export function InputBox({
     () => getSlashCommandQuery(textInput.value ?? ""),
     [textInput.value],
   );
-  const slashCommands = useMemo(() => buildSlashCommands(skills), [skills]);
+  const slashCommands = useMemo(
+    () => [...buildSlashCommands(skills), ...buildChainSlashCommands(chains)],
+    [skills, chains],
+  );
   const slashCommandSuggestions = useMemo(
     () =>
       slashCommandQuery === null

@@ -1,0 +1,60 @@
+# Example chain pipeline.
+#
+# Trigger with: /chain:example-pipeline <your request>
+#
+# This chain runs a research → analysis → report flow. Nodes reference
+# subagents by name (from the `subagents` config section or built-ins like
+# `general-purpose`). The `depends_on` field describes the flow:
+#   - [] (or omitted): root node, runs from START (parallel with other roots)
+#   - [a, b]: runs after a and b both complete (barrier/join)
+#
+# The execution order is hard-coded by the graph edges — the model does not
+# decide the sequence. Parallel branches run concurrently via LangGraph's
+# Pregel engine.
+
+description: "Research → analyze → report pipeline (example)"
+
+nodes:
+  # Two parallel root nodes: both run from START, concurrently.
+  web-researcher:
+    subagent: general-purpose
+    depends_on: []
+    prompt: |
+      Research the following topic using web search. Gather the most important
+      facts and sources. Return a concise summary of findings.
+
+      Topic: {input}
+
+  data-lookup:
+    subagent: general-purpose
+    depends_on: []
+    prompt: |
+      Look up key data points relevant to this topic using the read_file tool
+      on any local files. Return what you find.
+
+      Topic: {input}
+
+  # Runs after both roots complete. Upstream outputs available as
+  # {node_outputs.web-researcher} and {node_outputs.data-lookup}.
+  synthesizer:
+    subagent: general-purpose
+    depends_on: [web-researcher, data-lookup]
+    prompt: |
+      Synthesize the following two streams of research into a single coherent
+      analysis. Resolve conflicts and highlight the most important insights.
+
+      Web research:
+      {node_outputs.web-researcher}
+
+      Data lookup:
+      {node_outputs.data-lookup}
+
+  # Terminal node (nothing depends on it): edges to END.
+  reporter:
+    subagent: general-purpose
+    depends_on: [synthesizer]
+    prompt: |
+      Based on the synthesis below, write a clear final report for the user.
+
+      Synthesis:
+      {node_outputs.synthesizer}

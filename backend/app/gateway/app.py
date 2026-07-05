@@ -16,6 +16,7 @@ from app.gateway.routers import (
     artifacts,
     assistants_compat,
     auth,
+    chains,
     channel_connections,
     channels,
     efforts,
@@ -378,6 +379,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Skills API is mounted at /api/skills
     app.include_router(skills.router)
+
+    # Chains API is mounted at /api/chains
+    app.include_router(chains.router)
 
     # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)

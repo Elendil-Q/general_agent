@@ -252,7 +252,7 @@ class TestAgentConstruction:
     ):
         """Explicit app_config must flow into both model and middleware factories."""
         import deerflow.config as config_module
-        from deerflow.subagents import executor as executor_module
+        from deerflow.subagents import builder as builder_module
 
         SubagentExecutor = classes["SubagentExecutor"]
 
@@ -278,12 +278,15 @@ class TestAgentConstruction:
             return agent
 
         monkeypatch.setattr(config_module, "get_app_config", fake_get_app_config)
+        # After the build_subagent_agent extraction, create_chat_model /
+        # create_agent live in the builder module's namespace; the executor
+        # delegates to build_subagent_agent, which calls them there.
         monkeypatch.setattr(
-            executor_module,
+            builder_module,
             "create_chat_model",
             fake_create_chat_model,
         )
-        monkeypatch.setattr(executor_module, "create_agent", fake_create_agent)
+        monkeypatch.setattr(builder_module, "create_agent", fake_create_agent)
         monkeypatch.setitem(
             sys.modules,
             "deerflow.agents.middlewares.tool_error_handling_middleware",
@@ -637,7 +640,7 @@ class TestAgentConstruction:
     ):
         """A deferred setup passed to _create_agent flows into the subagent
         middleware factory (so DeferredToolFilterMiddleware can attach)."""
-        from deerflow.subagents import executor as executor_module
+        from deerflow.subagents import builder as builder_module
         from deerflow.tools.builtins.tool_search import DeferredToolSetup
 
         SubagentExecutor = classes["SubagentExecutor"]
@@ -648,8 +651,10 @@ class TestAgentConstruction:
             captured["middlewares"] = kwargs
             return [object()]
 
-        monkeypatch.setattr(executor_module, "create_chat_model", lambda **kwargs: object())
-        monkeypatch.setattr(executor_module, "create_agent", lambda **kwargs: object())
+        # build_subagent_agent (in the builder module) now owns the
+        # create_chat_model / create_agent calls, so patch them there.
+        monkeypatch.setattr(builder_module, "create_chat_model", lambda **kwargs: object())
+        monkeypatch.setattr(builder_module, "create_agent", lambda **kwargs: object())
         monkeypatch.setitem(
             sys.modules,
             "deerflow.agents.middlewares.tool_error_handling_middleware",

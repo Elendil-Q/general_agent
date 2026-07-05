@@ -116,6 +116,94 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
     return raw_input
 
 
+# ---------------------------------------------------------------------------
+# /chain:<name> slash-command dispatch
+# ---------------------------------------------------------------------------
+
+# Matches `/chain:<hyphen-case-name>` at the start of the user's message,
+# followed by whitespace or end-of-string. The command is stripped before the
+# chain graph sees the input.
+_CHAIN_COMMAND_RE = re.compile(r"^/chain:([a-z0-9]+(?:-[a-z0-9]+)*)(?:[ \t]+|$)")
+
+
+def _extract_last_message_text(messages: list) -> str | None:
+    """Best-effort text extraction from the last message of a LangGraph Platform input list."""
+    if not messages:
+        return None
+    last = messages[-1]
+    if isinstance(last, dict):
+        content = last.get("content")
+    else:
+        content = getattr(last, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def _with_stripped_content(message: Any, remaining_text: str) -> Any:
+    """Return a copy of ``message`` with its text content replaced by ``remaining_text``.
+
+    Returns ``None`` when the message shape is not recognized (caller then leaves
+    the input untouched — the chain is still detected, just sees the raw prefix).
+    """
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return {**message, "content": remaining_text}
+        if isinstance(content, list):
+            new_blocks: list = []
+            stripped = False
+            for block in content:
+                if not stripped and isinstance(block, dict) and isinstance(block.get("text"), str):
+                    new_blocks.append({**block, "text": remaining_text})
+                    stripped = True
+                elif not stripped and isinstance(block, str):
+                    new_blocks.append(remaining_text)
+                    stripped = True
+                else:
+                    new_blocks.append(block)
+            return {**message, "content": new_blocks}
+    return None
+
+
+def _maybe_parse_chain_command(body_input: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """Detect a ``/chain:<name>`` prefix in the last user message.
+
+    Returns ``(chain_name, stripped_input)``. When no chain command is present
+    (or ``body_input`` is None — e.g. a resume), returns ``(None, None)``.
+    ``stripped_input`` is a copy of ``body_input`` with the ``/chain:<name>``
+    prefix removed from the last message, so the chain graph receives only the
+    user's actual request.
+    """
+    if not isinstance(body_input, dict):
+        return None, None
+    messages = body_input.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None, None
+    text = _extract_last_message_text(messages)
+    if not text:
+        return None, None
+    match = _CHAIN_COMMAND_RE.match(text)
+    if not match:
+        return None, None
+    chain_name = match.group(1)
+    remaining = text[match.end() :]
+    new_last = _with_stripped_content(messages[-1], remaining)
+    if new_last is None:
+        return chain_name, None
+    new_messages = list(messages[:-1]) + [new_last]
+    stripped_input = {**body_input, "messages": new_messages}
+    return chain_name, stripped_input
+
+
 _DEFAULT_ASSISTANT_ID = "lead_agent"
 
 
@@ -191,7 +279,7 @@ def inject_authenticated_user_context(config: dict[str, Any], request: Request) 
         runtime_context["oauth_id"] = getattr(user, "oauth_id", None)
 
 
-def resolve_agent_factory(assistant_id: str | None):
+def resolve_agent_factory(assistant_id: str | None, *, chain_name: str | None = None):
     """Resolve the agent factory callable from config.
 
     Custom agents are implemented as ``lead_agent`` + an ``agent_name``
@@ -199,7 +287,15 @@ def resolve_agent_factory(assistant_id: str | None):
     :func:`build_run_config`.  All ``assistant_id`` values therefore map to the
     same factory; the routing happens inside ``make_lead_agent`` when it reads
     ``cfg["agent_name"]``.
+
+    When ``chain_name`` is set (a ``/chain:<name>`` slash command, persisted
+    to thread metadata so it survives resume), the chain-pipeline factory is
+    returned instead — the chain runs as the top-level graph for that turn.
     """
+    if chain_name:
+        from deerflow.agents.chain_agent.agent import make_chain_agent
+
+        return make_chain_agent
     from deerflow.agents.lead_agent.agent import make_lead_agent
 
     return make_lead_agent
@@ -211,6 +307,7 @@ def build_run_config(
     metadata: dict[str, Any] | None,
     *,
     assistant_id: str | None = None,
+    chain_name: str | None = None,
 ) -> dict[str, Any]:
     """Build a RunnableConfig dict for the agent.
 
@@ -285,6 +382,15 @@ def build_run_config(
         if isinstance(runtime_context, dict):
             runtime_context["agent_name"] = effective_agent_name
         config.setdefault("run_name", resolve_root_run_name(config, normalized))
+    if chain_name:
+        # Inject chain_name into both containers so make_chain_agent reads it
+        # back via _get_runtime_config (mirrors agent_name injection above).
+        configurable = config.setdefault("configurable", {})
+        runtime_context = config.setdefault("context", {})
+        if isinstance(configurable, dict):
+            configurable["chain_name"] = chain_name
+        if isinstance(runtime_context, dict):
+            runtime_context["chain_name"] = chain_name
     if metadata:
         config.setdefault("metadata", {}).update(metadata)
     return config
@@ -458,13 +564,37 @@ async def start_run(
         except Exception:
             logger.warning("Failed to upsert thread_meta for %s (non-fatal)", sanitize_log_param(thread_id))
 
-        agent_factory = resolve_agent_factory(body.assistant_id)
+        # --- Chain pipeline dispatch (/chain:<name> slash command) ---
+        # On the initial run, detect the /chain:<name> prefix in the user
+        # message and persist chain_name to thread metadata. On resume (no
+        # message), recover chain_name from the metadata so the chain graph —
+        # not the lead agent — resumes its own checkpoint.
         command = getattr(body, "command", None)
-        if command and command.get("resume") is not None:
+        is_resume = bool(command and command.get("resume") is not None)
+        chain_name, stripped_input = _maybe_parse_chain_command(body.input)
+        if chain_name is None and is_resume:
+            try:
+                thread_meta = await run_ctx.thread_store.get(thread_id)
+                if thread_meta is not None:
+                    chain_name = (thread_meta.get("metadata") or {}).get("chain_name")
+            except Exception:
+                logger.warning("Failed to read thread metadata for chain resume %s (non-fatal)", sanitize_log_param(thread_id))
+        if chain_name:
+            try:
+                await run_ctx.thread_store.update_metadata(thread_id, {"chain_name": chain_name})
+            except Exception:
+                logger.warning("Failed to persist chain_name for thread %s (non-fatal)", sanitize_log_param(thread_id))
+            agent_factory = resolve_agent_factory(body.assistant_id, chain_name=chain_name)
+            if stripped_input is not None:
+                body = body.model_copy(update={"input": stripped_input})
+        else:
+            agent_factory = resolve_agent_factory(body.assistant_id)
+
+        if is_resume:
             graph_input = Command(resume=command["resume"])
         else:
             graph_input = normalize_input(body.input)
-        config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id)
+        config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id, chain_name=chain_name)
         await apply_checkpoint_to_run_config(config, body=body, thread_id=thread_id, request=request)
 
         # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.

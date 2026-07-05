@@ -1141,6 +1141,20 @@ skills:
 # - []: disable all skills for this agent
 # - ["skill-name"]: load only specific skills
 
+# ----------------------------------------------------------------------------
+# Chain Pipeline Configuration
+# ----------------------------------------------------------------------------
+# Chains are YAML-driven DAGs of subagent invocations, triggered by the
+# `/chain:<name>` slash command. Each chain is a flat `.yaml` file under
+# `chains/public/` or `chains/custom/`. See `chains/public/example-pipeline.yaml`
+# for the spec format. Nodes reference subagents from the `subagents` section.
+chains:
+  # Path to chains directory on the host (relative to project root or absolute)
+  # Default: chains under the project root
+  # Override with DEER_FLOW_CHAINS_PATH when this field is omitted.
+  # Uncomment to customize:
+  # path: /absolute/path/to/custom/chains
+
 # ============================================================================
 # Title Generation Configuration
 # ============================================================================

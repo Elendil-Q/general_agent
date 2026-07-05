@@ -15,14 +15,13 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from langchain.agents import create_agent
 from langchain.tools import BaseTool
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from deerflow.agents.thread_state import SandboxState, ThreadDataState, ThreadState
+from deerflow.agents.thread_state import SandboxState, ThreadDataState
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
 from deerflow.models import create_chat_model
@@ -478,33 +477,20 @@ class SubagentExecutor:
         app_config = self.app_config or get_app_config()
         if self.model_name is None:
             self.model_name = resolve_subagent_model_name(self.config, self.parent_model, app_config=app_config)
-        model = create_chat_model(
-            name=self.model_name,
-            thinking_enabled=False,
-            app_config=app_config,
-            attach_tracing=False,
-        )
 
-        from deerflow.agents.middlewares.tool_error_handling_middleware import (
-            build_subagent_runtime_middlewares,
-        )
+        from deerflow.subagents.builder import build_subagent_agent
 
-        # Reuse shared middleware composition with lead agent.
-        middlewares = build_subagent_runtime_middlewares(
+        # Reuse the shared subagent builder (also used by chain-pipeline nodes)
+        # so model resolution, the middleware chain, and the ThreadState schema
+        # stay in lock-step across both call sites.
+        # system_prompt is injected via initial-state messages (see _build_initial_state)
+        # to avoid multiple SystemMessages which some LLM APIs don't support.
+        return build_subagent_agent(
+            self.config,
+            tools if tools is not None else self.tools,
             app_config=app_config,
             model_name=self.model_name,
-            lazy_init=True,
             deferred_setup=deferred_setup,
-        )
-
-        # system_prompt is included in initial state messages (see _build_initial_state)
-        # to avoid multiple SystemMessages which some LLM APIs don't support.
-        return create_agent(
-            model=model,
-            tools=tools if tools is not None else self.tools,
-            middleware=middlewares,
-            system_prompt=None,
-            state_schema=ThreadState,
             checkpointer=self._checkpointer,
         )
 
