@@ -102,7 +102,11 @@ class TestSubagentCheckpointerIsolation:
         def fake_build_subagent_runtime_middlewares(**kwargs):
             return []
 
-        monkeypatch.setattr(executor_module, "create_agent", fake_create_agent)
+        from deerflow.subagents import builder as builder_module
+
+        # build_subagent_agent (in the builder module) now owns the
+        # create_agent / create_chat_model calls; patch them there.
+        monkeypatch.setattr(builder_module, "create_agent", fake_create_agent)
         mw_module = ModuleType("deerflow.agents.middlewares.tool_error_handling_middleware")
         mw_module.build_subagent_runtime_middlewares = fake_build_subagent_runtime_middlewares
         monkeypatch.setitem(
@@ -123,7 +127,7 @@ class TestSubagentCheckpointerIsolation:
         executor.model_name = "test-model"
         executor._base_tools = []
 
-        monkeypatch.setattr(executor_module, "create_chat_model", lambda **kwargs: MagicMock())
+        monkeypatch.setattr(builder_module, "create_chat_model", lambda **kwargs: MagicMock())
         monkeypatch.setattr(executor_module, "resolve_subagent_model_name", lambda config, parent, app_config=None: "test-model")
 
         result = executor._create_agent()
@@ -155,7 +159,11 @@ class TestSubagentCheckpointerIsolation:
             agent.checkpointer = kwargs.get("checkpointer")
             return agent
 
-        monkeypatch.setattr(executor_module, "create_agent", fake_create_agent)
+        from deerflow.subagents import builder as builder_module
+
+        # build_subagent_agent (in the builder module) now owns the
+        # create_agent / create_chat_model calls; patch them there.
+        monkeypatch.setattr(builder_module, "create_agent", fake_create_agent)
         mw_module = ModuleType("deerflow.agents.middlewares.tool_error_handling_middleware")
         mw_module.build_subagent_runtime_middlewares = lambda **kwargs: []
         monkeypatch.setitem(
@@ -175,7 +183,7 @@ class TestSubagentCheckpointerIsolation:
         )
         executor.model_name = "test-model"
         executor._base_tools = []
-        monkeypatch.setattr(executor_module, "create_chat_model", lambda **kwargs: MagicMock())
+        monkeypatch.setattr(builder_module, "create_chat_model", lambda **kwargs: MagicMock())
         monkeypatch.setattr(executor_module, "resolve_subagent_model_name", lambda config, parent, app_config=None: "test-model")
 
         # Even if a parent checkpointer were stashed on the executor, _create_agent

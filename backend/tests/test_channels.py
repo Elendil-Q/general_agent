@@ -33,7 +33,7 @@ def test_known_channel_command_detection_only_matches_control_commands():
     assert is_known_channel_command("/new")
     assert is_known_channel_command("/HELP now")
     assert not is_known_channel_command("/mnt/user-data/uploads/report.pdf")
-    assert not is_known_channel_command("/data-analysis analyze uploads/foo.csv")
+    assert not is_known_channel_command("/skill:data-analysis analyze uploads/foo.csv")
     assert not is_known_channel_command(" /new")
 
 
@@ -2012,7 +2012,7 @@ class TestChannelManager:
                 channel_name="test",
                 chat_id="chat1",
                 user_id="user1",
-                text="/data-analysis analyze uploads/foo.csv",
+                text="/skill:data-analysis analyze uploads/foo.csv",
                 msg_type=InboundMessageType.COMMAND,
             )
             await bus.publish_inbound(inbound)
@@ -2021,7 +2021,7 @@ class TestChannelManager:
 
             mock_client.runs.wait.assert_called_once()
             call_args = mock_client.runs.wait.call_args
-            assert call_args[1]["input"]["messages"][0]["content"] == "/data-analysis analyze uploads/foo.csv"
+            assert call_args[1]["input"]["messages"][0]["content"] == "/skill:data-analysis analyze uploads/foo.csv"
             assert outbound_received[0].text == "Hello from agent!"
 
         _run(go())
@@ -2059,7 +2059,7 @@ class TestChannelManager:
             bus.subscribe_outbound(capture_outbound)
             await manager.start()
 
-            original_text = "/data-analysis analyze report.pdf"
+            original_text = "/skill:data-analysis analyze report.pdf"
             inbound = InboundMessage(
                 channel_name="test",
                 chat_id="chat1",
@@ -2124,7 +2124,7 @@ class TestChannelManager:
             bus.subscribe_outbound(capture_outbound)
             await manager.start()
 
-            original_text = "/data-analysis analyze report.pdf"
+            original_text = "/skill:data-analysis analyze report.pdf"
             inbound = InboundMessage(
                 channel_name="feishu",
                 chat_id="chat1",
@@ -2169,7 +2169,7 @@ class TestChannelManager:
                 channel_name="test",
                 chat_id="chat1",
                 user_id="user1",
-                text="  /data-analysis analyze uploads/foo.csv",
+                text="  /skill:data-analysis analyze uploads/foo.csv",
                 msg_type=InboundMessageType.COMMAND,
             )
             await bus.publish_inbound(inbound)
@@ -2177,7 +2177,7 @@ class TestChannelManager:
             await manager.stop()
 
             mock_client.runs.wait.assert_not_called()
-            assert outbound_received[0].text.startswith("Unknown command: /data-analysis.")
+            assert outbound_received[0].text.startswith("Unknown command: /skill:data-analysis.")
 
         _run(go())
 
@@ -2211,7 +2211,7 @@ class TestChannelManager:
                 channel_name="test",
                 chat_id="chat1",
                 user_id="user1",
-                text="/data-analysis analyze uploads/foo.csv",
+                text="/skill:data-analysis analyze uploads/foo.csv",
                 msg_type=InboundMessageType.COMMAND,
             )
             await bus.publish_inbound(inbound)
@@ -2247,7 +2247,7 @@ class TestChannelManager:
                 channel_name="test",
                 chat_id="chat1",
                 user_id="user1",
-                text="/data-analysis analyze uploads/foo.csv",
+                text="/skill:data-analysis analyze uploads/foo.csv",
                 msg_type=InboundMessageType.COMMAND,
             )
             await bus.publish_inbound(inbound)
@@ -2283,7 +2283,7 @@ class TestChannelManager:
                 channel_name="test",
                 chat_id="chat1",
                 user_id="user1",
-                text="/data-analysis analyze uploads/foo.csv",
+                text="/skill:data-analysis analyze uploads/foo.csv",
                 msg_type=InboundMessageType.COMMAND,
             )
             await bus.publish_inbound(inbound)
@@ -2291,7 +2291,7 @@ class TestChannelManager:
             await manager.stop()
 
             mock_client.runs.wait.assert_not_called()
-            assert outbound_received[0].text.startswith("Unknown command: /data-analysis.")
+            assert outbound_received[0].text.startswith("Unknown command: /skill:data-analysis.")
 
         _run(go())
 
@@ -2325,7 +2325,7 @@ class TestChannelManager:
                 channel_name="test",
                 chat_id="chat1",
                 user_id="user1",
-                text="/data-analysis analyze uploads/foo.csv",
+                text="/skill:data-analysis analyze uploads/foo.csv",
                 msg_type=InboundMessageType.COMMAND,
                 topic_id="topic-1",
             )
@@ -5237,7 +5237,7 @@ class TestSlackAllowedUsers:
         event = {
             "type": "app_mention",
             "user": "U123456",
-            "text": "<@UBOT> /data-analysis analyze uploads/foo.csv",
+            "text": "<@UBOT> /skill:data-analysis analyze uploads/foo.csv",
             "channel": "C123",
             "ts": "1710000000.000100",
         }
@@ -5249,7 +5249,7 @@ class TestSlackAllowedUsers:
             channel._handle_message_event(event)
 
         inbound = bus.publish_inbound.call_args.args[0]
-        assert inbound.text == "/data-analysis analyze uploads/foo.csv"
+        assert inbound.text == "/skill:data-analysis analyze uploads/foo.csv"
         assert inbound.msg_type == InboundMessageType.CHAT
 
     def test_app_mention_preserves_following_user_mention(self):
@@ -5662,11 +5662,11 @@ class TestTelegramPrivateChatThread:
             ch = TelegramChannel(bus=bus, config={"bot_token": "test-token"})
             ch._main_loop = asyncio.get_event_loop()
 
-            update = _make_telegram_update("private", message_id=12, text="/data-analysis analyze uploads/foo.csv")
+            update = _make_telegram_update("private", message_id=12, text="/skill:data-analysis analyze uploads/foo.csv")
             await ch._on_text(update, None)
 
             msg = await asyncio.wait_for(bus.get_inbound(), timeout=2)
-            assert msg.text == "/data-analysis analyze uploads/foo.csv"
+            assert msg.text == "/skill:data-analysis analyze uploads/foo.csv"
             assert msg.msg_type == InboundMessageType.CHAT
             assert msg.topic_id is None
 
@@ -5683,13 +5683,13 @@ class TestTelegramPrivateChatThread:
             update = _make_telegram_update(
                 "group",
                 message_id=13,
-                text="/data-analysis@DeerFlowBot analyze uploads/foo.csv",
+                text="/skill:data-analysis@DeerFlowBot analyze uploads/foo.csv",
             )
             context = SimpleNamespace(bot=SimpleNamespace(username="DeerFlowBot"))
             await ch._on_text(update, context)
 
             msg = await asyncio.wait_for(bus.get_inbound(), timeout=2)
-            assert msg.text == "/data-analysis analyze uploads/foo.csv"
+            assert msg.text == "/skill:data-analysis analyze uploads/foo.csv"
             assert msg.msg_type == InboundMessageType.CHAT
             assert msg.topic_id == "13"
 

@@ -1,8 +1,12 @@
 """Configuration for the subagent system loaded from config.yaml."""
 
 import logging
+import os
+from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+from deerflow.config.runtime_paths import project_root, resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,10 @@ class CustomSubagentConfig(BaseModel):
         default_factory=lambda: ["task", "ask_clarification", "present_files"],
         description="Tool names to deny",
     )
+    exclusive_tools: list[str] | None = Field(
+        default=None,
+        description="Exclusive tool references resolved via resolve_variable (module.path:variable_name). These tools are loaded directly and are not subject to parent-agent tool inheritance.",
+    )
     skills: list[str] | None = Field(
         default=None,
         description="Skill names whitelist (None = inherit all enabled skills, [] = no skills)",
@@ -76,8 +84,20 @@ class CustomSubagentConfig(BaseModel):
     )
 
 
+def _legacy_subagents_candidates() -> tuple[Path, ...]:
+    """Return source-tree subagents locations for monorepo compatibility."""
+    backend_dir = Path(__file__).resolve().parents[4]
+    repo_root = backend_dir.parent
+    return (repo_root / "subagents",)
+
+
 class SubagentsAppConfig(BaseModel):
     """Configuration for the subagent system."""
+
+    path: str | None = Field(
+        default=None,
+        description=("Path to the subagents directory for YAML file discovery. If not specified, defaults to `subagents` under the project root, falling back to the legacy repo-root location for monorepo compatibility."),
+    )
 
     timeout_seconds: int = Field(
         default=1800,
@@ -148,6 +168,33 @@ class SubagentsAppConfig(BaseModel):
         if override is not None and override.skills is not None:
             return override.skills
         return None
+
+    def get_subagents_path(self) -> Path:
+        """Resolve the subagents directory path for YAML file discovery.
+
+        Resolution order:
+            1. Explicit ``path`` field
+            2. ``DEER_FLOW_SUBAGENTS_PATH`` environment variable
+            3. ``subagents`` under the project root (``project_root()``)
+            4. Legacy repo-root candidates for monorepo compatibility
+
+        When none of (3) or (4) exist on disk, the project-root default is
+        returned so callers can surface a stable "no subagents" location.
+        """
+        if self.path:
+            return resolve_path(self.path)
+        if env_path := os.getenv("DEER_FLOW_SUBAGENTS_PATH"):
+            return resolve_path(env_path)
+
+        project_default = project_root() / "subagents"
+        if project_default.is_dir():
+            return project_default
+
+        for candidate in _legacy_subagents_candidates():
+            if candidate.is_dir():
+                return candidate
+
+        return project_default
 
 
 _subagents_config: SubagentsAppConfig = SubagentsAppConfig()

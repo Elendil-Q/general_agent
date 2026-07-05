@@ -137,3 +137,22 @@ def _auto_user_context(request):
         yield
     finally:
         reset_current_user(token)
+
+
+@pytest.fixture(autouse=True)
+def _force_auth_enabled(monkeypatch):
+    """Force ``DEER_FLOW_AUTH_DISABLED=0`` so auth/CSRF tests exercise the
+    auth-ENABLED path regardless of the local gitignored ``.env``.
+
+    ``app/gateway/auth_disabled.py`` short-circuits ``authenticate()`` to a
+    synthetic ``'default'`` user whenever ``DEER_FLOW_AUTH_DISABLED=1`` — a
+    convenience for local dev. Without this fixture, any environment whose
+    ``.env`` opts into that mode (the shipped default) reports ~33 spurious
+    auth/CSRF failures on every ``make test``.
+
+    Tests that exercise the auth-DISABLED path override this directly with
+    ``monkeypatch.setenv("DEER_FLOW_AUTH_DISABLED", "1")``; monkeypatch undoes
+    in LIFO order, so the test's value wins during the test body.
+    """
+    monkeypatch.setenv("DEER_FLOW_AUTH_DISABLED", "0")
+    yield

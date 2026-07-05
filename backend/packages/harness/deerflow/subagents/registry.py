@@ -7,6 +7,7 @@ from typing import Any
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
 from deerflow.subagents.config import SubagentConfig
+from deerflow.subagents.storage import get_or_new_subagent_storage
 
 logger = logging.getLogger(__name__)
 
@@ -20,32 +21,42 @@ def _resolve_subagents_app_config(app_config: Any | None = None):
 
 
 def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -> SubagentConfig | None:
-    """Build a SubagentConfig from config.yaml custom_agents section.
+    """Build a SubagentConfig from config.yaml custom_agents or YAML file discovery.
+
+    Resolution order (config.yaml overrides YAML files, mirroring chains/skills
+    shadow semantics):
+        1. config.yaml ``subagents.custom_agents`` section
+        2. YAML files discovered under ``subagents/{public,custom}/``
 
     Args:
         name: The name of the custom subagent.
         app_config: Optional AppConfig or SubagentsAppConfig to resolve from.
 
     Returns:
-        SubagentConfig if found in custom_agents, None otherwise.
+        SubagentConfig if found, None otherwise.
     """
+    # 1. Check config.yaml custom_agents first (highest precedence)
     subagents_config = _resolve_subagents_app_config(app_config)
     custom = subagents_config.custom_agents.get(name)
-    if custom is None:
-        return None
+    if custom is not None:
+        return SubagentConfig(
+            name=name,
+            description=custom.description,
+            system_prompt=custom.system_prompt,
+            tools=custom.tools,
+            disallowed_tools=custom.disallowed_tools,
+            exclusive_tools=custom.exclusive_tools,
+            skills=custom.skills,
+            model=custom.model,
+            max_turns=custom.max_turns,
+            timeout_seconds=custom.timeout_seconds,
+            workflow=custom.workflow,
+        )
 
-    return SubagentConfig(
-        name=name,
-        description=custom.description,
-        system_prompt=custom.system_prompt,
-        tools=custom.tools,
-        disallowed_tools=custom.disallowed_tools,
-        skills=custom.skills,
-        model=custom.model,
-        max_turns=custom.max_turns,
-        timeout_seconds=custom.timeout_seconds,
-        workflow=custom.workflow,
-    )
+    # 2. Fall back to YAML file discovery
+    storage_kwargs = {"app_config": app_config} if app_config is not None else {}
+    storage = get_or_new_subagent_storage(**storage_kwargs)
+    return storage.load_subagent(name)
 
 
 def get_subagent_config(name: str, *, app_config: Any | None = None) -> SubagentConfig | None:
@@ -132,14 +143,21 @@ def list_subagents(*, app_config: Any | None = None) -> list[SubagentConfig]:
 
 
 def get_subagent_names(*, app_config: Any | None = None) -> list[str]:
-    """Get all available subagent names (built-in + custom).
+    """Get all available subagent names (built-in + YAML-discovered + config.yaml custom).
 
     Returns:
         List of subagent names.
     """
     names = list(BUILTIN_SUBAGENTS.keys())
 
-    # Merge custom_agents from config.yaml
+    # Merge YAML-discovered subagents
+    storage_kwargs = {"app_config": app_config} if app_config is not None else {}
+    storage = get_or_new_subagent_storage(**storage_kwargs)
+    for yaml_name in storage.list_names():
+        if yaml_name not in names:
+            names.append(yaml_name)
+
+    # Merge custom_agents from config.yaml (config.yaml overrides YAML files)
     subagents_config = _resolve_subagents_app_config(app_config)
     for custom_name in subagents_config.custom_agents:
         if custom_name not in names:

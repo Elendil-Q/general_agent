@@ -1,10 +1,22 @@
 """Tests for subagent availability and prompt exposure under local bash hardening."""
 
+from types import SimpleNamespace
+
 from deerflow.agents.lead_agent import prompt as prompt_module
 from deerflow.subagents import registry as registry_module
 
 
+def _patch_storage_empty(monkeypatch):
+    """Isolate registry from the filesystem so only built-ins are visible."""
+    monkeypatch.setattr(
+        registry_module,
+        "get_or_new_subagent_storage",
+        lambda *args, **kwargs: SimpleNamespace(list_names=lambda: [], load_subagent=lambda name: None),
+    )
+
+
 def test_get_available_subagent_names_hides_bash_when_host_bash_disabled(monkeypatch) -> None:
+    _patch_storage_empty(monkeypatch)
     monkeypatch.setattr(registry_module, "is_host_bash_allowed", lambda: False)
 
     names = registry_module.get_available_subagent_names()
@@ -13,6 +25,7 @@ def test_get_available_subagent_names_hides_bash_when_host_bash_disabled(monkeyp
 
 
 def test_get_available_subagent_names_keeps_bash_when_allowed(monkeypatch) -> None:
+    _patch_storage_empty(monkeypatch)
     monkeypatch.setattr(registry_module, "is_host_bash_allowed", lambda: True)
 
     names = registry_module.get_available_subagent_names()

@@ -25,6 +25,7 @@ from deerflow.agents.thread_state import SandboxState, ThreadDataState
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
 from deerflow.models import create_chat_model
+from deerflow.reflection import resolve_variable
 from deerflow.runtime.serialization import serialize_lc_object
 from deerflow.skills.tool_policy import filter_tools_by_skill_allowed_tools
 from deerflow.skills.types import Skill
@@ -451,6 +452,35 @@ class SubagentExecutor:
             config.tools,
             config.disallowed_tools,
         )
+
+        # Load exclusive tools (not inherited from parent)
+        if config.exclusive_tools:
+            existing_names = {t.name for t in self._base_tools}
+            for tool_path in config.exclusive_tools:
+                try:
+                    tool = resolve_variable(tool_path, BaseTool)
+                    # Ensure sync invocability (same pattern as tools.py)
+                    if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
+                        from deerflow.tools.sync import make_sync_tool_wrapper
+
+                        tool.func = make_sync_tool_wrapper(tool.coroutine, tool.name)
+                    if tool.name not in existing_names:
+                        self._base_tools.append(tool)
+                        existing_names.add(tool.name)
+                    else:
+                        logger.warning(
+                            "Exclusive tool %r name conflicts with inherited tool for subagent %s; skipping",
+                            tool.name,
+                            config.name,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to load exclusive tool %r for subagent %s: %s",
+                        tool_path,
+                        config.name,
+                        e,
+                    )
+
         self.tools = self._base_tools
 
         logger.info(f"[trace={self.trace_id}] SubagentExecutor initialized: {config.name} with {len(self.tools)} tools")

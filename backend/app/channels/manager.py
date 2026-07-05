@@ -1572,7 +1572,7 @@ class ChannelManager:
                 "/status — Show current thread info\n"
                 "/models — List available models\n"
                 "/memory — Show memory status\n"
-                "/<skill-name> <task> — Activate an enabled skill for one turn\n"
+                "/skill:<skill-name> <task> — Activate an enabled skill for one turn\n"
                 "/help — Show this help"
             )
         elif reply is None:

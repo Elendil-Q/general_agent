@@ -519,8 +519,18 @@ class TestRegistryListSubagents:
         assert "general-purpose" in names
         assert "bash" in names
 
-    def test_all_returned_configs_get_global_override(self):
+    def test_all_returned_configs_get_global_override(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from deerflow.subagents import registry as registry_module
         from deerflow.subagents.registry import list_subagents
+
+        # Isolate from YAML file discovery so only built-ins are tested
+        monkeypatch.setattr(
+            registry_module,
+            "get_or_new_subagent_storage",
+            lambda *a, **kw: SimpleNamespace(list_names=lambda: [], load_subagent=lambda name: None),
+        )
 
         _reset_subagents_config(timeout_seconds=123, max_turns=77)
         for cfg in list_subagents():

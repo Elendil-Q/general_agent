@@ -1043,6 +1043,10 @@ sandbox:
 # Subagents are background workers delegated tasks by the lead agent
 
 # subagents:
+#   # Path to the subagents directory for YAML file discovery.
+#   # If omitted, defaults to `subagents/` under the project root.
+#   # path: ./subagents
+#
 #   # Default timeout (seconds) for built-in subagents (default: 1800 = 30 min).
 #   # Custom agents use their own timeout_seconds (default 900) unless overridden.
 #   timeout_seconds: 1800
@@ -1067,6 +1071,9 @@ sandbox:
 #   # Custom subagent types: define specialized agents with their own prompts,
 #   # tools, skills, and model configuration. Custom agents are available via
 #   # the `task` tool alongside built-in types (general-purpose, bash).
+#   # You can also define custom subagents as standalone YAML files under
+#   # `subagents/public/` or `subagents/custom/` — see subagents/public/example-analyst.yaml.
+#   # Config.yaml entries override YAML files of the same name.
 #   # custom_agents:
 #   #   analysis:
 #   #     description: "Data analysis specialist for processing datasets and generating insights"
@@ -1079,6 +1086,8 @@ sandbox:
 #   #       - bash
 #   #       - read_file
 #   #       - write_file
+#   #     exclusive_tools:        # Tools resolved via resolve_variable, not inherited from parent
+#   #       - "deerflow.tools.custom.data_viz:plot_tool"
 #   #     skills:                 # Skill whitelist (null = inherit all, [] = none)
 #   #       - data-analysis
 #   #       - visualization
