@@ -63,7 +63,7 @@ export const enUS: Translations = {
   welcome: {
     greeting: "Hello, again!",
     description:
-      "Welcome to 🦌 DeerFlow, an open source super agent. With built-in and custom skills, DeerFlow helps you search on the web, analyze data, and generate artifacts like slides, web pages and do almost anything.",
+      "Welcome to ModelServer — an agent dedicated to deep research, intelligent\n decision-making, and automated software orchestration. It helps you digest\n algorithm documentation, assist with intelligent situational analysis and\n decision planning, and automate document processing and software operations.\n Please describe your needs.",
 
     createYourOwnSkill: "Create Your Own Skill",
     createYourOwnSkillDescription:
@@ -118,6 +118,8 @@ export const enUS: Translations = {
     followupConfirmReplace: "Replace & send",
     suggestionPlaceholderRequired:
       "Replace the suggestion placeholder before sending.",
+    disclaimer:
+      "Results are generated via LLM reasoning, tool calls, and knowledge-base retrieval, for reference only.",
     suggestions: [
       {
         suggestion: "Write",
@@ -298,7 +300,7 @@ export const enUS: Translations = {
 
   // Page titles (document title)
   pages: {
-    appName: "DeerFlow",
+    appName: "ModelServer",
     chats: "Chats",
     newChat: "New chat",
     untitled: "Untitled",

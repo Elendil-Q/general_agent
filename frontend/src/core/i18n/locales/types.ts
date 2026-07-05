@@ -95,6 +95,7 @@ export interface Translations {
     followupConfirmAppend: string;
     followupConfirmReplace: string;
     suggestionPlaceholderRequired: string;
+    disclaimer: string;
     suggestions: {
       suggestion: string;
       prompt: string;

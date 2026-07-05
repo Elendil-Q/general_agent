@@ -63,7 +63,7 @@ export const zhCN: Translations = {
   welcome: {
     greeting: "你好，欢迎回来！",
     description:
-      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nDeerFlow 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
+      "欢迎使用 ModelServer —— 一款致力于深度研究、智能决策与自动化软件调度的智能体。\n它能帮助你深入理解算法文档、辅助智能态势分析与筹划决策，\n并完成自动化文档处理与软件操作。请阐明你的需求。",
 
     createYourOwnSkill: "创建你自己的 Agent SKill",
     createYourOwnSkillDescription:
@@ -113,6 +113,8 @@ export const zhCN: Translations = {
     followupConfirmAppend: "追加并发送",
     followupConfirmReplace: "替换并发送",
     suggestionPlaceholderRequired: "发送前请先填写建议模板中的占位内容。",
+    disclaimer:
+      "结果基于大语言模型推理、工具调用与知识库检索等生成，仅供参考。",
     suggestions: [
       {
         suggestion: "写作",
@@ -286,7 +288,7 @@ export const zhCN: Translations = {
 
   // Page titles (document title)
   pages: {
-    appName: "DeerFlow",
+    appName: "ModelServer",
     chats: "对话",
     newChat: "新对话",
     untitled: "未命名",
