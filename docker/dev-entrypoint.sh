@@ -20,6 +20,16 @@
 
 set -e
 
+# Ensure `uv` is on PATH. The standard Dockerfile installs uv via
+# `COPY --from=uv-source /uv /uvx /usr/local/bin/` (already on PATH). But
+# offline/manual builds that fall back to `curl … astral.sh/uv/install.sh | sh`
+# install uv to /root/.local/bin, which is NOT on PATH for Docker's non-login
+# shell (only ~/.profile adds it, and `sh -c` never sources that). Without
+# this, `uv sync` below fails with `uv: not found` → container exit 127.
+# Prepend the install.sh location only when uv isn't already resolvable.
+command -v uv >/dev/null 2>&1 || PATH="/root/.local/bin:$PATH"
+export PATH
+
 # `--print-extras` is a dry-run hook: parse + validate UV_EXTRAS, print the
 # resulting `--extra X` flags to stdout, and exit. Used by the unit test in
 # backend/tests/test_dev_entrypoint.py and useful for ad-hoc debugging.
