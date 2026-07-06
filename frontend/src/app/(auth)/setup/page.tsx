@@ -1,11 +1,12 @@
 "use client";
 
+import { AlertCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { FlickeringGrid } from "@/components/ui/flickering-grid";
+import { DeerGridBg } from "@/components/ui/deer-grid-bg";
 import { Input } from "@/components/ui/input";
 import { getCsrfHeaders } from "@/core/api/fetcher";
 import { useAuth } from "@/core/auth/AuthProvider";
@@ -163,13 +164,9 @@ export default function SetupPage() {
   if (mode === "init_admin") {
     return (
       <div className="bg-background flex min-h-screen items-center justify-center">
-        <FlickeringGrid
-          className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
-          squareSize={4}
-          gridGap={4}
+        <DeerGridBg
+          className="absolute inset-0 z-0"
           color={actualTheme === "dark" ? "white" : "black"}
-          maxOpacity={0.3}
-          flickerChance={0.25}
         />
         <div className="border-border/20 bg-background/5 w-full max-w-md space-y-6 rounded-3xl border p-8 backdrop-blur-sm">
           <div className="text-center">
@@ -189,7 +186,10 @@ export default function SetupPage() {
                 type="email"
                 placeholder="you@example.com"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setError("");
+                }}
                 required
               />
             </div>
@@ -202,7 +202,10 @@ export default function SetupPage() {
                 type="password"
                 placeholder="Password (min. 8 characters)"
                 value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
+                onChange={(e) => {
+                  setNewPassword(e.target.value);
+                  setError("");
+                }}
                 required
                 minLength={8}
               />
@@ -216,12 +219,23 @@ export default function SetupPage() {
                 type="password"
                 placeholder="Confirm password"
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  setError("");
+                }}
                 required
                 minLength={8}
               />
             </div>
-            {error && <p className="ms-1 text-sm text-red-500">{error}</p>}
+            {error && (
+              <div
+                role="alert"
+                className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-500"
+              >
+                <AlertCircle className="size-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Creating account…" : "Create Admin Account"}
             </Button>
@@ -234,13 +248,9 @@ export default function SetupPage() {
   // ── Change-password form (needs_setup after login) ─────────────────
   return (
     <div className="bg-background flex min-h-screen items-center justify-center">
-      <FlickeringGrid
-        className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
-        squareSize={4}
-        gridGap={4}
+      <DeerGridBg
+        className="absolute inset-0 z-0"
         color={actualTheme === "dark" ? "white" : "black"}
-        maxOpacity={0.3}
-        flickerChance={0.25}
       />
       <div className="border-border/20 bg-background/5 w-full max-w-md space-y-6 rounded-3xl border p-8 backdrop-blur-sm">
         <div className="text-center">
@@ -257,21 +267,30 @@ export default function SetupPage() {
             type="email"
             placeholder="Your email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              setError("");
+            }}
             required
           />
           <Input
             type="password"
             placeholder="Current password"
             value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
+            onChange={(e) => {
+              setCurrentPassword(e.target.value);
+              setError("");
+            }}
             required
           />
           <Input
             type="password"
             placeholder="New password"
             value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
+            onChange={(e) => {
+              setNewPassword(e.target.value);
+              setError("");
+            }}
             required
             minLength={8}
           />
@@ -279,11 +298,22 @@ export default function SetupPage() {
             type="password"
             placeholder="Confirm new password"
             value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
+            onChange={(e) => {
+              setConfirmPassword(e.target.value);
+              setError("");
+            }}
             required
             minLength={8}
           />
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && (
+            <div
+              role="alert"
+              className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-500"
+            >
+              <AlertCircle className="size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Setting up…" : "Complete Setup"}
           </Button>

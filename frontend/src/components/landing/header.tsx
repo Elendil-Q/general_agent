@@ -1,23 +1,16 @@
 import { StarFilledIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
-import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
-import { NumberTicker } from "@/components/ui/number-ticker";
-import type { Locale } from "@/core/i18n/locale";
-import { getI18n } from "@/core/i18n/server";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
 export type HeaderProps = {
   className?: string;
   homeURL?: string;
-  locale?: Locale;
 };
 
-export async function Header({ className, homeURL, locale }: HeaderProps) {
+export async function Header({ className, homeURL }: HeaderProps) {
   const isExternalHome = !homeURL;
-  const { locale: resolvedLocale, t } = await getI18n(locale);
-  const lang = resolvedLocale.substring(0, 2);
   return (
     <header
       className={cn(
@@ -34,20 +27,6 @@ export async function Header({ className, homeURL, locale }: HeaderProps) {
           <h1 className="font-serif text-xl">DeerFlow</h1>
         </a>
       </div>
-      <nav className="mr-8 ml-auto flex items-center gap-8 text-sm font-medium">
-        <Link
-          href={`/${lang}/docs`}
-          className="text-secondary-foreground hover:text-foreground transition-colors"
-        >
-          {t.home.docs}
-        </Link>
-        <Link
-          href="/blog/posts"
-          className="text-secondary-foreground hover:text-foreground transition-colors"
-        >
-          {t.home.blog}
-        </Link>
-      </nav>
       <div className="relative">
         <div
           className="pointer-events-none absolute inset-0 z-0 h-full w-full rounded-full opacity-30 blur-2xl"
@@ -108,9 +87,7 @@ async function StarCounter() {
   return (
     <>
       <StarFilledIcon className="size-4 transition-colors duration-300 group-hover:text-yellow-500" />
-      {stars && (
-        <NumberTicker className="font-mono tabular-nums" value={stars} />
-      )}
+      {stars && <span className="font-mono tabular-nums">{stars}</span>}
     </>
   );
 }

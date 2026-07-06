@@ -42,10 +42,7 @@ export interface Translations {
     regenerate: string;
   };
 
-  home: {
-    docs: string;
-    blog: string;
-  };
+  home: {};
 
   // Welcome
   welcome: {
@@ -486,6 +483,10 @@ export interface Translations {
     createAdminAccount: string;
     adminSetupRequiredTitle: string;
     adminSetupRequiredDescription: string;
+    adminSetupDescription: string;
+    confirmPassword: string;
+    confirmPasswordPlaceholder: string;
+    passwordsDoNotMatch: string;
     orContinueWith: string;
     ssoHint: string;
     continueWith: (provider: string) => string;

@@ -222,6 +222,113 @@
   }
 }
 
+.shimmer-animate {
+  animation: shimmer-bg 2s linear infinite;
+}
+
+/* Starfield background (replaces WebGL Galaxy) */
+.starfield-layer {
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, rgba(255, 255, 255, 0.6), transparent),
+    radial-gradient(1px 1px at 40% 70%, rgba(255, 255, 255, 0.4), transparent),
+    radial-gradient(1px 1px at 60% 20%, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(2px 2px at 80% 50%, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(1px 1px at 90% 80%, rgba(255, 255, 255, 0.4), transparent),
+    radial-gradient(1px 1px at 10% 90%, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(
+      1.5px 1.5px at 70% 10%,
+      rgba(255, 255, 255, 0.5),
+      transparent
+    ),
+    radial-gradient(1px 1px at 30% 50%, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(2px 2px at 50% 40%, rgba(120, 180, 255, 0.25), transparent),
+    radial-gradient(1px 1px at 85% 15%, rgba(180, 160, 255, 0.3), transparent);
+  background-size: 200% 200%;
+  animation: starfield-drift 60s linear infinite;
+}
+
+.starfield-layer-2 {
+  background-image:
+    radial-gradient(1px 1px at 15% 60%, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(1px 1px at 55% 85%, rgba(255, 255, 255, 0.25), transparent),
+    radial-gradient(
+      1.5px 1.5px at 75% 35%,
+      rgba(200, 180, 255, 0.3),
+      transparent
+    ),
+    radial-gradient(1px 1px at 25% 10%, rgba(255, 255, 255, 0.2), transparent),
+    radial-gradient(1px 1px at 95% 60%, rgba(150, 200, 255, 0.2), transparent);
+  background-size: 150% 150%;
+  animation: starfield-twinkle 4s ease-in-out infinite alternate;
+}
+
+@keyframes starfield-drift {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 200% 200%;
+  }
+}
+
+@keyframes starfield-twinkle {
+  0% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* Deer grid pattern (replaces FlickeringGrid Canvas2D) */
+.deer-grid-pattern {
+  background-image:
+    linear-gradient(to right, var(--grid-color, white) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-color, white) 1px, transparent 1px);
+  background-size: 8px 8px;
+  opacity: 0.15;
+  -webkit-mask: url(/images/deer.svg) center / 100vw no-repeat;
+  mask: url(/images/deer.svg) center / 100vw no-repeat;
+}
+
+@media (min-width: 768px) {
+  .deer-grid-pattern {
+    -webkit-mask-size: 72vh;
+    mask-size: 72vh;
+  }
+}
+
+/* Word rotate animation (replaces motion-based WordRotate) */
+.word-rotate-item {
+  animation: word-rotate-fade 3s ease-in-out infinite;
+}
+
+@keyframes word-rotate-fade {
+  0%,
+  15% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  33%,
+  48% {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer-bg {
+  0% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: 0% center;
+  }
+}
+
 :root {
   --radius: 0.625rem;
   --background: oklch(0.9855 0.0098 87.47);

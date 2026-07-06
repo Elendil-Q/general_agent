@@ -1,53 +1,41 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion, type MotionProps } from "motion/react";
-
-import { cn } from "@/lib/utils";
-import { AuroraText } from "./aurora-text";
 
 interface WordRotateProps {
   words: string[];
   duration?: number;
-  motionProps?: MotionProps;
   className?: string;
 }
 
+/**
+ * Lightweight word rotation using setInterval — no motion library.
+ * Shows one word at a time with a CSS fade-slide transition.
+ */
 export function WordRotate({
   words,
-  duration = 2200,
-  motionProps = {
-    initial: { opacity: 0, y: -50, filter: "blur(16px)" },
-    animate: { opacity: 1, y: 0, filter: "blur(0px)" },
-    exit: { opacity: 0, y: 50, filter: "blur(16px)" },
-    transition: { duration: 0.3, ease: "easeOut" },
-  },
+  duration = 2500,
   className,
 }: WordRotateProps) {
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
+    if (words.length <= 1) return;
     const interval = setInterval(() => {
-      setIndex((prevIndex) => (prevIndex + 1) % words.length);
+      setIndex((i) => (i + 1) % words.length);
     }, duration);
-
-    // Clean up interval on unmount
     return () => clearInterval(interval);
-  }, [words, duration]);
+  }, [words.length, duration]);
 
   return (
-    <div className="overflow-hidden py-2">
-      <AnimatePresence mode="popLayout">
-        <motion.h1
-          key={words[index]}
-          className={cn(className)}
-          {...motionProps}
-        >
-          <AuroraText speed={3} colors={["#efefbb", "#e9c665", "#e3a812"]}>
-            {words[index]}
-          </AuroraText>
-        </motion.h1>
-      </AnimatePresence>
-    </div>
+    <span className={className}>
+      <span
+        key={index}
+        className="word-rotate-item inline-block"
+        style={{ animationDuration: `${duration}ms` }}
+      >
+        {words[index]}
+      </span>
+    </span>
   );
 }

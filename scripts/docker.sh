@@ -12,8 +12,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DOCKER_DIR="$PROJECT_ROOT/docker"
 
-# Docker Compose command with project name
-COMPOSE_CMD="docker compose -p deer-flow-dev -f docker-compose-dev.yaml"
+# Base compose file for the dev stack. `start backend` overrides this to
+# docker-compose-dev-backend.yaml (frontend pre-built with next start, gateway
+# dev) so backend iteration isn't blocked by next dev's JIT compile cost on
+# lower-compute hosts.
+DEV_COMPOSE_FILE="docker-compose-dev.yaml"
+COMPOSE_CMD="docker compose -p deer-flow-dev -f $DEV_COMPOSE_FILE"
 
 load_proxy_env_from_dotenv() {
     local env_file="$PROJECT_ROOT/.env"
@@ -177,16 +181,30 @@ init() {
 start() {
     local sandbox_mode
     local services
+    local mode="${1:-}"
 
-    if [ "$#" -gt 0 ]; then
-        echo -e "${YELLOW}Unknown option for start: $1${NC}"
-        echo "Usage: $0 start"
+    if [ -n "$mode" ] && [ "$mode" != "backend" ]; then
+        echo -e "${YELLOW}Unknown option for start: $mode${NC}"
+        echo "Usage: $0 start [backend]"
+        echo "  (no arg)  - full dev: frontend next dev + gateway dev (HMR on both)"
+        echo "  backend   - backend-dev: frontend pre-built (next start) + gateway dev"
         exit 1
+    fi
+
+    if [ "$mode" = "backend" ]; then
+        DEV_COMPOSE_FILE="docker-compose-dev-backend.yaml"
+        COMPOSE_CMD="docker compose -p deer-flow-dev -f $DEV_COMPOSE_FILE"
     fi
 
     echo "=========================================="
     echo "  Starting DeerFlow Docker Development"
     echo "=========================================="
+    if [ "$mode" = "backend" ]; then
+        echo -e "${BLUE}Mode: backend-dev — frontend pre-built (next start), gateway dev${NC}"
+    else
+        echo -e "${BLUE}Mode: full dev — frontend next dev, gateway dev${NC}"
+    fi
+    echo -e "${BLUE}Compose file: $DEV_COMPOSE_FILE${NC}"
     echo ""
 
     sandbox_mode="$(detect_sandbox_mode)"
@@ -351,7 +369,8 @@ help() {
     echo ""
     echo "Commands:"
     echo "  init              - Pull the sandbox image (speeds up first Pod startup)"
-    echo "  start             - Start Docker services (auto-detects sandbox mode from config.yaml)"
+    echo "  start [backend]   - Start Docker dev services (auto-detects sandbox mode from config.yaml)"
+    echo "                      'backend' = frontend pre-built (next start) + gateway dev"
     echo "  restart           - Restart all running Docker services"
     echo "  logs [option] - View Docker development logs"
     echo "                  --frontend   View frontend logs only"

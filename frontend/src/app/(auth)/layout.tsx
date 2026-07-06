@@ -13,6 +13,12 @@ export default async function AuthLayout({
 }: {
   children: ReactNode;
 }) {
+  // When auth is explicitly required, always show the auth page — do not
+  // redirect past it even if the user already has a valid session cookie.
+  if (process.env.DEER_FLOW_AUTH_DISABLED === "0") {
+    return <AuthProvider initialUser={null}>{children}</AuthProvider>;
+  }
+
   const result = await getServerSideUser();
 
   switch (result.tag) {

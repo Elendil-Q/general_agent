@@ -1,6 +1,6 @@
 # DeerFlow - Unified Development Environment
 
-.PHONY: help config config-upgrade check install setup doctor detect-thread-boundaries detect-blocking-io dev dev-daemon start start-daemon stop up down clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway
+.PHONY: help config config-upgrade check install setup doctor detect-thread-boundaries detect-blocking-io dev dev-daemon start start-daemon stop up down clean docker-init docker-start docker-start-backend docker-stop docker-logs docker-logs-frontend docker-logs-gateway
 
 BASH ?= bash
 BACKEND_UV_RUN = cd backend && uv run
@@ -40,7 +40,8 @@ help:
 	@echo ""
 	@echo "Docker Development Commands:"
 	@echo "  make docker-init     - Pull the sandbox image"
-	@echo "  make docker-start    - Start Docker services (mode-aware from config.yaml, localhost:2026)"
+	@echo "  make docker-start    - Start Docker dev services (frontend next dev + gateway dev, localhost:2026)"
+	@echo "  make docker-start-backend - Start Docker dev with frontend pre-built (next start) + gateway dev"
 	@echo "  make docker-stop     - Stop Docker development services"
 	@echo "  make docker-logs     - View Docker development logs"
 	@echo "  make docker-logs-frontend - View Docker frontend logs"
@@ -135,7 +136,15 @@ docker-init:
 docker-start:
 	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh start
 
-# Stop Docker development environment
+# Start Docker backend-dev environment: frontend pre-built (next start, no JIT),
+# gateway in dev with reload. Use when iterating mainly on the backend to avoid
+# next dev's compile cost. Rebuild the frontend image to pick up frontend changes:
+#   docker compose -p deer-flow-dev -f docker/docker-compose-dev-backend.yaml build frontend
+docker-start-backend:
+	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh start backend
+
+# Stop Docker development environment (also stops the backend-dev variant —
+# same project name and service names)
 docker-stop:
 	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh stop
 

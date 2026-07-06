@@ -1,0 +1,218 @@
+# DeerFlow Development Environment — backend-dev variant
+# Usage: docker-compose -f docker-compose-dev-backend.yaml up --build
+#   or:  make docker-start-backend
+#
+# Difference from docker-compose-dev.yaml:
+#   - frontend runs the PROD build target (next start, no JIT, no HMR).
+#     Use this when you mainly iterate on the backend: the frontend serves
+#     pre-compiled assets and never blocks on next dev's first-compile.
+#     Rebuild the frontend image when you change frontend code:
+#       docker compose -p deer-flow-dev -f docker-compose-dev-backend.yaml build frontend
+#   - gateway / nginx / provisioner are unchanged from dev (gateway keeps
+#     uvicorn reload + bind-mounted backend/ for hot backend edits).
+#
+# Services:
+#   - nginx: Reverse proxy (port 2026)
+#   - frontend: Frontend Next.js production server (port 3000, pre-built)
+#   - gateway: Backend Gateway API + agent runtime (port 8001, dev reload)
+#   - provisioner (optional): Sandbox provisioner (creates Pods in host Kubernetes)
+#
+# Access: http://localhost:2026
+#
+# stop / logs use the same project name (deer-flow-dev) and service names as
+# the default dev stack, so `make docker-stop` and `make docker-logs` work
+# against this variant unchanged.
+
+services:
+  # ── Sandbox Provisioner ────────────────────────────────────────────────
+  # Manages per-sandbox Pod + Service lifecycle in the host Kubernetes
+  # cluster via the K8s API.
+  # Backend accesses sandboxes directly via host.docker.internal:{NodePort}.
+  provisioner:
+    build:
+      context: ./provisioner
+      dockerfile: Dockerfile
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+    container_name: deer-flow-provisioner
+    volumes:
+      - ~/.kube/config:/root/.kube/config:ro
+    environment:
+      - K8S_NAMESPACE=deer-flow
+      - SANDBOX_IMAGE=enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
+      # Host paths for K8s HostPath volumes (must be absolute paths accessible by K8s node)
+      # On Docker Desktop/OrbStack, use your actual host paths like /Users/username/...
+      # Set these in your shell before running docker-compose:
+      #   export DEER_FLOW_ROOT=/absolute/path/to/deer-flow
+      - SKILLS_HOST_PATH=${DEER_FLOW_ROOT}/skills
+      - THREADS_HOST_PATH=${DEER_FLOW_ROOT}/backend/.deer-flow/threads
+      # Production: use PVC instead of hostPath to avoid data loss on node failure.
+      # When set, hostPath vars above are ignored for the corresponding volume.
+      # USERDATA_PVC_NAME uses subPath (deer-flow/users/{user_id}/threads/{thread_id}/user-data) automatically.
+      # - SKILLS_PVC_NAME=deer-flow-skills-pvc
+      # - USERDATA_PVC_NAME=deer-flow-userdata-pvc
+      - KUBECONFIG_PATH=/root/.kube/config
+      - NODE_HOST=host.docker.internal
+      # Override K8s API server URL since kubeconfig uses 127.0.0.1
+      # which is unreachable from inside the container
+      - K8S_API_SERVER=https://host.docker.internal:26443
+    env_file:
+      - ../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # ── Reverse Proxy ──────────────────────────────────────────────────────
+  # Routes API traffic to gateway and (optionally) provisioner.
+  nginx:
+    image: nginx:alpine
+    container_name: deer-flow-nginx
+    ports:
+      - "${PORT:-2026}:2026"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        sed -e 's|__GATEWAY_PORT__|${GATEWAY_PORT:-8001}|g' -e 's|__FRONTEND_PORT__|${FRONTEND_PORT:-3000}|g' -e 's|__PROVISIONER_PORT__|${PROVISIONER_PORT:-8002}|g' /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+        test -e /proc/net/if_inet6 || sed -i '/^[[:space:]]*listen[[:space:]]\+\[::\]:2026;/d' /etc/nginx/nginx.conf
+        exec nginx -g 'daemon off;'
+    depends_on:
+      - frontend
+      - gateway
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+
+  # Frontend - Next.js Production Server (pre-built; no JIT, no HMR)
+  # Use this variant when iterating on the backend. Rebuild the image to pick
+  # up frontend changes:
+  #   docker compose -p deer-flow-dev -f docker-compose-dev-backend.yaml build frontend
+  frontend:
+    build:
+      context: ../
+      dockerfile: frontend/Dockerfile
+      target: prod
+      platforms:
+        - linux/arm64
+      args:
+        PNPM_STORE_PATH: ${PNPM_STORE_PATH:-/root/.local/share/pnpm/store}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+    container_name: deer-flow-frontend
+    # Mirror the dev stack's log redirection so `tail -f logs/frontend.log`
+    # works the same way. prod target's default CMD is `pnpm start`.
+    command: sh -c "cd frontend && pnpm start > /app/logs/frontend.log 2>&1"
+    volumes:
+      # No src/public bind mounts — code is baked into the prod image.
+      # No WATCHPACK_POLLING — next start does not watch files.
+      - ../logs:/app/logs
+    working_dir: /app
+    environment:
+      - NODE_ENV=production
+      - DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://gateway:${GATEWAY_PORT:-8001}
+      - PORT=${FRONTEND_PORT:-3000}
+    env_file:
+      - ../frontend/.env
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+
+  # Backend - Gateway API
+  gateway:
+    build:
+      context: ../
+      dockerfile: backend/Dockerfile
+      target: dev
+      platforms:
+        - linux/arm64
+      # cache_from disabled - requires manual setup: mkdir -p /tmp/docker-cache-gateway
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
+        UV_IMAGE: ${UV_IMAGE:-ghcr.io/astral-sh/uv:0.7.20}
+        UV_INDEX_URL: ${UV_INDEX_URL:-https://pypi.org/simple}
+        # Mirror docker-compose.yaml: pass UV_EXTRAS through to the Dockerfile so
+        # optional extras (e.g. ollama → langchain-ollama) are baked into the dev
+        # image at build time. Without this, the startup-time `uv sync --extra X`
+        # in dev-entrypoint.sh tries to fetch the extra at runtime — which fails on
+        # an air-gapped target. Note: the Dockerfile treats UV_EXTRAS as a single
+        # token at build time, so set a single name (e.g. UV_EXTRAS=ollama), not a
+        # comma list.
+        UV_EXTRAS: ${UV_EXTRAS:-}
+    container_name: deer-flow-gateway
+    # Startup logic lives in docker/dev-entrypoint.sh — UV_EXTRAS validation,
+    # `uv sync --all-packages`, .venv self-heal, and uvicorn handoff. Keeps
+    # this file readable and lets the script be linted (shellcheck-clean).
+    # See PR #2767 / Issue #2754.
+    command: ["sh", "/usr/local/bin/dev-entrypoint.sh"]
+    volumes:
+      # Mount the dev entrypoint as a read-only file so edits to the script
+      # take effect on `make docker-restart` without requiring an image rebuild.
+      - ./dev-entrypoint.sh:/usr/local/bin/dev-entrypoint.sh:ro
+      - ../backend/:/app/backend/
+      # Preserve the .venv built during Docker image build — mounting the full backend/
+      # directory above would otherwise shadow it with the (empty) host directory.
+      - gateway-venv:/app/backend/.venv
+      - ../config.yaml:/app/config.yaml
+      - ../extensions_config.json:/app/extensions_config.json
+      - ../skills:/app/skills
+      - ../logs:/app/logs
+      # Use a Docker-managed uv cache volume instead of a host bind mount.
+      # On macOS/Docker Desktop, uv may fail to create symlinks inside shared
+      # host directories, which causes startup-time `uv sync` to crash.
+      - gateway-uv-cache:/root/.cache/uv
+      # DooD: the host Docker socket is NOT mounted by default. It is added only
+      # for aio (pure-DooD) sandbox mode via the opt-in docker-compose.dood.yaml
+      # overlay (appended by scripts/docker.sh). See backend/docs/CONFIGURATION.md
+
+      # CLI auth dirs (Claude Code / Codex) are NOT mounted by default: they
+      # expose the entire ~/.claude and ~/.codex (history, projects, global
+      # config, credentials) into the container. Mount them only when you use
+      # the Claude/Codex CLI login as a model provider or ACP agent, via the
+      # opt-in docker-compose.cli-auth.yaml overlay. Prefer an env token
+      # (CLAUDE_CODE_OAUTH_TOKEN, see .env.example / backend/docs/CONFIGURATION.md).
+    working_dir: /app
+    environment:
+      - CI=true
+      - DEER_FLOW_PROJECT_ROOT=/app
+      - DEER_FLOW_HOME=/app/backend/.deer-flow
+      - DEER_FLOW_CHANNELS_LANGGRAPH_URL=http://gateway:${GATEWAY_PORT:-8001}/api
+      - DEER_FLOW_CHANNELS_GATEWAY_URL=http://gateway:${GATEWAY_PORT:-8001}
+      - DEER_FLOW_INTERNAL_AUTH_TOKEN=${DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
+      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
+      - DEER_FLOW_HOST_SKILLS_PATH=${DEER_FLOW_ROOT}/skills
+      - DEER_FLOW_SANDBOX_HOST=host.docker.internal
+      # Proxy values (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) are inherited from ../.env via env_file.
+      # Only NO_PROXY is declared here so internal service hostnames are always exempt from the proxy.
+      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,host.docker.internal
+      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,host.docker.internal
+    env_file:
+      - ../.env
+    extra_hosts:
+      # For Linux: map host.docker.internal to host gateway
+      - "host.docker.internal:host-gateway"
+    networks:
+      - deer-flow-dev
+    restart: unless-stopped
+
+volumes:
+  # Persist .venv across container restarts so dependencies installed during
+  # image build are not shadowed by the host backend/ directory mount.
+  gateway-venv:
+  gateway-uv-cache:
+
+networks:
+  deer-flow-dev:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.200.0/24

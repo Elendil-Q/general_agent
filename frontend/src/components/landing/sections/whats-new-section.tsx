@@ -1,12 +1,13 @@
 "use client";
 
-import MagicBento, { type BentoCardProps } from "@/components/ui/magic-bento";
+import "@/components/ui/magic-bento.css";
+
 import { cn } from "@/lib/utils";
 
 import { Section } from "../section";
 
 const COLOR = "#0a0a0a";
-const features: BentoCardProps[] = [
+const features = [
   {
     color: COLOR,
     label: "Context Engineering",
@@ -56,7 +57,25 @@ export function WhatsNewSection({ className }: { className?: string }) {
       subtitle="DeerFlow is now evolving from a Deep Research agent into a full-stack Super Agent"
     >
       <div className="flex w-full items-center justify-center">
-        <MagicBento data={features} />
+        <div className="card-grid bento-section">
+          {features.map((card, index) => (
+            <div
+              key={index}
+              className="magic-bento-card"
+              style={{ backgroundColor: card.color }}
+            >
+              <div className="magic-bento-card__header">
+                <div className="magic-bento-card__label">{card.label}</div>
+              </div>
+              <div className="magic-bento-card__content">
+                <h2 className="magic-bento-card__title">{card.title}</h2>
+                <p className="magic-bento-card__description">
+                  {card.description}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </Section>
   );

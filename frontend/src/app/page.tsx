@@ -34,6 +34,12 @@ export default async function RootEntryPage() {
     );
   }
 
+  // When auth is explicitly required, always redirect to /login — do not
+  // check the session, force the user through the login page.
+  if (process.env.DEER_FLOW_AUTH_DISABLED === "0") {
+    redirect("/login");
+  }
+
   // Gateway entry: skip the welcome screen and route straight to the auth or
   // agent surface based on the resolved session — DEER_FLOW_AUTH_DISABLED=1
   // resolves to an authenticated synthetic user and lands in the workspace.

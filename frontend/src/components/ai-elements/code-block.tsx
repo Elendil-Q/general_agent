@@ -13,11 +13,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { type BundledLanguage, codeToHtml, type ShikiTransformer } from "shiki";
+import hljs from "highlight.js/lib/common";
+
+import "./code-block.css";
+
+// Highlight.js theme CSS is loaded globally via globals.css.
 
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
-  language: BundledLanguage;
+  language: string;
   showLineNumbers?: boolean;
 };
 
@@ -29,48 +33,43 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
 });
 
-const lineNumberTransformer: ShikiTransformer = {
-  name: "line-numbers",
-  line(node, line) {
-    node.children.unshift({
-      type: "element",
-      tagName: "span",
-      properties: {
-        className: [
-          "inline-block",
-          "min-w-10",
-          "mr-4",
-          "text-right",
-          "select-none",
-          "text-muted-foreground",
-        ],
-      },
-      children: [{ type: "text", value: String(line) }],
-    });
-  },
-};
-
-export async function highlightCode(
+function highlightWithLineNumbers(
   code: string,
-  language: BundledLanguage,
-  showLineNumbers = false,
-) {
-  const transformers: ShikiTransformer[] = showLineNumbers
-    ? [lineNumberTransformer]
-    : [];
+  language: string,
+  showLineNumbers: boolean,
+): string {
+  let highlighted: string;
+  try {
+    highlighted =
+      language && hljs.getLanguage(language)
+        ? hljs.highlight(code, { language }).value
+        : hljs.highlightAuto(code).value;
+  } catch {
+    highlighted = hljs.highlightAuto(code).value;
+  }
 
-  return await Promise.all([
-    codeToHtml(code, {
-      lang: language,
-      theme: "one-light",
-      transformers,
-    }),
-    codeToHtml(code, {
-      lang: language,
-      theme: "one-dark-pro",
-      transformers,
-    }),
-  ]);
+  if (!showLineNumbers) return highlighted;
+
+  const lines = highlighted.split("\n");
+  return lines
+    .map(
+      (line, i) =>
+        `<span class="hljs-ln-num inline-block min-w-10 mr-4 text-right select-none text-muted-foreground">${i + 1}</span>${line}`,
+    )
+    .join("\n");
+}
+
+export function highlightCode(
+  code: string,
+  language: string,
+  showLineNumbers = false,
+): [string, string] {
+  const html = highlightWithLineNumbers(code, language, showLineNumbers);
+  // Wrap in <pre><code class="hljs"> so highlight.js theme CSS applies.
+  return [
+    `<pre class="hljs"><code class="hljs hljs-light">${html}</code></pre>`,
+    `<pre class="hljs"><code class="hljs hljs-dark">${html}</code></pre>`,
+  ];
 }
 
 export const CodeBlock = ({
@@ -83,20 +82,11 @@ export const CodeBlock = ({
 }: CodeBlockProps) => {
   const [html, setHtml] = useState<string>("");
   const [darkHtml, setDarkHtml] = useState<string>("");
-  const mounted = useRef(false);
 
   useEffect(() => {
-    highlightCode(code, language, showLineNumbers).then(([light, dark]) => {
-      if (!mounted.current) {
-        setHtml(light);
-        setDarkHtml(dark);
-        mounted.current = true;
-      }
-    });
-
-    return () => {
-      mounted.current = false;
-    };
+    const [light, dark] = highlightCode(code, language, showLineNumbers);
+    setHtml(light);
+    setDarkHtml(dark);
   }, [code, language, showLineNumbers]);
 
   return (

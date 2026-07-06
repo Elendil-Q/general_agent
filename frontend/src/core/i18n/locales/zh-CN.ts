@@ -54,10 +54,7 @@ export const zhCN: Translations = {
   },
 
   // Home
-  home: {
-    docs: "文档",
-    blog: "博客",
-  },
+  home: {},
 
   // Welcome
   welcome: {
@@ -561,6 +558,10 @@ export const zhCN: Translations = {
     adminSetupRequiredTitle: "需要先完成管理员初始化",
     adminSetupRequiredDescription:
       "DeerFlow 需要先创建管理员账号，然后才能创建新的普通账号。",
+    adminSetupDescription: "创建管理员账号以开始使用。",
+    confirmPassword: "确认密码",
+    confirmPasswordPlaceholder: "再次输入密码",
+    passwordsDoNotMatch: "两次输入的密码不一致。",
     orContinueWith: "或使用以下方式登录",
     ssoHint: "如果你的账号使用单点登录（SSO），请改用下方的选项登录。",
     continueWith: (provider: string) => `使用 ${provider} 登录`,

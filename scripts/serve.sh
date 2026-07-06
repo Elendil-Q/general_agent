@@ -303,13 +303,13 @@ fi
 
 # Frontend command
 if $DEV_MODE; then
-    FRONTEND_CMD="PORT=${FRONTEND_PORT} pnpm run dev"
+    FRONTEND_CMD="DEER_FLOW_AUTH_DISABLED=${DEER_FLOW_AUTH_DISABLED} DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://127.0.0.1:${GATEWAY_PORT} PORT=${FRONTEND_PORT} pnpm run dev"
 else
     if ! PYTHON_BIN="$(_pick_python)"; then
         echo "Python is required to generate BETTER_AUTH_SECRET."
         exit 1
     fi
-    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') PORT=${FRONTEND_PORT} pnpm run preview"
+    FRONTEND_CMD="env DEER_FLOW_AUTH_DISABLED=${DEER_FLOW_AUTH_DISABLED} DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://127.0.0.1:${GATEWAY_PORT} BETTER_AUTH_SECRET=$($PYTHON_BIN -c 'import secrets; print(secrets.token_hex(16))') PORT=${FRONTEND_PORT} pnpm run preview"
 fi
 
 # Runtime path defaults. Local `make dev` launches Gateway from `backend/`,

@@ -1,17 +1,19 @@
 "use client";
 
+import { AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { FlickeringGrid } from "@/components/ui/flickering-grid";
+import { DeerGridBg } from "@/components/ui/deer-grid-bg";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/core/auth/AuthProvider";
 import {
   canCreateRegularAccount,
   fetchSetupStatus,
+  isSystemAlreadyInitializedError,
   type SetupStatusResponse,
 } from "@/core/auth/setup";
 import { parseAuthError } from "@/core/auth/types";
@@ -59,7 +61,11 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
+  // Local override to show the plain login form even on a fresh system
+  // (an admin is required, but the user has an account elsewhere / via SSO).
+  const [showLoginOverride, setShowLoginOverride] = useState(false);
   const [ssoProviders, setSsoProviders] = useState<
     { id: string; display_name: string; type: string }[]
   >([]);
@@ -91,6 +97,9 @@ export default function LoginPage() {
     status: setupStatus,
   });
   const systemNeedsAdminSetup = setupStatus?.needs_setup === true;
+  // When the system has no admin yet, show an inline admin-init form instead of
+  // the (unusable) login form unless the user explicitly asks for the login form.
+  const adminSetupMode = systemNeedsAdminSetup && !showLoginOverride;
 
   // Redirect if already authenticated (client-side, post-login)
   useEffect(() => {
@@ -109,6 +118,7 @@ export default function LoginPage() {
         setSetupStatus(data);
         if (data.needs_setup) {
           setIsLogin(true);
+          setShowLoginOverride(false);
         }
       })
       .catch(() => {
@@ -147,6 +157,51 @@ export default function LoginPage() {
     setError("");
     setShowSsoHint(false);
     setLoading(true);
+
+    // First-run path: create the first admin via /initialize.
+    if (adminSetupMode) {
+      if (password !== confirmPassword) {
+        setError(t.login.passwordsDoNotMatch);
+        setLoading(false);
+        return;
+      }
+      try {
+        const res = await fetch("/api/v1/auth/initialize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          if (isSystemAlreadyInitializedError(data)) {
+            // An admin was created elsewhere while this tab was open — re-fetch
+            // setup status and drop back to the normal login form.
+            try {
+              const status = await fetchSetupStatus();
+              setSetupStatus(status);
+            } catch {
+              /* ignore — leave as-is, form will re-render on next interaction */
+            }
+            setShowLoginOverride(true);
+            setError("");
+          } else {
+            const authError = parseAuthError(data);
+            setError(authError.message);
+          }
+          return;
+        }
+
+        // /initialize sets the session cookie — go to workspace.
+        router.push(redirectPath);
+      } catch {
+        setError(t.login.networkError);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     if (!isLogin && !regularSignupAllowed) {
       setError(t.login.adminSetupRequiredDescription);
@@ -198,23 +253,28 @@ export default function LoginPage() {
 
   return (
     <div className="bg-background relative flex min-h-screen items-center justify-center overflow-x-hidden overflow-y-auto">
-      <FlickeringGrid
-        className="absolute inset-0 z-0 mask-[url(/images/deer.svg)] mask-size-[100vw] mask-center mask-no-repeat md:mask-size-[72vh]"
-        squareSize={4}
-        gridGap={4}
+      <DeerGridBg
+        className="absolute inset-0 z-0"
         color={actualTheme === "dark" ? "white" : "black"}
-        maxOpacity={0.3}
-        flickerChance={0.25}
       />
       <div className="border-border/20 bg-background/5 w-full max-w-md space-y-6 rounded-3xl border p-8 backdrop-blur-sm">
         <div className="text-center">
           <h1 className="text-foreground font-serif text-3xl">ModelServer</h1>
           <p className="text-muted-foreground mt-2">
-            {isLogin ? t.login.signInTitle : t.login.createAccountTitle}
+            {adminSetupMode
+              ? t.login.adminSetupRequiredTitle
+              : isLogin
+                ? t.login.signInTitle
+                : t.login.createAccountTitle}
           </p>
+          {adminSetupMode && (
+            <p className="text-muted-foreground mt-1 text-xs">
+              {t.login.adminSetupDescription}
+            </p>
+          )}
         </div>
 
-        {systemNeedsAdminSetup && (
+        {systemNeedsAdminSetup && !adminSetupMode && (
           <div className="border-l-2 border-blue-500 ps-3 text-sm">
             <p className="font-medium">{t.login.adminSetupRequiredTitle}</p>
             <p className="text-muted-foreground mt-1">
@@ -238,7 +298,11 @@ export default function LoginPage() {
               id="email"
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setError("");
+                setShowSsoHint(false);
+              }}
               placeholder={t.login.emailPlaceholder}
               required
             />
@@ -251,27 +315,61 @@ export default function LoginPage() {
               id="password"
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setError("");
+                setShowSsoHint(false);
+              }}
               placeholder={t.login.passwordPlaceholder}
               required
-              minLength={isLogin ? 6 : 8}
+              minLength={adminSetupMode || !isLogin ? 8 : 6}
             />
           </div>
+          {adminSetupMode && (
+            <div className="flex flex-col space-y-1">
+              <label htmlFor="confirmPassword" className="text-sm font-medium">
+                {t.login.confirmPassword}
+              </label>
+              <Input
+                id="confirmPassword"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  setError("");
+                  setShowSsoHint(false);
+                }}
+                placeholder={t.login.confirmPasswordPlaceholder}
+                required
+                minLength={8}
+              />
+            </div>
+          )}
 
-          {error && <p className="text-sm text-red-500">{error}</p>}
+          {error && (
+            <div
+              role="alert"
+              className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-500"
+            >
+              <AlertCircle className="size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
 
           <Button type="submit" className="w-full" disabled={loading}>
             {loading
               ? t.login.pleaseWait
-              : isLogin
-                ? t.login.signIn
-                : t.login.createAccount}
+              : adminSetupMode
+                ? t.login.createAdminAccount
+                : isLogin
+                  ? t.login.signIn
+                  : t.login.createAccount}
           </Button>
         </form>
 
         {ssoProviders.length > 0 && (
           <div className="space-y-2">
-            {isLogin && (
+            {(isLogin || adminSetupMode) && (
               <div className="relative my-4">
                 <div className="absolute inset-0 flex items-center">
                   <span className="w-full border-t" />
@@ -305,7 +403,23 @@ export default function LoginPage() {
           </div>
         )}
 
-        {regularSignupAllowed && (
+        {adminSetupMode && (
+          <div className="text-center text-sm">
+            <button
+              type="button"
+              onClick={() => {
+                setShowLoginOverride(true);
+                setError("");
+                setShowSsoHint(false);
+              }}
+              className="text-blue-500 hover:underline"
+            >
+              {t.login.haveAccountSignIn}
+            </button>
+          </div>
+        )}
+
+        {!adminSetupMode && regularSignupAllowed && (
           <div className="text-center text-sm">
             <button
               type="button"
