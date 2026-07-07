@@ -106,12 +106,17 @@ rm -rf frontend/node_modules
 
 ```bash
 # 基于已有的 dev 镜像，COPY 最新源码后只跑 build，生成干净的 prod 镜像
+# 注意：必须先清除 dev 镜像里残留的旧源码（node_modules 除外），
+# 否则 host 端已删除的文件（如 nextra 相关文件）不会被 COPY 覆盖掉，
+# 导致 build 时引用已删除的文件/依赖而报错。
 docker build --platform linux/arm64 \
   --build-arg DEV_IMAGE=deer-flow-dev-frontend:latest \
   -t deer-flow-frontend:prod-from-dev \
   -f - . <<'EOF'
 ARG DEV_IMAGE
 FROM ${DEV_IMAGE}
+# 删除 dev 镜像里的旧源码（保留 node_modules），让下面的 COPY 干净落地
+RUN cd /app/frontend && find . -mindepth 1 -maxdepth 1 -not -name node_modules -exec rm -rf {} +
 COPY frontend ./frontend
 RUN cd /app/frontend && pnpm build
 ENV NODE_ENV=production
@@ -151,10 +156,11 @@ rm -rf frontend/node_modules
 
 docker build --platform linux/arm64 \
   --build-arg DEV_IMAGE=deer-flow-dev-frontend:latest \
-  -t deer-flow-frontend:prod-from-dev \
+  -t deer-flow-frontend:latest \
   -f - . <<'EOF'
 ARG DEV_IMAGE
 FROM ${DEV_IMAGE}
+RUN cd /app/frontend && find . -mindepth 1 -maxdepth 1 -not -name node_modules -exec rm -rf {} +
 COPY frontend ./frontend
 RUN cd /app/frontend && pnpm install && SKIP_ENV_VALIDATION=1 pnpm build
 ENV NODE_ENV=production
@@ -219,6 +225,207 @@ docker compose \
 | 改了大量前端代码，想要干净的 prod 镜像 | **方法三**（基于 dev 镜像构建，推荐） |
 | dev 容器没在跑，也不想启动它 | **方法三**（基于 dev 镜像构建）或 **方法二**（临时容器 build + commit） |
 | 频繁迭代前端，不想每次手动操作 | **方法四**（等 Dockerfile 分层优化后再用） |
+---
+
+## 快速重建 Gateway 镜像（基于已有 dev 镜像）
+
+> 适用场景：你在离线机器上通过 `make docker-start-backend` 跑过 dev 栈，
+> 生成了包含完整 `.venv` 的 `deer-flow-dev-gateway` 镜像。现在改了后端代码
+>（config.yaml、agent 逻辑、工具函数等 Python 文件），想在不触发 `uv sync`
+> 联网下载的前提下直接创建新的 gateway 镜像。
+
+### 思路
+
+后端是 Python 解释执行，没有编译构建环节。新镜像只需：
+1. 以已有 dev 镜像为基础
+2. 覆盖更新后的 `backend/` 源码
+3. 用 `uv sync --frozen --offline` 做本地校验（不走网络）
+
+### 前置检查
+
+```bash
+docker images | grep deer-flow-dev-gateway
+# 应看到: deer-flow-dev-gateway   latest   ...
+
+grep 'uv sync.*--offline' docker/dev-entrypoint.sh
+# 应输出: if ! uv sync --all-packages $EXTRAS_FLAGS --frozen --offline; then
+```
+
+如果 `dev-entrypoint.sh` 还没有 `--frozen --offline`，先在 host 上修改该文件。
+
+---
+
+#### 方法一：docker commit（最快）
+
+dev 栈正在跑时（`deer-flow-gateway` 容器活着），bind mount 已把 host 上的代码改动
+同步进容器（`../backend/` → `/app/backend/`），直接 commit 即可：
+
+```bash
+docker commit deer-flow-gateway deer-flow-gateway:local
+```
+
+改 `docker-compose-dev-backend.yaml`，gateway 从 `build:` 改为 `image:` 并去掉
+`../backend/` 的 bind mount（源码已固化在镜像里）：
+
+```yaml
+  gateway:
+    image: deer-flow-gateway:local
+    volumes:
+      - ./dev-entrypoint.sh:/usr/local/bin/dev-entrypoint.sh:ro
+      - gateway-venv:/app/backend/.venv
+      - ../config.yaml:/app/config.yaml
+      - ../extensions_config.json:/app/extensions_config.json
+      - ../skills:/app/skills
+      - ../logs:/app/logs
+      - gateway-uv-cache:/root/.cache/uv
+    # environment/networks 保持不变
+```
+
+**优点**：零开销，秒生成。
+**缺点**：commit 出来的镜像保留容器运行时残留层，不够干净。
+
+---
+
+#### 方法二：内联 Dockerfile 构建（推荐）
+
+构建新镜像时为目标架构重建依赖（需要构建时可联网，或使用内网 PyPI 镜像）。
+构建完成后，`.venv` 在镜像内已针对当前架构就绪，启动时由 `gateway-venv` volume 持久化：
+
+```bash
+cd "$REPO"
+docker build --platform linux/arm64 \
+  --build-arg DEV_IMAGE=deer-flow-dev-gateway:latest \
+  -t deer-flow-gateway:local \
+  -f - . <<'DOCKERFILE'
+ARG DEV_IMAGE
+FROM ${DEV_IMAGE}
+
+# 清理旧源码和旧 .venv（源机构建，架构不匹配），让下面的 COPY 干净落地
+RUN cd /app/backend && find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+COPY backend ./backend
+
+# 为目标架构重建依赖（需联网；若无外网，用内网 PyPI 镜像或回源机交叉构建）
+RUN cd /app/backend && uv sync --all-packages --frozen
+DOCKERFILE
+```
+
+> `--platform linux/arm64` 按目标机架构调整（x86_64 用 `linux/amd64`），
+> 需要和已有 dev 镜像架构一致。
+
+同样改 compose 用 `image:` + 去掉 `../backend/` bind mount：
+
+```yaml
+  gateway:
+    image: deer-flow-gateway:local
+    command: ["sh", "/usr/local/bin/dev-entrypoint.sh"]
+    volumes:
+      - ./dev-entrypoint.sh:/usr/local/bin/dev-entrypoint.sh:ro
+      - gateway-venv:/app/backend/.venv
+      - ../config.yaml:/app/config.yaml
+      - ../extensions_config.json:/app/extensions_config.json
+      - ../skills:/app/skills
+      - ../logs:/app/logs
+      - gateway-uv-cache:/root/.cache/uv
+    # environment/networks 保持不变
+```
+
+```bash
+cd "$REPO/docker"
+docker compose -p deer-flow-dev -f docker-compose-dev-backend.yaml up -d gateway
+```
+
+如果已有旧的 `gateway-venv` volume（源机构架，架构不匹配），先删除再启动：
+
+```bash
+docker volume rm deer-flow-dev_gateway-venv
+```
+
+第一次 `up -d` 时，Docker 会从新镜像的 `.venv` 重新 populate volume，
+后续重启时 `dev-entrypoint.sh` 的 `uv sync --frozen --offline` 是纯本地校验，
+不触发网络。
+
+**优点**：
+- 生成的目标架构 .venv 干净完整
+- 容器启动不走网络，复用 docker build 阶段的结果
+- 不依赖 dev 容器是否在跑
+
+
+#### 方法三：不改依赖时跳过 uv sync（更轻量）
+
+如果确认只改了 `.py` 文件，**没有改** `pyproject.toml` 或 `uv.lock`，连 `uv sync`
+都可以省略——直接 COPY 源码即可：
+
+```bash
+cd "$REPO"
+docker build --platform linux/arm64   --build-arg DEV_IMAGE=deer-flow-dev-gateway:latest   -t deer-flow-gateway:local   -f - . <<'DOCKERFILE'
+ARG DEV_IMAGE
+FROM ${DEV_IMAGE}
+RUN cd /app/backend && find . -mindepth 1 -maxdepth 1   -not -name .venv -exec rm -rf {} +
+COPY backend ./backend
+DOCKERFILE
+```
+
+同样改 compose 用 `image:` + 去掉 `../backend/` bind mount。构建只需几秒。
+
+---
+
+### 改了依赖时怎么办
+
+如果修改了 `pyproject.toml` 或 `uv.lock`，`uv sync --frozen --offline` 会因 `.venv`
+与锁文件不匹配而失败。离线环境只能回源机重建镜像并重新传输
+（参见 `docs/offline-setup.md` §1.3）。
+
+---
+
+### 针对 runtime（生产）镜像
+
+生产部署使用 `docker-compose.yaml` + `runtime` 阶段的镜像（镜像名 `deer-flow-gateway`，
+不含 `-dev-`）。跨架构时需要以 **dev 镜像**（`deer-flow-dev-gateway`）为基底，
+因为它包含 `build-essential`，能为目标架构编译 native 扩展。
+
+用内联 Dockerfile 构建针对目标架构的运行时镜像：
+
+```bash
+cd "$REPO"
+docker build --platform linux/arm64 \
+  --build-arg DEV_IMAGE=deer-flow-dev-gateway:latest \
+  -t deer-flow-gateway:updated \
+  -f - . <<'DOCKERFILE'
+ARG DEV_IMAGE
+FROM ${DEV_IMAGE}
+
+# 清掉旧 .venv（源机构架，native 扩展架构不匹配）和旧源码
+RUN cd /app/backend && find . -mindepth 1 -maxdepth 1 \
+  -not -name sandbox -exec rm -rf {} +
+
+COPY backend ./backend
+
+# 为目标架构重建依赖（需联网/内网 PyPI 镜像）
+RUN cd /app/backend && uv sync --all-packages --frozen
+
+# runtime 不跑 uv sync，用 --no-sync 跳过
+CMD ["sh", "-c", "cd backend && PYTHONPATH=. uv run --no-sync uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001"]
+DOCKERFILE
+```
+
+改 `docker-compose.yaml` 的 `image:` 指向 `deer-flow-gateway:updated`
+并去掉 `../backend/` bind mount 即可。
+
+> 这个镜像比官方的 runtime 镜像多 ~200MB（因为带 `build-essential`），
+> 但功能完全一致。如果要在目标机上做更干净的镜像，可以在构建完成后用
+> `docker export` + `docker import` 或重新走源机交叉构建流程
+>（`docs/offline-setup.md` §1.3）。
+
+### 推荐选择
+
+| 场景 | 推荐 |
+|---|---|
+| dev 栈正在跑，只想更新源码 | **方法一**（docker commit，零开销） |
+| 想要干净的新镜像 | **方法二**（内联 Dockerfile 构建，推荐） |
+| 只改 Python 文件不改依赖 | **方法三**（跳过 uv sync，几秒完成） |
+| 改了依赖 | 回源机重建镜像 |
+
 
 ---
 

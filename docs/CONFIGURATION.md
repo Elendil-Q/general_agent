@@ -221,7 +221,7 @@ DeerFlow 默认启用 `web_search`（DuckDuckGo，无需 API key）与 `web_fetc
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `UV_EXTRAS` | 空 | 后端 extras，例如 `postgres`、`ollama`；Docker build 时只支持单个 token |
-| `UV_IMAGE` | `ghcr.io/astral-sh/uv:0.7.20` | uv 基础镜像 |
+| `UV_IMAGE` | `ghcr.io/astral-sh/uv:latest` | uv 基础镜像 |
 | `UV_INDEX_URL` | `https://pypi.org/simple` | PyPI 索引 |
 | `APT_MIRROR` | 空 | apt 镜像 |
 | `NPM_REGISTRY` | 空 | npm/pnpm registry 镜像 |

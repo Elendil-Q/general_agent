@@ -16,15 +16,15 @@
 
 ### 两种部署模式对比
 
-| 维度 | 生产部署 | 开发部署 |
-| --- | --- | --- |
-| 镜像 | 后端 `runtime` target，前端 `prod` target | 后端 `dev` target，前端 `dev` target |
-| 源码挂载 | 否（镜像内为预构建产物） | **是**（宿主机 `backend/`、`frontend/src/` 等挂载到容器） |
-| 热重载 | 无 | **有**（后端 uvicorn `--reload`，前端 Next.js Turbopack） |
-| 运行时联网 | 零（`--no-sync` + 预构建） | 依赖已预装，通常零联网；启动时 `uv sync` 做秒级本地校验 |
-| 启动命令 | `scripts/deploy.sh start` | 手动 `docker compose up -d`（**不带 `--build`**） |
-| 推荐场景 | 离线运行、演示、稳定环境 | **离线调试、改源码、迭代开发** |
-| 改代码后更新 | 源机重建镜像 → 重新传输 → 加载 | 宿主机直接改源码，容器即时热重载 |
+| 维度 | 生产部署 | 开发部署（full-dev） | 开发部署（backend-dev） |
+| --- | --- | --- | --- |
+| 镜像 | 后端 `runtime`，前端 `prod` | 后端 `dev`，前端 `dev` | 后端 `dev`，前端 `prod` |
+| 源码挂载 | 否 | **是**（backend/ + frontend/src/ 等） | **仅 backend/**（前端不挂载） |
+| 热重载 | 无 | **有**（后端 reload + 前端 Turbopack） | **仅后端 reload**（前端 `next start` 无 HMR） |
+| 运行时联网 | 零 | 通常零联网 | 通常零联网 |
+| 启动命令 | `scripts/deploy.sh start` | `docker compose up -d`（无 `--build`） | `make docker-start-backend` 或手动 compose |
+| 推荐场景 | 离线运行、演示 | **前后端都在改** | **主要改后端**，前端预构建秒开 |
+| 改代码后更新 | 源机重建 → 传输 → 加载 | 宿主机改源码即时生效 | 后端即时生效；**前端改后须 rebuild 镜像** |
 
 ### 离线可行性结论
 
@@ -203,7 +203,7 @@ run_events:
 UV_EXTRAS=ollama
 
 # 国内源机构建加速（可选，仅构建期生效）
-# APT_MIRROR=mirrors.tuna.tsinghua.edu.cn   # 仅裸主机名；带 http:// 或 /debian 也会被自动清洗，非法值将 fail-fast
+# # APT_MIRROR=mirrors.tuna.tsinghua.edu.cn   # 仅裸主机名；带 http:// 或 /debian 也会被自动清洗，非法值将 fail-fast
 # NPM_REGISTRY=https://registry.npmmirror.com
 # UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ```
@@ -283,39 +283,54 @@ gzip deer-flow-prod-images.tar
    ```bash
    docker pull python:3.12-slim-bookworm
    docker pull node:22-alpine
-   docker pull ghcr.io/astral-sh/uv:0.7.20
+   docker pull ghcr.io/astral-sh/uv:latest
    docker pull docker:cli
    ```
 
-#### 构建与导出
+#### 构建与导出（full-dev 与 backend-dev 共用后端镜像）
+
+两种开发模式的后端镜像**完全相同**（`target=dev`，gateway 含 `.venv` 与 reload）。区别仅在前端：
+- **full-dev**：前端用 `target=dev`（`next dev --turbo`，源码挂载后 HMR）
+- **backend-dev**：前端用 `target=prod`（`next start`，预构建产物，无 HMR，首屏秒开）
+
+建议**同时构建两个前端镜像**，到目标机按需选择；或只构建你计划用的那个。
 
 ```bash
 cd "$REPO"
 
-# 1. 构建前端 dev 镜像（target=dev，已装 node_modules）
+# 1. 构建后端 dev 镜像（两种模式共用）
 #    跨架构时前缀 DOCKER_DEFAULT_PLATFORM=linux/arm64（见上方）
-docker compose -p deer-flow-dev -f docker/docker-compose-dev.yaml build frontend
-
-# 2. 构建后端 dev 镜像（target=dev，已装 .venv；UV_EXTRAS 由 .env 经 compose 自动传入）
 docker compose -p deer-flow-dev -f docker/docker-compose-dev.yaml build gateway
 
-# 3. 验证 Ollama extra（仅 Ollama 用户；设了 UV_EXTRAS=ollama 即应有输出）
+# 2. 构建前端 full-dev 镜像（如需前后端都改）
+docker compose -p deer-flow-dev -f docker/docker-compose-dev.yaml build frontend
+
+# 3. 构建前端 backend-dev 镜像（如需主要改后端）
+docker compose -p deer-flow-dev -f docker/docker-compose-dev-backend.yaml build frontend
+
+# 4. 验证 Ollama extra（仅 Ollama 用户；设了 UV_EXTRAS=ollama 即应有输出）
 docker run --rm deer-flow-dev-gateway uv pip list | grep -i ollama
 
-# 4. 确认镜像
+# 5. 确认镜像
 docker images | grep -E 'deer-flow-dev-(gateway|frontend)|nginx:alpine'
 
-# 5. 导出
+# 6. 导出（按需选择要导出的前端镜像）
 docker save -o deer-flow-dev-images.tar \
   deer-flow-dev-gateway \
   deer-flow-dev-frontend \
   nginx:alpine
 
+# 可选：若同时需要 backend-dev 的前端镜像，追加导出
+# docker save -o deer-flow-dev-backend-images.tar \
+#   deer-flow-dev-gateway \
+#   deer-flow-frontend \
+#   nginx:alpine
+
 # 可选压缩
 gzip deer-flow-dev-images.tar
 ```
 
-> 开发镜像含完整编译工具链（`build-essential`）与 `.venv`，用于支撑容器启动时的秒级 `uv sync` 校验及源码热重载。
+> 开发镜像含完整编译工具链（`build-essential`）与 `.venv`，用于支撑容器启动时的秒级 `uv sync` 校验及源码热重载。backend-dev 的前端镜像额外包含 `.next` 构建产物，体积略大但运行时零编译。
 
 ### 1.4 准备干净的项目文件夹（离线本地开发用）
 
@@ -462,9 +477,9 @@ docker load -i deer-flow-dev-images.tar    # 或 gunzip -c ... | docker load
 docker images | grep -E 'deer-flow-dev-(gateway|frontend)|nginx:alpine'
 ```
 
-### 3.2 启动服务（挂载源码）
+### 3.2 启动服务
 
-> **关键**：开发部署**不能**使用 `scripts/docker.sh start`（它会带 `--build`，离线失败），也**不能**使用 `make docker-start`。须手动执行 `docker compose up -d` **不带 `--build`**。
+> **关键**：开发部署**不能**使用 `scripts/docker.sh start`（它会带 `--build`，离线失败）。须手动执行 `docker compose up -d` **不带 `--build`**，或使用 `make docker-start-backend`（已封装好无 `--build` 的 compose 命令）。
 
 > ⚠️ **【必读】重新加载 dev 镜像后，启动前必须清除旧 venv volume**
 >
@@ -477,6 +492,8 @@ docker images | grep -E 'deer-flow-dev-(gateway|frontend)|nginx:alpine'
 > ```
 >
 > 全新目标机（从未跑过 dev）**可跳过**此步——volume 不存在，首次 `up` 会自动 copy-up 新镜像里的 `.venv`。
+
+#### 3.2 A：full-dev 模式（前后端都改）
 
 ```bash
 cd "$REPO"
@@ -493,6 +510,28 @@ docker compose -p deer-flow-dev -f docker-compose-dev.yaml up -d frontend gatewa
 > - `.venv` 受 `gateway-venv` named volume 保护（`docker-compose-dev.yaml:140`），不会被宿主机空目录覆盖。但该 volume **只在首次创建时**从镜像 copy-up 一次，重新加载新镜像后须手动删除（见上方 ⚠️）；
 > - `pnpm store` 挂载自宿主机（`docker-compose-dev.yaml:103`），但在离线目标机只需镜像内已有的 node_modules 即可运行。
 
+#### 3.2 B：backend-dev 模式（主要改后端，前端预构建）
+
+```bash
+cd "$REPO"
+export DEER_FLOW_ROOT="$REPO"
+
+make docker-start-backend
+```
+
+或使用底层 compose 命令：
+
+```bash
+cd "$REPO/docker"
+docker compose -p deer-flow-dev -f docker-compose-dev-backend.yaml up -d frontend gateway nginx
+```
+
+> 与 full-dev 的区别：
+> - **frontend 不挂载源码**（`docker-compose-dev-backend.yaml` 无 `src/` / `public/` bind mount），运行 `pnpm start`（`next start`，预构建产物）；
+> - **前端首屏秒开**，不受 `next dev --turbo` 的 JIT 编译延迟影响；
+> - **前端无 HMR**：改前端代码后须重新 build 前端镜像（见 §3.4 / §3.6）；
+> - gateway 与 full-dev 完全相同（挂载 backend/、uvicorn reload）。
+
 启动后访问 `http://localhost:2026`。
 
 ### 3.3 验证 LLM
@@ -500,6 +539,8 @@ docker compose -p deer-flow-dev -f docker-compose-dev.yaml up -d frontend gatewa
 同 §2.3：先 `curl` 确认宿主机 LLM 端点，再浏览器发消息验证端到端。
 
 ### 3.4 源码修改与热重载（核心）
+
+#### full-dev 模式（前后端都改）
 
 在**宿主机**直接修改 `$REPO` 下的源码，容器内即时生效，无需重建镜像：
 
@@ -513,21 +554,35 @@ docker compose -p deer-flow-dev -f docker-compose-dev.yaml up -d frontend gatewa
 | `backend/pyproject.toml`、`uv.lock` | 触发 `uv sync`，离线环境可能失败 | 是（须源机重建镜像） |
 | `frontend/package.json`、`pnpm-lock.yaml` | 需重新 `pnpm install`，离线环境可能失败 | 是（须源机重建镜像） |
 
+#### backend-dev 模式（主要改后端）
+
+| 修改范围 | 生效方式 | 是否需要重建前端镜像 |
+| --- | --- | --- |
+| `backend/` 下的 `.py` 文件 | uvicorn `--reload` 自动重启 gateway | 否 |
+| `config.yaml`、`.env` | 多数字段热重载；基础设施字段重启 gateway 生效 | 否 |
+| `frontend/src/` 下的 `.ts/.tsx` | **无 HMR**（前端不挂载源码） | **是**（须重新 build 前端镜像） |
+| `frontend/public/` 下的静态资源 | **无**（前端不挂载 public） | **是** |
+| `frontend/next.config.js` | **无**（前端不挂载配置） | **是** |
+| `backend/pyproject.toml`、`uv.lock` | 触发 `uv sync`，离线环境可能失败 | 否（后端镜像 rebuild） |
+| `frontend/package.json`、`pnpm-lock.yaml` | 需重新 `pnpm install` | **是** |
+
 **常用操作示例**：
 
 ```bash
 cd "$REPO/docker"
 
 # 修改 backend 代码后（如 agents/memory/prompt.py），gateway 自动重载
-# 日志查看
+# 日志查看（两种模式通用）
 docker compose -p deer-flow-dev -f docker-compose-dev.yaml logs -f gateway
 
 # 修改 config.yaml 后，重启 gateway 使其完全生效
 docker compose -p deer-flow-dev -f docker-compose-dev.yaml restart gateway
 
-# 修改 frontend 源码后，frontend 自动热重载
-# 日志查看
+# full-dev：修改 frontend 源码后自动热重载
 docker compose -p deer-flow-dev -f docker-compose-dev.yaml logs -f frontend
+
+# backend-dev：前端无热重载，日志只显示 next start 的访问日志
+docker compose -p deer-flow-dev -f docker-compose-dev-backend.yaml logs -f frontend
 
 # 全部日志
 docker compose -p deer-flow-dev -f docker-compose-dev.yaml logs -f
@@ -535,24 +590,48 @@ docker compose -p deer-flow-dev -f docker-compose-dev.yaml logs -f
 
 ### 3.5 局限与注意事项
 
-- **bash 工具的文件范围**：gateway 容器仅挂载了 `backend/`、`config.yaml`、`extensions_config.json`、`skills`、`.deer-flow`。`LocalSandboxProvider` 的 `bash` 工具只能在这些挂载范围内操作。若需访问宿主机其他目录，须在 `docker-compose-dev.yaml` 的 gateway `volumes` 中新增挂载（改后需重新传输 compose 文件或直接在目标机编辑）。
+#### 两种模式共用
+
+- **bash 工具的文件范围**：gateway 容器仅挂载了 `backend/`、`config.yaml`、`extensions_config.json`、`skills`、`.deer-flow`。`LocalSandboxProvider` 的 `bash` 工具只能在这些挂载范围内操作。若需访问宿主机其他目录，须在 compose 文件的 gateway `volumes` 中新增挂载（改后需重新传输 compose 文件或直接在目标机编辑）。
 - **启动时的 `uv sync`**：`dev-entrypoint.sh` 启动时会执行 `uv sync --all-packages`（`dev-entrypoint.sh:83`）。由于 `.venv` 已在镜像内完整预装，此步骤通常为秒级本地校验，不触网。若你修改了 `pyproject.toml` 或 `uv.lock`，离线环境下 `uv sync` 将失败。此时须回滚源码改动，或返回源机重建镜像。
 - **dev-entrypoint.sh 的日志**：gateway 日志统一写入 `/app/logs/gateway.log`（宿主机 `$REPO/logs/gateway.log`，因 `../logs:/app/logs` 挂载）。frontend 日志写入 `/app/logs/frontend.log`（宿主机 `$REPO/logs/frontend.log`）。nginx 日志通过 Docker 标准输出查看。
 
+#### backend-dev 模式特有
+
+- **前端无源码挂载**：`docker-compose-dev-backend.yaml` 的 frontend 服务不挂载 `src/`、`public/`、`next.config.js`，frontend 容器内运行的是镜像构建时的预构建产物。任何前端代码变更都必须重新 build 前端镜像。
+- **前端 rebuild 流程**：改前端代码后，在源机（或联网机）执行 `docker compose -p deer-flow-dev -f docker/docker-compose-dev-backend.yaml build frontend`，导出新镜像并传输到目标机加载。目标机无需删 venv volume（只动前端镜像），直接 `make docker-start-backend` 或 `docker compose up -d` 即可。
+- **快速 rebuild（基于已有 dev 镜像）**：若目标机已有 dev 镜像（含完整 `node_modules`），可基于它快速生成 prod 前端镜像，无需从零 install。详见 `docs/update_docker.md` 的方法三 / 方法三 A。
+
 ### 3.6 停止与更新
+
+#### 停止（两种模式相同）
 
 ```bash
 cd "$REPO/docker"
 
 # 停止开发容器（源码与数据保留在宿主机）
 docker compose -p deer-flow-dev -f docker-compose-dev.yaml down
-
-# 若需更新依赖（如新增 Python/npm 包）：
-# 1. 在源机修改 pyproject.toml / package.json
-# 2. 源机重新构建 dev 镜像（§1.3）
-# 3. 重新导出、传输、加载
-# 4. 目标机加载新镜像后，先删除旧 gateway-venv volume（见 §3.2 ⚠️），再 up -d
+docker compose -p deer-flow-dev -f docker-compose-dev-backend.yaml down
 ```
+
+> `docker-stop`（`make docker-stop`）对两种模式通用——它们使用相同的 compose project name（`deer-flow-dev`）和服务名。
+
+#### 更新依赖或代码
+
+**full-dev 模式**：
+1. 在源机修改 `pyproject.toml` / `package.json`
+2. 源机重新构建 dev 镜像（§1.3）
+3. 重新导出、传输、加载
+4. 目标机加载新镜像后，**先删除旧 gateway-venv volume**（见 §3.2 ⚠️），再 `up -d`
+
+**backend-dev 模式**：
+- **只改后端**：与 full-dev 相同，gateway 镜像更新后删 venv volume 重启即可；frontend 镜像不动。
+- **只改前端**：无需动 gateway 镜像和 venv volume，只需：
+  1. 在源机重新 build 前端镜像：`docker compose -p deer-flow-dev -f docker/docker-compose-dev-backend.yaml build frontend`
+  2. 导出前端镜像：`docker save -o deer-flow-frontend-update.tar deer-flow-dev-frontend`
+  3. 传输到目标机：`docker load -i deer-flow-frontend-update.tar`
+  4. 目标机直接 `make docker-start-backend`（或 `docker compose up -d`），frontend 自动用新镜像
+- **基于已有 dev 镜像快速 rebuild**：若目标机已有含 `node_modules` 的 dev 镜像，可按 `docs/update_docker.md` 的方法三 / 方法三 A，在目标机本地快速生成 prod 前端镜像，无需回源机。
 
 ---
 
@@ -586,6 +665,8 @@ docker compose -p deer-flow-dev -f docker-compose-dev.yaml logs -f gateway
 | `host.docker.internal` 解析失败 | 确认使用项目自带的 compose 文件（已设 `extra_hosts: host.docker.internal:host-gateway`）；勿自行修改 compose 网络配置 |
 | dev 模式改代码后 `uv sync` 失败 | 改了 `pyproject.toml`/`uv.lock` 导致依赖变化，但离线无法下载 → 回滚改动或源机重建镜像 |
 | 前端热重载不生效 | 检查是否改的是 `package.json`/`next.config.js`（后者需重启容器）；查看 `frontend.log` |
+| backend-dev 模式下改前端代码不生效 | **正常**——backend-dev 的前端不挂载源码，须重新 build 前端镜像（见 §3.5 / §3.6） |
+| backend-dev 前端首屏仍慢 | 确认 build 成功（`frontend.log` 无报错）；若首次 build 后仍慢，可能是 `.next` 产物过大，检查 `NODE_OPTIONS` 内存限制 |
 | `docker compose up` 提示镜像不存在 | 未 `docker load` 或镜像名不符；用 `docker images` 确认对应镜像名 |
 | 架构不匹配（`exec format error`） | 源机与目标机 CPU 架构不一致却未跨架构构建；按 §1.2 / §1.3 的"跨架构构建"小节，用 `DOCKER_DEFAULT_PLATFORM=linux/<目标架构>` 重建（x86→arm64 用 `linux/arm64`，反向用 `linux/amd64`） |
 | `BETTER_AUTH_SECRET` 相关报错 | 生产 `deploy.sh start` 会自动生成；开发手动 compose 时若报错，须先 `export BETTER_AUTH_SECRET=$(openssl rand -hex 32)` |
@@ -597,9 +678,11 @@ docker compose -p deer-flow-dev -f docker-compose-dev.yaml logs -f gateway
 
 - 服务拓扑与启动模式：`AGENTS.md`、根 `Makefile`
 - 生产 compose：`docker/docker-compose.yaml`（gateway `--no-sync`、nginx `image: nginx:alpine`）
-- 开发 compose：`docker/docker-compose-dev.yaml`（gateway dev-entrypoint、frontend volume mounts）
+- 开发 compose（full-dev）：`docker/docker-compose-dev.yaml`（gateway dev-entrypoint、frontend volume mounts + Turbopack）
+- 开发 compose（backend-dev）：`docker/docker-compose-dev-backend.yaml`（gateway dev-entrypoint、frontend `target=prod` 预构建）
 - 生产部署脚本：`scripts/deploy.sh`（`start` 不带 `--build`，自动设环境变量与 token）
 - 开发入口：`docker/dev-entrypoint.sh:83`（`uv sync` + `uvicorn --reload`）
+- 前端快速 rebuild：`docs/update_docker.md`（基于已有 dev 镜像生成 prod 前端镜像）
 - 后端镜像：`backend/Dockerfile`（builder 缺 `--all-packages`，影响 Ollama extra）
 - 前端镜像：`frontend/Dockerfile`（dev / prod 双 target）
 - 配置字段：`config.example.yaml`（models/tools/database/memory/sandbox/run_events）

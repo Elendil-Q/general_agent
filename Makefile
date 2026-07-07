@@ -148,6 +148,9 @@ docker-start-backend:
 docker-stop:
 	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh stop
 
+docker-stop-backend:
+	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh stop backend
+
 # View Docker development logs
 docker-logs:
 	@$(RUN_WITH_GIT_BASH) ./scripts/docker.sh logs

@@ -4,7 +4,7 @@
 # Stage 3 (runtime): clean image without compiler toolchain for production
 
 # UV source image (override for restricted networks that cannot reach ghcr.io)
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.7.20
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
 FROM ${UV_IMAGE} AS uv-source
 
 # ── Stage 1: Builder ──────────────────────────────────────────────────────────
@@ -29,6 +29,7 @@ ARG UV_EXTRAS
 # normalization is rejected with a hard error, so a malformed value (e.g. a
 # full InRelease URL pasted by mistake) fails the build up front instead of
 # silently producing broken sources.list entries.
+
 RUN if [ -n "${APT_MIRROR}" ]; then \
       APT_MIRROR_HOST=$(printf '%s' "${APT_MIRROR}" | sed -E 's|^[a-zA-Z]+://||; s|^//||; s|/+$||; s|/debian$||'); \
       case "$APT_MIRROR_HOST" in \
@@ -43,7 +44,8 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     fi
 
 # Install build tools + Node.js (build-essential needed for native Python extensions)
-RUN apt-get update && apt-get install -y \
+RUN env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+    apt-get update && apt-get install -y \
     curl \
     build-essential \
     gnupg \
@@ -68,6 +70,16 @@ COPY backend ./backend
 # When UV_EXTRAS is set (e.g. "postgres"), installs optional dependencies.
 RUN --mount=type=cache,target=/root/.cache/uv \
     sh -c "cd backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync ${UV_EXTRAS:+--extra $UV_EXTRAS}"
+# Bake build backend (hatchling) into the persistent image cache so dev
+# containers can run `uv sync --offline` on air-gapped hosts. The
+# --mount=type=cache above is ephemeral (BuildKit), so hatchling would
+# otherwise be absent from /root/.cache/uv in the image and the
+# gateway-uv-cache named volume seeded from it. Without this, `uv sync
+# --frozen --offline` at startup fails to resolve [build-system].requires
+# for the deerflow-harness workspace member: "No solution found when
+# resolving: hatchling".
+RUN cd backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} \
+    uv pip download --no-deps hatchling
 
 # UTF-8 locale prevents UnicodeEncodeError on Chinese/emoji content in minimal
 # containers where locale configuration may be missing and the default encoding is not UTF-8.

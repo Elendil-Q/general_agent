@@ -10,7 +10,8 @@ RUN if [ -n "${APT_MIRROR}" ]; then \
     fi
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

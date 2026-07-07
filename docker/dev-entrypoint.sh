@@ -87,10 +87,13 @@ mkdir -p "$DEER_FLOW_HOME" /app/backend/.deer-flow /app/backend/sandbox
 
 cd /app/backend
 
-# `--all-packages` propagates extras into workspace members (PR #2584).
+# The first attempt is offline+frozen: the .venv was pre-built during image
+# build and is preserved via the gateway-venv named volume.  uv sync without
+# --offline always probes the configured index URL to verify package metadata,
+# even when the .venv is complete, which blocks startup on air-gapped machines.
 # `$EXTRAS_FLAGS` intentionally unquoted so each `--extra X` becomes its own arg.
 # shellcheck disable=SC2086 # word-splitting is intentional here
-if ! uv sync --all-packages $EXTRAS_FLAGS; then
+if ! uv sync --all-packages $EXTRAS_FLAGS --frozen --offline; then
     echo "[startup] uv sync failed; recreating .venv and retrying once"
     uv venv --allow-existing .venv
     # shellcheck disable=SC2086

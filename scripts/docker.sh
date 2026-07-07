@@ -17,7 +17,7 @@ DOCKER_DIR="$PROJECT_ROOT/docker"
 # dev) so backend iteration isn't blocked by next dev's JIT compile cost on
 # lower-compute hosts.
 DEV_COMPOSE_FILE="docker-compose-dev.yaml"
-COMPOSE_CMD="docker compose -p deer-flow-dev -f $DEV_COMPOSE_FILE"
+COMPOSE_CMD="docker compose --env-file $PROJECT_ROOT/.env -p deer-flow-dev -f $DEV_COMPOSE_FILE"
 
 load_proxy_env_from_dotenv() {
     local env_file="$PROJECT_ROOT/.env"
@@ -193,7 +193,7 @@ start() {
 
     if [ "$mode" = "backend" ]; then
         DEV_COMPOSE_FILE="docker-compose-dev-backend.yaml"
-        COMPOSE_CMD="docker compose -p deer-flow-dev -f $DEV_COMPOSE_FILE"
+        COMPOSE_CMD="docker compose --env-file $PROJECT_ROOT/.env -p deer-flow-dev -f $DEV_COMPOSE_FILE"
     fi
 
     echo "=========================================="
@@ -333,6 +333,21 @@ logs() {
 
 # Stop Docker development environment
 stop() {
+
+    local mode="${1:-}"
+    if [ -n "$mode" ] && [ "$mode" != "backend" ]; then
+        echo -e "${YELLOW}Unknown option for stop: $mode${NC}"
+        echo "Usage: $0 stop [backend]"
+        echo "  (no arg)  - full dev: frontend next dev + gateway dev (HMR on both)"
+        echo "  backend   - backend-dev: frontend pre-built (next start) + gateway dev"
+        exit 1
+    fi
+
+    if [ "$mode" = "backend" ]; then
+        DEV_COMPOSE_FILE="docker-compose-dev-backend.yaml"
+        COMPOSE_CMD="docker compose -p deer-flow-dev -f $DEV_COMPOSE_FILE"
+    fi
+
     # DEER_FLOW_ROOT is referenced in docker-compose-dev.yaml; set it before
     # running compose down to suppress "variable is not set" warnings.
     if [ -z "$DEER_FLOW_ROOT" ]; then
@@ -399,7 +414,8 @@ main() {
             logs "$2"
             ;;
         stop)
-            stop
+            shift
+            stop "$@"
             ;;
         help|--help|-h|"")
             help
