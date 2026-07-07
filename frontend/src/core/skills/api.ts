@@ -61,3 +61,25 @@ export async function installSkill(
 
   return response.json();
 }
+export async function uploadSkill(file: File): Promise<InstallSkillResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${getBackendBaseURL()}/api/skills/custom`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage =
+      errorData.detail ?? `HTTP ${response.status}: ${response.statusText}`;
+    return {
+      success: false,
+      skill_name: "",
+      message: errorMessage,
+    };
+  }
+
+  return response.json();
+}

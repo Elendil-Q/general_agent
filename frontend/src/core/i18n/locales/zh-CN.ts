@@ -504,6 +504,9 @@ export const zhCN: Translations = {
       emptyDescription:
         "将你的 Agent Skill 文件夹放在 DeerFlow 根目录下的 `/skills/custom` 文件夹中。",
       emptyButton: "创建你的第一个技能",
+      uploadSkill: "上传技能",
+      uploadSuccess: "技能安装成功",
+      uploadError: "技能安装失败",
     },
     notification: {
       title: "通知",

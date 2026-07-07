@@ -1,8 +1,9 @@
 import json
 import logging
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from app.gateway.deps import get_config
@@ -123,6 +124,47 @@ async def install_skill(request: SkillInstallRequest, config: AppConfig = Depend
     except Exception as e:
         logger.error(f"Failed to install skill: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to install skill: {str(e)}")
+
+
+@router.post(
+    "/skills/custom",
+    response_model=SkillInstallResponse,
+    summary="Upload Custom Skill",
+    description="Upload and install a custom skill from a .skill file (ZIP archive).",
+)
+async def upload_custom_skill(
+    file: UploadFile = File(...),
+    config: AppConfig = Depends(get_config),
+) -> SkillInstallResponse:
+    try:
+        if not file.filename or not file.filename.endswith(".skill"):
+            raise HTTPException(status_code=400, detail="File must have .skill extension")
+
+        with tempfile.NamedTemporaryFile(suffix=".skill", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            content = await file.read()
+            tmp.write(content)
+
+        try:
+            result = await get_or_new_skill_storage(app_config=config).ainstall_skill_from_archive(tmp_path)
+            await refresh_skills_system_prompt_cache_async()
+            return SkillInstallResponse(**result)
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except SkillAlreadyExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload custom skill: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to upload custom skill: {str(e)}")
 
 
 @router.get("/skills/custom", response_model=SkillsListResponse, summary="List Custom Skills")

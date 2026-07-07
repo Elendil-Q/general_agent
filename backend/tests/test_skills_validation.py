@@ -107,14 +107,14 @@ class TestValidateSkillFrontmatter:
         assert valid is False
         assert "description" in msg.lower()
 
-    def test_unexpected_keys_rejected(self, tmp_path):
+    def test_unexpected_keys_ignored(self, tmp_path):
         skill_dir = _write_skill(
             tmp_path,
             "---\nname: my-skill\ndescription: test\ncustom-field: bad\n---\n\nBody\n",
         )
         valid, msg, _ = _validate_skill_frontmatter(skill_dir)
-        assert valid is False
-        assert "custom-field" in msg
+        assert valid is True
+        assert msg == "Skill is valid!"
 
     def test_name_must_be_hyphen_case(self, tmp_path):
         skill_dir = _write_skill(

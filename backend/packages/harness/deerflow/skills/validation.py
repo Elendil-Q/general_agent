@@ -47,10 +47,7 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
     except yaml.YAMLError as e:
         return False, f"Invalid YAML in frontmatter: {e}", None
 
-    # Check for unexpected properties
-    unexpected_keys = set(frontmatter.keys()) - ALLOWED_FRONTMATTER_PROPERTIES
-    if unexpected_keys:
-        return False, f"Unexpected key(s) in SKILL.md frontmatter: {', '.join(sorted(unexpected_keys))}", None
+    # Unknown frontmatter keys are silently ignored for forward compatibility.
 
     # Check required fields
     if "name" not in frontmatter:

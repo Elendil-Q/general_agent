@@ -525,6 +525,9 @@ export const enUS: Translations = {
       emptyDescription:
         "Put your agent skill folders under the `/skills/custom` folder under the root folder of DeerFlow.",
       emptyButton: "Create Your First Skill",
+      uploadSkill: "Upload skill",
+      uploadSuccess: "Skill installed successfully",
+      uploadError: "Skill installation failed",
     },
     notification: {
       title: "Notification",

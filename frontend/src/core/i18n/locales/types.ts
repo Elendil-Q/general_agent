@@ -431,6 +431,9 @@ export interface Translations {
       emptyTitle: string;
       emptyDescription: string;
       emptyButton: string;
+      uploadSkill: string;
+      uploadSuccess: string;
+      uploadError: string;
     };
     notification: {
       title: string;

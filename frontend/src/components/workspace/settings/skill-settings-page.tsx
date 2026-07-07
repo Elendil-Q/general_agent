@@ -1,8 +1,9 @@
 "use client";
 
-import { SparklesIcon } from "lucide-react";
+import { SparklesIcon, UploadIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -23,11 +24,13 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useI18n } from "@/core/i18n/hooks";
-import { useEnableSkill, useSkills } from "@/core/skills/hooks";
+import { useEnableSkill, useSkills, useUploadSkill } from "@/core/skills/hooks";
 import type { Skill } from "@/core/skills/type";
 import { env } from "@/env";
 
 import { SettingsSection } from "./settings-section";
+
+const MAX_SKILL_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 export function SkillSettingsPage({ onClose }: { onClose?: () => void } = {}) {
   const { t } = useI18n();
@@ -59,9 +62,40 @@ function SkillSettingsList({
   const router = useRouter();
   const [filter, setFilter] = useState<string>("public");
   const { mutate: enableSkill } = useEnableSkill();
+  const { mutateAsync: uploadSkill } = useUploadSkill();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const filteredSkills = useMemo(
     () => skills.filter((skill) => skill.category === filter),
     [skills, filter],
+  );
+  const handleUploadClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+  const handleFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (!file.name.endsWith(".skill")) {
+        toast.error(t.settings.skills.uploadError);
+        return;
+      }
+      if (file.size > MAX_SKILL_FILE_SIZE) {
+        toast.error(t.settings.skills.uploadError);
+        return;
+      }
+      try {
+        const result = await uploadSkill(file);
+        if (result.success) {
+          toast.success(t.settings.skills.uploadSuccess);
+          setFilter("custom");
+        } else {
+          toast.error(result.message || t.settings.skills.uploadError);
+        }
+      } catch {
+        toast.error(t.settings.skills.uploadError);
+      }
+    },
+    [t.settings.skills, uploadSkill],
   );
   const handleCreateSkill = () => {
     onClose?.();
@@ -70,6 +104,13 @@ function SkillSettingsList({
   return (
     <div className="flex w-full flex-col gap-4">
       <header className="flex justify-between">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".skill"
+          className="hidden"
+          onChange={handleFileChange}
+        />
         <div className="flex gap-2">
           <Tabs defaultValue="public" onValueChange={setFilter}>
             <TabsList variant="line">
@@ -78,7 +119,16 @@ function SkillSettingsList({
             </TabsList>
           </Tabs>
         </div>
-        <div>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleUploadClick}
+            disabled={env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true"}
+          >
+            <UploadIcon className="size-4" />
+            {t.settings.skills.uploadSkill}
+          </Button>
           <Button size="sm" onClick={handleCreateSkill}>
             <SparklesIcon className="size-4" />
             {t.settings.skills.createSkill}
