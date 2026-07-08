@@ -45,6 +45,19 @@ load_proxy_env_from_dotenv() {
     done
 }
 
+check_external_connectivity() {
+    # Probe external connectivity by attempting HTTPS connections to common
+    # public endpoints. Returns 0 if any target is reachable, 1 otherwise.
+    local targets="https://github.com https://pypi.org https://registry.npmjs.org"
+    local target
+    for target in $targets; do
+        if curl -s --connect-timeout 5 --max-time 8 -o /dev/null "$target" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 detect_sandbox_mode() {
     local config_file="$PROJECT_ROOT/config.yaml"
     local sandbox_use=""
@@ -280,8 +293,14 @@ start() {
 
     load_proxy_env_from_dotenv
 
-    echo "Building and starting containers..."
-    cd "$DOCKER_DIR" && $COMPOSE_CMD up --build -d --remove-orphans $services
+    if check_external_connectivity; then
+        echo "Building and starting containers..."
+        cd "$DOCKER_DIR" && $COMPOSE_CMD up --build -d --remove-orphans $services
+    else
+        echo -e "${YELLOW}No external network detected — skipping build, using local images only.${NC}"
+        echo "Starting containers from existing local images..."
+        cd "$DOCKER_DIR" && $COMPOSE_CMD up -d --remove-orphans $services
+    fi
     echo ""
     echo "=========================================="
     echo "  DeerFlow Docker is starting!"

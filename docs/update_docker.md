@@ -95,6 +95,8 @@ docker rm deer-flow-frontend-builder
 
 ## 方法三：基于 dev 镜像构建干净的 prod 镜像（推荐）
 
+**构建好的prod镜像同样可以作为源镜像来构建新的镜像，不一定非得通过dockerfile原始构建的dev镜像**
+
 dev 镜像和 prod 镜像共享 Dockerfile 里的 `base` 阶段（复制源码），但 dev 的 `install` 是在 `dev` 阶段跑的，prod 的 `install` 是在 `builder` 阶段跑的——两者是独立的层。所以如果你直接 `docker build --target prod`，改源码后 install 会重跑。
 
 最快的做法：**绕过 Dockerfile 多阶段，直接把 dev 镜像当作起点**，只补一个 `pnpm build`。
