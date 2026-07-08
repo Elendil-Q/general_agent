@@ -148,7 +148,11 @@ def build_tool_search_tool(catalog: DeferredToolCatalog) -> BaseTool:
         if not matched:
             content, names = f"No tools found matching: {query}", []
         else:
-            content = json.dumps([convert_to_openai_function(t) for t in matched], indent=2, ensure_ascii=False)
+            content = json.dumps(
+                [convert_to_openai_function(t) for t in matched],
+                indent=2,
+                ensure_ascii=False,
+            )
             names = [t.name for t in matched]
         return Command(
             update={
@@ -218,4 +222,4 @@ def get_deferred_tools_prompt_section(*, deferred_names: frozenset[str] = frozen
     if not deferred_names:
         return ""
     names = "\n".join(sorted(deferred_names))
-    return f"<available-deferred-tools>\n{names}\n</available-deferred-tools>"
+    return f"<available-deferred-tools>\nUse `tool_search` to query and activate these tools before calling them.\n{names}\n</available-deferred-tools>"

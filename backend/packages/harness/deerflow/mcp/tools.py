@@ -220,7 +220,10 @@ def _rewrite_unique_bare_filenames(
     unique = {name: paths[0] for name, paths in candidates.items() if len(set(paths)) == 1}
     if not unique:
         if candidates:
-            logger.debug("MCP bare filename rewrite skipped: no unique candidate in %s", sorted(candidates))
+            logger.debug(
+                "MCP bare filename rewrite skipped: no unique candidate in %s",
+                sorted(candidates),
+            )
         else:
             logger.debug("MCP bare filename rewrite skipped: no snapshot candidates")
         return text
@@ -329,9 +332,19 @@ def _convert_call_tool_result(
     tree are left untouched.
     """
     from langchain_core.messages import ToolMessage
-    from langchain_core.messages.content import create_file_block, create_image_block, create_text_block
+    from langchain_core.messages.content import (
+        create_file_block,
+        create_image_block,
+        create_text_block,
+    )
     from langchain_core.tools import ToolException
-    from mcp.types import EmbeddedResource, ImageContent, ResourceLink, TextContent, TextResourceContents
+    from mcp.types import (
+        EmbeddedResource,
+        ImageContent,
+        ResourceLink,
+        TextContent,
+        TextResourceContents,
+    )
 
     # Pass ToolMessage through directly (interceptor short-circuit).
     if isinstance(call_tool_result, ToolMessage):
@@ -489,7 +502,10 @@ def _make_session_pool_tool(
                     if isinstance(request.headers, Mapping):
                         call_kwargs["meta"] = {"headers": dict(request.headers)}
                     else:
-                        logger.warning("Ignoring MCP interceptor headers with unsupported type: %s", type(request.headers).__name__)
+                        logger.warning(
+                            "Ignoring MCP interceptor headers with unsupported type: %s",
+                            type(request.headers).__name__,
+                        )
                 return await session.call_tool(request.name, request.args, **call_kwargs)
 
             handler = base_handler
@@ -617,6 +633,7 @@ async def get_mcp_tools() -> list[BaseTool]:
 
         async def load_server_tools(server_name: str) -> list[BaseTool]:
             try:
+                # 获取某个server的工具列表，每个tool的名称为 [server_name]_[tool_name]
                 return await client.get_tools(server_name=server_name)
             except Exception as e:
                 logger.warning(
@@ -646,7 +663,14 @@ async def get_mcp_tools() -> list[BaseTool]:
             if tool_server is not None:
                 transport = servers_config[tool_server].get("transport", "stdio")
                 if transport == "stdio":
-                    wrapped_tools.append(_make_session_pool_tool(tool, tool_server, servers_config[tool_server], tool_interceptors))
+                    wrapped_tools.append(
+                        _make_session_pool_tool(
+                            tool,
+                            tool_server,
+                            servers_config[tool_server],
+                            tool_interceptors,
+                        )
+                    )
                 else:
                     wrapped_tools.append(tool)
             else:

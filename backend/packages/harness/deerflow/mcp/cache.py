@@ -94,16 +94,18 @@ def get_cached_mcp_tools() -> list[BaseTool]:
     """
     global _cache_initialized
 
-    # Check if cache is stale due to config file changes
+    # 根据extensions_config.json的修改时间判断缓存是否过期，如果过期则重置缓存
     if _is_cache_stale():
         logger.info("MCP cache is stale, resetting for re-initialization...")
         reset_mcp_tools_cache()
 
+    # 如果需要加载/更新MCP工具
     if not _cache_initialized:
         logger.info("MCP tools not initialized, performing lazy initialization...")
         try:
             # Try to initialize in the current event loop
             loop = asyncio.get_event_loop()
+            # 如果当前事件循环在运行，将initialize_mcp_tools()提交到新线程中运行，以避免阻塞当前循环
             if loop.is_running():
                 # If loop is already running (e.g., in LangGraph Studio),
                 # we need to create a new loop in a thread

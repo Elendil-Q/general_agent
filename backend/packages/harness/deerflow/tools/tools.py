@@ -6,7 +6,12 @@ from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
 from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
-from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, task_tool, view_image_tool
+from deerflow.tools.builtins import (
+    ask_clarification_tool,
+    present_file_tool,
+    task_tool,
+    view_image_tool,
+)
 from deerflow.tools.mcp_metadata import tag_mcp_tool
 from deerflow.tools.sync import make_sync_tool_wrapper
 
@@ -142,7 +147,9 @@ def get_available_tools(
     # Add invoke_acp_agent tool if any ACP agents are configured
     acp_tools: list[BaseTool] = []
     try:
-        from deerflow.tools.builtins.invoke_acp_agent_tool import build_invoke_acp_agent_tool
+        from deerflow.tools.builtins.invoke_acp_agent_tool import (
+            build_invoke_acp_agent_tool,
+        )
 
         if app_config is None:
             from deerflow.config.acp_config import get_acp_agents
