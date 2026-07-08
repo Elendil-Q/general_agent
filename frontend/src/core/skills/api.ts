@@ -83,3 +83,78 @@ export async function uploadSkill(file: File): Promise<InstallSkillResponse> {
 
   return response.json();
 }
+
+// --- Custom skill editing ---
+
+export interface CustomSkillContent {
+  name: string;
+  description: string;
+  license: string | null;
+  category: string;
+  enabled: boolean;
+  content: string;
+}
+
+export async function getCustomSkill(
+  name: string,
+): Promise<CustomSkillContent> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/skills/custom/${name}`,
+  );
+  if (!response.ok) {
+    throw new Error(
+      (await response.json().catch(() => ({}))).detail ??
+        "Failed to load skill content",
+    );
+  }
+  return response.json();
+}
+
+export async function updateCustomSkill(
+  name: string,
+  content: string,
+): Promise<CustomSkillContent> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/skills/custom/${name}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      (await response.json().catch(() => ({}))).detail ??
+        "Failed to update skill",
+    );
+  }
+  return response.json();
+}
+
+export async function deleteCustomSkill(
+  name: string,
+): Promise<{ success: boolean }> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/skills/custom/${name}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) {
+    throw new Error(
+      (await response.json().catch(() => ({}))).detail ??
+        "Failed to delete skill",
+    );
+  }
+  return response.json();
+}
+
+export async function getPublicSkill(
+  name: string,
+): Promise<{ content: string }> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/skills/public/${encodeURIComponent(name)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return response.json();
+}

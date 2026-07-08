@@ -434,6 +434,14 @@ export interface Translations {
       uploadSkill: string;
       uploadSuccess: string;
       uploadError: string;
+      editSkill: string;
+      deleteSkill: string;
+      saveSkill: string;
+      deleteConfirmTitle: string;
+      deleteConfirmDescription: string;
+      updateSuccess: string;
+      viewSkill: string;
+      deleteSuccess: string;
     };
     notification: {
       title: string;
@@ -481,6 +489,9 @@ export interface Translations {
     password: string;
     passwordPlaceholder: string;
     pleaseWait: string;
+    signingIn: string;
+    creatingAccount: string;
+    creatingAdmin: string;
     signIn: string;
     createAccount: string;
     createAdminAccount: string;

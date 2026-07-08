@@ -258,24 +258,6 @@ async def delete_custom_skill(skill_name: str, config: AppConfig = Depends(get_c
         raise HTTPException(status_code=500, detail=f"Failed to delete custom skill: {str(e)}")
 
 
-@router.get("/skills/public/{skill_name}", summary="Get Public Skill Content")
-async def get_public_skill(skill_name: str, config: AppConfig = Depends(get_config)) -> dict[str, str]:
-    try:
-        skill_name = skill_name.replace("\r\n", "").replace("\n", "")
-        storage = get_or_new_skill_storage(app_config=config)
-        skills = storage.load_skills(enabled_only=False)
-        skill = next((s for s in skills if s.name == skill_name and s.category == SkillCategory.PUBLIC), None)
-        if skill is None:
-            raise HTTPException(status_code=404, detail=f"Public skill '{skill_name}' not found")
-        content = skill.skill_file.read_text(encoding="utf-8")
-        return {"content": content}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Failed to read public skill %s: %s", skill_name, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to read public skill: {str(e)}")
-
-
 @router.get("/skills/custom/{skill_name}/history", response_model=CustomSkillHistoryResponse, summary="Get Custom Skill History")
 async def get_custom_skill_history(skill_name: str, config: AppConfig = Depends(get_config)) -> CustomSkillHistoryResponse:
     try:

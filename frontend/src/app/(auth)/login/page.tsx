@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -190,14 +190,16 @@ export default function LoginPage() {
             const authError = parseAuthError(data);
             setError(authError.message);
           }
+          setLoading(false);
           return;
         }
 
         // /initialize sets the session cookie — go to workspace.
-        router.push(redirectPath);
+        // Keep loading=true so the spinner stays visible until the page
+        // unmounts during navigation — no finally block here.
+        void router.push(redirectPath);
       } catch {
         setError(t.login.networkError);
-      } finally {
         setLoading(false);
       }
       return;
@@ -237,14 +239,16 @@ export default function LoginPage() {
         if (isLogin && ssoProviders.length > 0) {
           setShowSsoHint(true);
         }
+        setLoading(false);
         return;
       }
 
       // Both login and register set a cookie — redirect to workspace
-      router.push(redirectPath);
+      // Keep loading=true so the spinner stays visible until the page
+      // unmounts during navigation — no finally block here.
+      void router.push(redirectPath);
     } catch {
       setError(t.login.networkError);
-    } finally {
       setLoading(false);
     }
   };
@@ -357,8 +361,13 @@ export default function LoginPage() {
           )}
 
           <Button type="submit" className="w-full" disabled={loading}>
+            {loading && <Loader2 className="animate-spin" />}
             {loading
-              ? t.login.pleaseWait
+              ? adminSetupMode
+                ? t.login.creatingAdmin
+                : isLogin
+                  ? t.login.signingIn
+                  : t.login.creatingAccount
               : adminSetupMode
                 ? t.login.createAdminAccount
                 : isLogin
@@ -434,12 +443,6 @@ export default function LoginPage() {
             </button>
           </div>
         )}
-
-        <div className="text-muted-foreground text-center text-xs">
-          <Link href="/" className="hover:underline">
-            {t.login.backToHome}
-          </Link>
-        </div>
       </div>
     </div>
   );
