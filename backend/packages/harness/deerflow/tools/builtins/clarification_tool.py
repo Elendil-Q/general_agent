@@ -26,15 +26,14 @@ def ask_clarification_tool(
 
     Choose the interaction mode that best fits the question:
 
-    - **single_choice**: The user picks one option from ``options``. Use when the
-      answer is one of a small known set. Always also lets the user type a custom
-      answer ("other").
+    - **single_choice**: The user picks one option from ``options``. Use when the answer is one of a small known set.
     - **multi_choice**: The user picks zero or more options from ``options``.
-      Always also lets the user add a custom free-form supplement.
     - **text**: The user types free-form text. Use when no preset options apply.
     - **free**: Open-ended clarification that ends the current turn — the user
       replies in their next message. Use for complex, multi-part questions that
       a simple form cannot capture.
+
+    Both single_choice and multi_choice mode remain a fillin form for custom input.
 
     Args:
         question: The clarification question to ask the user. Be specific and clear.
