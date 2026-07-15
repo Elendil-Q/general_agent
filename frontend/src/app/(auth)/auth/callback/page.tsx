@@ -51,7 +51,7 @@ export default function AuthCallbackPage() {
   }, [doAuthCheck]);
 
   return (
-    <div className="bg-background relative flex min-h-screen items-center justify-center">
+    <div className="bg-background relative flex min-h-dvh items-center justify-center">
       <div className="text-center">
         {status === "loading" && (
           <>

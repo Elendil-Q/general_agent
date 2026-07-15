@@ -230,8 +230,18 @@ export default function ChatPage() {
               <ArtifactTrigger />
             </div>
           </header>
-          <main className="flex min-h-0 max-w-full grow flex-col">
-            <div className="flex min-h-0 flex-1 justify-center">
+          <main
+            className={cn(
+              "min-h-0 max-w-full grow flex-col",
+              isWelcomeMode ? "flex overflow-y-auto" : "flex",
+            )}
+          >
+            <div
+              className={cn(
+                "flex min-h-0 flex-1 justify-center",
+                isWelcomeMode && "hidden",
+              )}
+            >
               <MessageList
                 className={cn("size-full", !isWelcomeMode && "pt-10")}
                 threadId={threadId}
@@ -254,19 +264,20 @@ export default function ChatPage() {
             <div
               className={cn(
                 "right-0 bottom-0 left-0 z-30 flex justify-center px-3 sm:px-4",
-                isWelcomeMode ? "absolute" : "relative shrink-0 pb-4",
+                isWelcomeMode
+                  ? "my-auto flex-col items-center py-10"
+                  : "relative shrink-0 pb-4",
               )}
             >
               <div
                 className={cn(
                   "relative w-full",
-                  isWelcomeMode &&
-                    "-translate-y-[calc(50vh-48px)] sm:-translate-y-[calc(50vh-96px)]",
                   isWelcomeMode
                     ? "max-w-(--container-width-sm)"
                     : "max-w-(--container-width-md)",
                 )}
               >
+                {isWelcomeMode && <Welcome effort={settings.context.effort} />}
                 {hasTodos && (
                   <div
                     className={cn(
@@ -290,10 +301,7 @@ export default function ChatPage() {
                 )}
                 {mountedRef.current ? (
                   <InputBox
-                    className={cn(
-                      "bg-background/5 w-full",
-                      isWelcomeMode && "-translate-y-2 sm:-translate-y-4",
-                    )}
+                    className="bg-background/5 w-full"
                     isWelcomeMode={isWelcomeMode}
                     threadId={threadId}
                     autoFocus={isWelcomeMode}
@@ -305,11 +313,6 @@ export default function ChatPage() {
                           : "ready"
                     }
                     context={settings.context}
-                    extraHeader={
-                      isWelcomeMode && (
-                        <Welcome effort={settings.context.effort} />
-                      )
-                    }
                     disabled={
                       isMock ||
                       env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
@@ -324,10 +327,7 @@ export default function ChatPage() {
                 ) : (
                   <div
                     aria-hidden="true"
-                    className={cn(
-                      "bg-background/5 h-32 w-full rounded-2xl",
-                      isWelcomeMode && "-translate-y-2 sm:-translate-y-4",
-                    )}
+                    className="bg-background/5 h-32 w-full rounded-2xl"
                   />
                 )}
                 {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (

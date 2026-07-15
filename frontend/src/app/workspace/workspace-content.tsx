@@ -15,6 +15,15 @@ function parseSidebarOpenCookie(
   return undefined;
 }
 
+function parseSidebarWidthCookie(
+  value: string | undefined,
+): number | undefined {
+  if (!value) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  return n;
+}
+
 export async function WorkspaceContent({
   children,
   gatewayUnavailable = false,
@@ -26,10 +35,17 @@ export async function WorkspaceContent({
   const initialSidebarOpen = parseSidebarOpenCookie(
     cookieStore.get("sidebar_state")?.value,
   );
+  const initialSidebarWidth = parseSidebarWidthCookie(
+    cookieStore.get("sidebar_width")?.value,
+  );
 
   return (
     <QueryClientProvider>
-      <SidebarProvider className="h-screen" defaultOpen={initialSidebarOpen}>
+      <SidebarProvider
+        className="h-dvh"
+        defaultOpen={initialSidebarOpen}
+        defaultWidth={initialSidebarWidth}
+      >
         <WorkspaceSidebar />
         <SidebarInset className="min-w-0">
           <GatewayOfflineBanner gatewayUnavailable={gatewayUnavailable} />

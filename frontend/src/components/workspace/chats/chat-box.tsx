@@ -112,6 +112,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
       id={`${resizableIdBase}-panels`}
       orientation="horizontal"
       defaultLayout={{ chat: 100, artifacts: 0 }}
+      resizeTargetMinimumSize={{ coarse: 0, fine: 0 }}
       groupRef={layoutRef}
     >
       <ResizablePanel className="relative" defaultSize={100} id="chat">
@@ -119,6 +120,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
       </ResizablePanel>
       <ResizableHandle
         id={`${resizableIdBase}-separator`}
+        disabled
         className={cn(
           "opacity-33 hover:opacity-100",
           !artifactPanelOpen && "pointer-events-none opacity-0",

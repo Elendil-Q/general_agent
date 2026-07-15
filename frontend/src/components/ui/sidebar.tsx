@@ -27,9 +27,12 @@ import {
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
-const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "18rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
+const SIDEBAR_WIDTH_COOKIE_NAME = "sidebar_width";
+const SIDEBAR_DEFAULT_WIDTH_PX = 256;
+const SIDEBAR_MIN_WIDTH_PX = 192;
+const SIDEBAR_MAX_WIDTH_PX = 480;
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
 
 type SidebarContextProps = {
@@ -40,6 +43,10 @@ type SidebarContextProps = {
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
   toggleSidebar: () => void;
+  sidebarWidth: number;
+  setSidebarWidth: (value: number | ((value: number) => number)) => void;
+  isResizing: boolean;
+  setIsResizing: (value: boolean) => void;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -55,6 +62,7 @@ function useSidebar() {
 
 function SidebarProvider({
   defaultOpen = true,
+  defaultWidth,
   open: openProp,
   onOpenChange: setOpenProp,
   className,
@@ -63,6 +71,7 @@ function SidebarProvider({
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
+  defaultWidth?: number;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
@@ -87,6 +96,38 @@ function SidebarProvider({
     },
     [setOpenProp, open],
   );
+
+  // Sidebar width (in px) for drag-to-resize support on SidebarRail.
+  // State is purely client-side; the sidebar_width cookie is hydrated
+  // server-side via the `defaultWidth` prop (see WorkspaceContent).
+  const [_sidebarWidth, _setSidebarWidth] = React.useState(
+    defaultWidth ?? SIDEBAR_DEFAULT_WIDTH_PX,
+  );
+  const setSidebarWidth = React.useCallback(
+    (value: number | ((value: number) => number)) => {
+      const next = typeof value === "function" ? value(_sidebarWidth) : value;
+      const clamped = Math.max(
+        SIDEBAR_MIN_WIDTH_PX,
+        Math.min(SIDEBAR_MAX_WIDTH_PX, next),
+      );
+      _setSidebarWidth(clamped);
+    },
+    [_sidebarWidth],
+  );
+
+  // Persist the width to a cookie — debounced so the fast-firing drag
+  // updates don't write a cookie on every mousemove.
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      document.cookie = `${SIDEBAR_WIDTH_COOKIE_NAME}=${_sidebarWidth}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [_sidebarWidth]);
+
+  // While dragging the SidebarRail, we disable the sidebar width
+  // transition (see globals.css) so the sidebar tracks the cursor
+  // without lag.
+  const [isResizing, setIsResizing] = React.useState(false);
 
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
@@ -122,8 +163,23 @@ function SidebarProvider({
       openMobile,
       setOpenMobile,
       toggleSidebar,
+      sidebarWidth: _sidebarWidth,
+      setSidebarWidth,
+      isResizing,
+      setIsResizing,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar],
+    [
+      state,
+      open,
+      setOpen,
+      isMobile,
+      openMobile,
+      setOpenMobile,
+      toggleSidebar,
+      _sidebarWidth,
+      setSidebarWidth,
+      isResizing,
+    ],
   );
 
   return (
@@ -131,9 +187,10 @@ function SidebarProvider({
       <TooltipProvider delayDuration={0}>
         <div
           data-slot="sidebar-wrapper"
+          data-resizing={isResizing ? "true" : "false"}
           style={
             {
-              "--sidebar-width": SIDEBAR_WIDTH,
+              "--sidebar-width": `${_sidebarWidth}px`,
               "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
               ...style,
             } as React.CSSProperties
@@ -280,20 +337,76 @@ function SidebarTrigger({
 }
 
 function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
-  const { toggleSidebar } = useSidebar();
+  const {
+    isMobile,
+    open,
+    setOpen,
+    sidebarWidth,
+    setSidebarWidth,
+    isResizing,
+    setIsResizing,
+  } = useSidebar();
+
+  // Drag the rail to resize the sidebar (the toggle was previously a click
+  // that flipped the sidebar between expanded/icon modes). Resizing the
+  // sidebar updates `--sidebar-width` in pixels, persisted via a cookie for
+  // SSR. While dragging we mark `data-resizing=true` on the wrapper so the
+  // width transition is disabled (see globals.css); the sidebar tracks the
+  // cursor without lag.
+  const startResizing = React.useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (isMobile) return;
+      event.preventDefault();
+
+      const sidebarEl = event.currentTarget.closest(
+        "[data-slot=sidebar]",
+      ) as HTMLElement | null;
+      const side =
+        (sidebarEl?.getAttribute("data-side") as "left" | "right") || "left";
+
+      // Ensure the sidebar is expanded so the drag tracks the visible
+      // width rather than the icon-mode width.
+      if (!open) {
+        setOpen(true);
+      }
+
+      const startX = event.clientX;
+      const startWidth = sidebarWidth;
+      let dragging = true;
+      setIsResizing(true);
+
+      const onMove = (moveEvent: MouseEvent) => {
+        if (!dragging) return;
+        const delta = moveEvent.clientX - startX;
+        const next = side === "right" ? startWidth - delta : startWidth + delta;
+        setSidebarWidth(next);
+      };
+
+      const onUp = () => {
+        dragging = false;
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        setIsResizing(false);
+      };
+
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [isMobile, open, setOpen, sidebarWidth, setSidebarWidth, setIsResizing],
+  );
 
   return (
     <button
       data-sidebar="rail"
       data-slot="sidebar-rail"
-      aria-label="Toggle Sidebar"
+      aria-label="Resize Sidebar"
       tabIndex={-1}
-      onClick={toggleSidebar}
-      title="Toggle Sidebar"
+      onMouseDown={startResizing}
+      data-resizing={isResizing ? "true" : "false"}
+      title="Drag to resize"
       className={cn(
         "hover:after:bg-sidebar-border absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] sm:flex",
         "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
-        "[[data-side=left][data-state=collapsed]_&]:cursor-e-resize [[data-side=right][data-state=collapsed]_&]:cursor-w-resize",
         "hover:group-data-[collapsible=offcanvas]:bg-sidebar group-data-[collapsible=offcanvas]:translate-x-0 group-data-[collapsible=offcanvas]:after:left-full",
         "[[data-side=left][data-collapsible=offcanvas]_&]:-right-2",
         "[[data-side=right][data-collapsible=offcanvas]_&]:-left-2",

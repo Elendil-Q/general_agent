@@ -256,7 +256,7 @@ export default function LoginPage() {
   const actualTheme = theme === "system" ? resolvedTheme : theme;
 
   return (
-    <div className="bg-background relative flex min-h-screen items-center justify-center overflow-x-hidden overflow-y-auto">
+    <div className="bg-background relative flex min-h-dvh items-center justify-center overflow-x-hidden overflow-y-auto">
       <DeerGridBg
         className="absolute inset-0 z-0"
         color={actualTheme === "dark" ? "white" : "black"}

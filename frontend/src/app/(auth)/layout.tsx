@@ -36,7 +36,7 @@ export default async function AuthLayout({
       // previously locked users out without any logout/retry capability.
       return (
         <GatewayOfflineFallback renderBanner>
-          <div className="flex h-screen flex-col items-center justify-center gap-4">
+          <div className="flex h-dvh flex-col items-center justify-center gap-4">
             <p className="text-muted-foreground">
               Service temporarily unavailable.
             </p>

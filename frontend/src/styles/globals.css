@@ -532,3 +532,16 @@
   --container-width-md: calc(var(--spacing) * 204);
   --container-width-lg: calc(var(--spacing) * 256);
 }
+
+/*
+ * While the sidebar is being resized (Dragging the SidebarRail), the
+ * sidebar width updates rapidly each mousemove. The normal width
+ * transition would lag behind the cursor by its full duration; suppress it
+ * so the sidebar tracks the pointer. Scoped via the `data-resizing`
+ * attribute that SidebarProvider toggles while the rail is being dragged.
+ */
+[data-slot="sidebar-wrapper"][data-resizing="true"] [data-slot="sidebar-gap"],
+[data-slot="sidebar-wrapper"][data-resizing="true"]
+  [data-slot="sidebar-container"] {
+  transition: none !important;
+}

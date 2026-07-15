@@ -19,7 +19,7 @@ export default async function RootEntryPage() {
   // Static demo build keeps its marketing landing page.
   if (isStaticWebsiteOnly()) {
     return (
-      <div className="min-h-screen w-full bg-[#0a0a0a]">
+      <div className="min-h-dvh w-full bg-[#0a0a0a]">
         <Header />
         <main className="flex w-full flex-col">
           <Hero />
@@ -57,7 +57,7 @@ export default async function RootEntryPage() {
     case "gateway_unavailable":
       return (
         <GatewayOfflineFallback renderBanner>
-          <div className="flex h-screen flex-col items-center justify-center gap-4">
+          <div className="flex h-dvh flex-col items-center justify-center gap-4">
             <p className="text-muted-foreground">
               Service temporarily unavailable.
             </p>

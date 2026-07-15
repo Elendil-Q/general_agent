@@ -154,7 +154,7 @@ export default function SetupPage() {
 
   if (mode === "loading") {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-dvh items-center justify-center">
         <p className="text-muted-foreground text-sm">Loading…</p>
       </div>
     );
@@ -163,7 +163,7 @@ export default function SetupPage() {
   // ── Admin initialization form ──────────────────────────────────────
   if (mode === "init_admin") {
     return (
-      <div className="bg-background flex min-h-screen items-center justify-center">
+      <div className="bg-background flex min-h-dvh items-center justify-center">
         <DeerGridBg
           className="absolute inset-0 z-0"
           color={actualTheme === "dark" ? "white" : "black"}
@@ -247,7 +247,7 @@ export default function SetupPage() {
 
   // ── Change-password form (needs_setup after login) ─────────────────
   return (
-    <div className="bg-background flex min-h-screen items-center justify-center">
+    <div className="bg-background flex min-h-dvh items-center justify-center">
       <DeerGridBg
         className="absolute inset-0 z-0"
         color={actualTheme === "dark" ? "white" : "black"}
