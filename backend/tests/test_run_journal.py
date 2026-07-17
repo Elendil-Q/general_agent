@@ -997,3 +997,97 @@ class TestChatModelStartHumanMessage:
         j.on_chat_model_start({}, [], run_id=uuid4(), tags=["lead_agent"])
         await j.flush()
         assert j._first_human_msg is None
+
+
+class TestChatModelStartSystemPrompt:
+    """Tests for on_chat_model_start capturing the system prompt once per run."""
+
+    @pytest.mark.anyio
+    async def test_captures_lead_agent_system_prompt(self, journal_setup):
+        """The first lead-agent SystemMessage is captured as last_system_prompt."""
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        j, _store = journal_setup
+        j.on_chat_model_start(
+            {},
+            [[SystemMessage(content="You are a helpful assistant."), HumanMessage(content="Hi")]],
+            run_id=uuid4(),
+            tags=["lead_agent"],
+        )
+        await j.flush()
+
+        data = j.get_completion_data()
+        assert data["last_system_prompt"] == "You are a helpful assistant."
+        assert data["last_system_prompt_caller"] == "lead_agent"
+        assert data["last_system_prompt_call_index"] == 1
+        assert data["last_system_prompt_captured_at"] is not None
+
+    @pytest.mark.anyio
+    async def test_only_first_lead_agent_call_is_captured(self, journal_setup):
+        """Subsequent lead-agent calls do not overwrite the first capture."""
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        j, _store = journal_setup
+        j.on_chat_model_start(
+            {},
+            [[SystemMessage(content="First prompt"), HumanMessage(content="Hi")]],
+            run_id=uuid4(),
+            tags=["lead_agent"],
+        )
+        j.on_chat_model_start(
+            {},
+            [[SystemMessage(content="Second prompt"), HumanMessage(content="Again")]],
+            run_id=uuid4(),
+            tags=["lead_agent"],
+        )
+        await j.flush()
+
+        assert j.get_completion_data()["last_system_prompt"] == "First prompt"
+
+    @pytest.mark.anyio
+    async def test_middleware_calls_do_not_capture_system_prompt(self, journal_setup):
+        """Middleware/subagent LLM calls are skipped for the system-prompt capture."""
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        j, _store = journal_setup
+        j.on_chat_model_start(
+            {},
+            [[SystemMessage(content="Classifier prompt"), HumanMessage(content="x")]],
+            run_id=uuid4(),
+            tags=["middleware:classifier"],
+        )
+        await j.flush()
+
+        assert j.get_completion_data()["last_system_prompt"] is None
+
+    @pytest.mark.anyio
+    async def test_no_system_message_leaves_capture_unset(self, journal_setup):
+        """A lead-agent call with no SystemMessage captures nothing."""
+        from langchain_core.messages import HumanMessage
+
+        j, _store = journal_setup
+        j.on_chat_model_start(
+            {},
+            [[HumanMessage(content="Hi")]],
+            run_id=uuid4(),
+            tags=["lead_agent"],
+        )
+        await j.flush()
+
+        assert j.get_completion_data()["last_system_prompt"] is None
+
+    @pytest.mark.anyio
+    async def test_multiple_system_messages_are_concatenated(self, journal_setup):
+        """Coalesced/few-shot SystemMessages are joined into one captured prompt."""
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        j, _store = journal_setup
+        j.on_chat_model_start(
+            {},
+            [[SystemMessage(content="Base prompt."), SystemMessage(content="Reminder."), HumanMessage(content="Hi")]],
+            run_id=uuid4(),
+            tags=["lead_agent"],
+        )
+        await j.flush()
+
+        assert j.get_completion_data()["last_system_prompt"] == "Base prompt.\n\nReminder."

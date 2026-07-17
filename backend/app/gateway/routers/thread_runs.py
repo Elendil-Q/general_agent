@@ -144,6 +144,25 @@ class ThreadTokenUsageResponse(BaseModel):
     by_caller: ThreadTokenUsageCallerBreakdown = Field(default_factory=ThreadTokenUsageCallerBreakdown)
 
 
+class ThreadSystemPromptResponse(BaseModel):
+    """Most recently captured lead-agent system prompt for a thread.
+
+    Backs the frontend "System Prompt" debug button. ``system_prompt`` is the
+    full, untruncated prompt the provider actually received (static prompt +
+    dynamic-context reminders, merged by the coalescing middleware), captured
+    once per user-turn from the first lead-agent LLM call. ``None`` fields mean
+    no run has captured a prompt yet.
+    """
+
+    thread_id: str
+    system_prompt: str | None = None
+    caller: str | None = None
+    model_name: str | None = None
+    captured_at: str | None = None
+    run_id: str | None = None
+    llm_call_index: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -761,6 +780,36 @@ async def thread_token_usage(
     else:
         agg = await run_store.aggregate_tokens_by_thread(thread_id)
     return ThreadTokenUsageResponse(thread_id=thread_id, **agg)
+
+
+@router.get("/{thread_id}/system-prompt", response_model=ThreadSystemPromptResponse)
+@require_permission("threads", "read", owner_check=True)
+async def thread_system_prompt(
+    thread_id: str,
+    request: Request,
+) -> ThreadSystemPromptResponse:
+    """Most recently captured lead-agent system prompt for a thread.
+
+    Returns the full, untruncated system prompt the provider actually received
+    for the newest run that reached a lead-agent LLM call. Used by the frontend
+    "System Prompt" debug button. When no run has captured a prompt yet (e.g.
+    a fresh thread before the first model response), only ``thread_id`` is
+    populated and every other field is ``None``.
+    """
+    run_store = get_run_store(request)
+    user_id = await get_current_user(request)
+    row = await run_store.get_last_system_prompt(thread_id, user_id=user_id)
+    if row is None:
+        return ThreadSystemPromptResponse(thread_id=thread_id)
+    return ThreadSystemPromptResponse(
+        thread_id=thread_id,
+        system_prompt=row.get("system_prompt"),
+        caller=row.get("caller"),
+        model_name=row.get("model_name"),
+        captured_at=row.get("captured_at"),
+        run_id=row.get("run_id"),
+        llm_call_index=row.get("llm_call_index"),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -370,6 +370,20 @@ export const zhCN: Translations = {
     removeTodo: (content: string) => `移除 To-do：${content}`,
   },
 
+  systemPrompt: {
+    title: "系统提示词",
+    label: "系统提示词",
+    copy: "复制",
+    copied: "已复制",
+    triggerHint: "请先触发一次对话以查看系统提示词。",
+    caller: "调用者",
+    model: "模型",
+    capturedAt: "捕获时间",
+    callIndex: "LLM 调用",
+    wrap: "自动换行",
+    unwrap: "不换行",
+  },
+
   // Shortcuts
   shortcuts: {
     searchActions: "搜索操作...",

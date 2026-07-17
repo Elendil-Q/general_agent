@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Index, String, Text, text
+from sqlalchemy import JSON, DateTime, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
@@ -43,6 +43,13 @@ class RunRow(Base):
 
     # Follow-up association
     follow_up_to_run_id: Mapped[str | None] = mapped_column(String(64))
+
+    # System prompt inspection (captured once per run from the first lead-agent
+    # LLM call; the full, untruncated prompt is stored for the debug button).
+    last_system_prompt: Mapped[str | None] = mapped_column(Text)
+    last_system_prompt_caller: Mapped[str | None] = mapped_column(String(64))
+    last_system_prompt_call_index: Mapped[int | None] = mapped_column(Integer)
+    last_system_prompt_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))

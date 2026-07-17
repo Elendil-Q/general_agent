@@ -255,14 +255,15 @@ class DeerFlowClient:
                 custom_middlewares=self._middlewares,
                 app_config=self._app_config,
                 deferred_setup=deferred_setup,
+                system_prompt=apply_prompt_template(
+                    subagent_enabled=subagent_enabled,
+                    max_concurrent_subagents=max_concurrent_subagents,
+                    agent_name=self._agent_name,
+                    available_skills=self._available_skills,
+                    deferred_names=deferred_setup.deferred_names,
+                ),
             ),
-            "system_prompt": apply_prompt_template(
-                subagent_enabled=subagent_enabled,
-                max_concurrent_subagents=max_concurrent_subagents,
-                agent_name=self._agent_name,
-                available_skills=self._available_skills,
-                deferred_names=deferred_setup.deferred_names,
-            ),
+            "system_prompt": None,
             "state_schema": ThreadState,
         }
         checkpointer = self._checkpointer

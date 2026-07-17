@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import Command
 
 from deerflow.utils.messages import message_to_text
@@ -93,6 +93,13 @@ class RunJournal(BaseCallbackHandler):
         self._msg_count = 0
         self._had_llm_error_fallback = False
         self._llm_error_fallback_message: str | None = None
+
+        # System prompt inspection: captured once per run from the first
+        # lead-agent LLM call, persisted to RunRow for the debug button.
+        self._last_system_prompt: str | None = None
+        self._last_system_prompt_caller: str | None = None
+        self._last_system_prompt_call_index: int | None = None
+        self._last_system_prompt_captured_at: datetime | None = None
 
         # Latency tracking
         self._llm_start_times: dict[str, float] = {}  # langchain run_id -> start time
@@ -214,6 +221,29 @@ class RunJournal(BaseCallbackHandler):
                         break
                 if self._first_human_msg:
                     break
+
+        # Capture the system prompt actually sent to the LLM, once per run,
+        # from the first lead-agent model call. The coalescing middleware has
+        # already merged every SystemMessage (static prompt + dynamic context
+        # reminders) into a single leading block by the time on_chat_model_start
+        # fires, so scanning each batch's SystemMessages reconstructs the exact
+        # payload the provider received. Subsequent calls in the same run are
+        # skipped: the prompt rarely changes within a turn, and one capture per
+        # user submission keeps RunRow writes minimal.
+        if caller == "lead_agent" and self._last_system_prompt is None:
+            system_parts: list[str] = []
+            for batch in messages:
+                for m in batch:
+                    if isinstance(m, SystemMessage):
+                        text = self._message_text(m)
+                        if text:
+                            system_parts.append(text)
+            if system_parts:
+                self._last_system_prompt = "\n\n".join(system_parts)
+                self._last_system_prompt_caller = caller
+                self._last_system_prompt_call_index = self._llm_call_index
+                self._last_system_prompt_captured_at = datetime.now(UTC)
+                self._schedule_progress_flush()
 
     def on_llm_start(self, serialized: dict, prompts: list[str], *, run_id: UUID, parent_run_id: UUID | None = None, tags: list[str] | None = None, metadata: dict[str, Any] | None = None, **kwargs: Any) -> None:
         # Fallback: on_chat_model_start is preferred. This just tracks latency.
@@ -610,6 +640,10 @@ class RunJournal(BaseCallbackHandler):
             "message_count": self._msg_count,
             "last_ai_message": self._last_ai_msg,
             "first_human_message": self._first_human_msg,
+            "last_system_prompt": self._last_system_prompt,
+            "last_system_prompt_caller": self._last_system_prompt_caller,
+            "last_system_prompt_call_index": self._last_system_prompt_call_index,
+            "last_system_prompt_captured_at": self._last_system_prompt_captured_at,
         }
 
     @property

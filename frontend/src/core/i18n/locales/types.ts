@@ -303,6 +303,20 @@ export interface Translations {
     removeTodo: (content: string) => string;
   };
 
+  systemPrompt: {
+    title: string;
+    label: string;
+    copy: string;
+    copied: string;
+    triggerHint: string;
+    caller: string;
+    model: string;
+    capturedAt: string;
+    callIndex: string;
+    wrap: string;
+    unwrap: string;
+  };
+
   // Shortcuts
   shortcuts: {
     searchActions: string;

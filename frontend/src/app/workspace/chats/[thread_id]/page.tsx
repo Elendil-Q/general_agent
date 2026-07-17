@@ -18,6 +18,7 @@ import {
   MESSAGE_LIST_DEFAULT_PADDING_BOTTOM,
 } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
+import { SystemPromptTrigger } from "@/components/workspace/system-prompt-trigger";
 import { ThreadTitle } from "@/components/workspace/thread-title";
 import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
@@ -225,6 +226,9 @@ export default function ChatPage() {
                 onPreferencesChange={(preferences) =>
                   setLocalSettings("tokenUsage", preferences)
                 }
+              />
+              <SystemPromptTrigger
+                threadId={isNewThread ? undefined : threadId}
               />
               <ExportTrigger threadId={threadId} />
               <ArtifactTrigger />

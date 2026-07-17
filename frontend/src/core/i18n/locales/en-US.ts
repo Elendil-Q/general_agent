@@ -385,6 +385,20 @@ export const enUS: Translations = {
     removeTodo: (content: string) => `Remove To-do: ${content}`,
   },
 
+  systemPrompt: {
+    title: "System Prompt",
+    label: "System Prompt",
+    copy: "Copy",
+    copied: "Copied",
+    triggerHint: "Trigger a conversation first to view the system prompt.",
+    caller: "Caller",
+    model: "Model",
+    capturedAt: "Captured at",
+    callIndex: "LLM call",
+    wrap: "Wrap",
+    unwrap: "No wrap",
+  },
+
   // Shortcuts
   shortcuts: {
     searchActions: "Search actions...",

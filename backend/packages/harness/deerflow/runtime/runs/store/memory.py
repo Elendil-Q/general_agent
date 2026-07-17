@@ -119,6 +119,41 @@ class MemoryRunStore(RunStore):
                     self._runs[run_id][key] = value
             self._runs[run_id]["updated_at"] = datetime.now(UTC).isoformat()
 
+    async def get_last_system_prompt(self, thread_id: str, *, user_id=None) -> dict[str, Any] | None:
+        """Return the most recently captured system prompt row for a thread.
+
+        Scans the thread index for runs whose ``last_system_prompt`` is set and
+        returns the newest by ``created_at``, shaped to match the
+        ``ThreadSystemPromptResponse`` schema (``system_prompt`` is the stored
+        ``last_system_prompt`` column). Returns ``None`` when no run has
+        captured a prompt yet.
+        """
+        run_ids = self._runs_by_thread.get(thread_id) or ()
+        candidates = [run for run_id in run_ids if (run := self._runs.get(run_id)) is not None and (user_id is None or run.get("user_id") == user_id) and run.get("last_system_prompt")]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda r: r["created_at"], reverse=True)
+        run = candidates[0]
+        return self._system_prompt_row_from(run)
+
+    @staticmethod
+    def _system_prompt_row_from(run: dict[str, Any]) -> dict[str, Any]:
+        captured_at = run.get("last_system_prompt_captured_at")
+        # The journal stores a ``datetime``; normalize to an ISO string so the
+        # memory store returns the same ``str | None`` shape as RunRepository,
+        # which coerces datetimes to ISO via ``coerce_iso`` on read.
+        if isinstance(captured_at, datetime):
+            captured_at = captured_at.isoformat()
+        return {
+            "run_id": run.get("run_id"),
+            "thread_id": run.get("thread_id"),
+            "system_prompt": run.get("last_system_prompt"),
+            "caller": run.get("last_system_prompt_caller"),
+            "model_name": run.get("model_name"),
+            "captured_at": captured_at,
+            "llm_call_index": run.get("last_system_prompt_call_index"),
+        }
+
     async def list_pending(self, *, before=None):
         now = before or datetime.now(UTC).isoformat()
         results = [r for r in self._runs.values() if r["status"] == "pending" and r["created_at"] <= now]

@@ -26,12 +26,13 @@ import { useUpdateSubtask } from "../tasks/context";
 import type { UploadedFileInfo } from "../uploads";
 import { promptInputFilePartToFile, uploadFiles } from "../uploads";
 
-import { fetchThreadTokenUsage } from "./api";
+import { fetchThreadSystemPrompt, fetchThreadTokenUsage } from "./api";
 import {
   type ClarificationInterruptRequest,
   isClarificationInterrupt,
 } from "./clarification";
 import { resumeSubagent } from "./subagent-resume";
+import { threadSystemPromptQueryKey } from "./system-prompt";
 import {
   buildThreadsSearchQueryOptions,
   DEFAULT_THREAD_SEARCH_PARAMS,
@@ -43,6 +44,7 @@ import type {
   AgentThreadState,
   RunMessage,
   ThreadTokenUsageResponse,
+  ThreadSystemPromptResponse,
 } from "./types";
 
 export type ToolEndEvent = {
@@ -1025,6 +1027,9 @@ export function useThreadStream({
         void queryClient.invalidateQueries({
           queryKey: threadTokenUsageQueryKey(threadIdRef.current),
         });
+        void queryClient.invalidateQueries({
+          queryKey: threadSystemPromptQueryKey(threadIdRef.current),
+        });
       }
     },
     onFinish(state) {
@@ -1058,6 +1063,9 @@ export function useThreadStream({
         });
         void queryClient.invalidateQueries({
           queryKey: threadTokenUsageQueryKey(threadIdRef.current),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: threadSystemPromptQueryKey(threadIdRef.current),
         });
       }
     },
@@ -1489,6 +1497,9 @@ export function useThreadStream({
         });
         void queryClient.invalidateQueries({
           queryKey: threadTokenUsageQueryKey(threadId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: threadSystemPromptQueryKey(threadId),
         });
       } catch (error) {
         setLiveMessagesThreadId(null);
@@ -2058,6 +2069,24 @@ export function useThreadTokenUsage(
         return null;
       }
       return fetchThreadTokenUsage(threadId);
+    },
+    enabled: enabled && Boolean(threadId),
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useThreadSystemPrompt(
+  threadId?: string | null,
+  { enabled = true }: { enabled?: boolean } = {},
+) {
+  return useQuery<ThreadSystemPromptResponse | null>({
+    queryKey: threadSystemPromptQueryKey(threadId),
+    queryFn: async () => {
+      if (!threadId) {
+        return null;
+      }
+      return fetchThreadSystemPrompt(threadId);
     },
     enabled: enabled && Boolean(threadId),
     retry: false,

@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.run.model import RunRow
@@ -234,6 +234,10 @@ class RunRepository(RunStore):
         message_count: int = 0,
         last_ai_message: str | None = None,
         first_human_message: str | None = None,
+        last_system_prompt: str | None = None,
+        last_system_prompt_caller: str | None = None,
+        last_system_prompt_call_index: int | None = None,
+        last_system_prompt_captured_at: Any = None,
         error: str | None = None,
     ) -> bool:
         """Update status + token usage + convenience fields on run completion.
@@ -257,6 +261,13 @@ class RunRepository(RunStore):
             values["last_ai_message"] = last_ai_message[:2000]
         if first_human_message is not None:
             values["first_human_message"] = first_human_message[:2000]
+        if last_system_prompt is not None:
+            # Stored untruncated — a debug feature that only shows the first
+            # N chars defeats its purpose. Text columns have no practical cap.
+            values["last_system_prompt"] = last_system_prompt
+            values["last_system_prompt_caller"] = last_system_prompt_caller
+            values["last_system_prompt_call_index"] = last_system_prompt_call_index
+            values["last_system_prompt_captured_at"] = last_system_prompt_captured_at
         if error is not None:
             values["error"] = error
         async with self._sf() as session:
@@ -279,6 +290,10 @@ class RunRepository(RunStore):
         message_count: int | None = None,
         last_ai_message: str | None = None,
         first_human_message: str | None = None,
+        last_system_prompt: str | None = None,
+        last_system_prompt_caller: str | None = None,
+        last_system_prompt_call_index: int | None = None,
+        last_system_prompt_captured_at: Any = None,
     ) -> None:
         """Update token usage + convenience fields while a run is still active."""
         values: dict[str, Any] = {"updated_at": datetime.now(UTC)}
@@ -301,9 +316,65 @@ class RunRepository(RunStore):
             values["last_ai_message"] = last_ai_message[:2000]
         if first_human_message is not None:
             values["first_human_message"] = first_human_message[:2000]
+        if last_system_prompt is not None:
+            # Written untruncated (see update_run_completion for rationale).
+            values["last_system_prompt"] = last_system_prompt
+            values["last_system_prompt_caller"] = last_system_prompt_caller
+            values["last_system_prompt_call_index"] = last_system_prompt_call_index
+            values["last_system_prompt_captured_at"] = last_system_prompt_captured_at
         async with self._sf() as session:
             await session.execute(update(RunRow).where(RunRow.run_id == run_id, RunRow.status == "running").values(**values))
             await session.commit()
+
+    async def get_last_system_prompt(
+        self,
+        thread_id: str,
+        *,
+        user_id: str | None | _AutoSentinel = AUTO,
+    ) -> dict[str, Any] | None:
+        """Return the most recently captured system prompt row for a thread.
+
+        Selects the newest run row (by ``created_at`` desc) whose
+        ``last_system_prompt`` is non-null, mapping it to the
+        ``ThreadSystemPromptResponse`` shape. Returns ``None`` when no run has
+        captured a prompt yet.
+        """
+        resolved_user_id = resolve_user_id(user_id, method_name="RunRepository.get_last_system_prompt")
+        stmt = (
+            select(
+                RunRow.run_id,
+                RunRow.thread_id,
+                RunRow.last_system_prompt,
+                RunRow.last_system_prompt_caller,
+                RunRow.model_name,
+                RunRow.last_system_prompt_captured_at,
+                RunRow.last_system_prompt_call_index,
+            )
+            .where(
+                RunRow.thread_id == thread_id,
+                RunRow.last_system_prompt.is_not(None),
+            )
+            .order_by(desc(RunRow.created_at))
+            .limit(1)
+        )
+        if resolved_user_id is not None:
+            stmt = stmt.where(RunRow.user_id == resolved_user_id)
+        async with self._sf() as session:
+            row = (await session.execute(stmt)).first()
+        if row is None:
+            return None
+        captured_at = row.last_system_prompt_captured_at
+        if isinstance(captured_at, datetime):
+            captured_at = coerce_iso(captured_at)
+        return {
+            "run_id": row.run_id,
+            "thread_id": row.thread_id,
+            "system_prompt": row.last_system_prompt,
+            "caller": row.last_system_prompt_caller,
+            "model_name": row.model_name,
+            "captured_at": captured_at,
+            "llm_call_index": row.last_system_prompt_call_index,
+        }
 
     async def aggregate_tokens_by_thread(self, thread_id: str, *, include_active: bool = False) -> dict[str, Any]:
         """Aggregate token usage for a thread.

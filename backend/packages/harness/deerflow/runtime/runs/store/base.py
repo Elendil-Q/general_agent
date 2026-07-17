@@ -98,6 +98,10 @@ class RunStore(abc.ABC):
         last_ai_message: str | None = None,
         first_human_message: str | None = None,
         error: str | None = None,
+        last_system_prompt: str | None = None,
+        last_system_prompt_caller: str | None = None,
+        last_system_prompt_call_index: int | None = None,
+        last_system_prompt_captured_at: Any = None,
     ) -> bool | None:
         """Persist final completion fields.
 
@@ -120,6 +124,10 @@ class RunStore(abc.ABC):
         message_count: int | None = None,
         last_ai_message: str | None = None,
         first_human_message: str | None = None,
+        last_system_prompt: str | None = None,
+        last_system_prompt_caller: str | None = None,
+        last_system_prompt_call_index: int | None = None,
+        last_system_prompt_captured_at: Any = None,
     ) -> None:
         """Persist a best-effort running snapshot without changing run status."""
         return None
@@ -140,5 +148,22 @@ class RunStore(abc.ABC):
         Returns a dict with keys: total_tokens, total_input_tokens,
         total_output_tokens, total_runs, by_model (model_name → {tokens, runs}),
         by_caller ({lead_agent, subagent, middleware}).
+        """
+        pass
+
+    @abc.abstractmethod
+    async def get_last_system_prompt(
+        self,
+        thread_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the most recently captured system prompt for a thread.
+
+        Selects the newest run row (by ``created_at``) whose
+        ``last_system_prompt`` is non-null. Returns a dict with the
+        run/prompt fields (``run_id``, ``thread_id``, ``system_prompt``,
+        ``caller``, ``model_name``, ``captured_at``, ``llm_call_index``),
+        or ``None`` when no run has captured a system prompt yet.
         """
         pass

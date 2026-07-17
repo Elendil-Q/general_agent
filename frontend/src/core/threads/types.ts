@@ -47,3 +47,13 @@ export interface ThreadTokenUsageResponse {
     middleware: number;
   };
 }
+
+export interface ThreadSystemPromptResponse {
+  thread_id: string;
+  system_prompt: string | null;
+  caller: string | null;
+  model_name: string | null;
+  captured_at: string | null;
+  run_id: string | null;
+  llm_call_index: number | null;
+}

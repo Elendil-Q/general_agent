@@ -972,6 +972,32 @@ class TestEnsureAgent:
         assert called_middlewares[-2] is mock_custom_middleware
         assert called_middlewares[-1] is mock_clarification
 
+    def test_passes_system_prompt_to_middleware_not_create_agent(self, client):
+        """The static system prompt must flow into build_middlewares (which
+        registers SystemPromptMiddleware as the outermost wrap_model_call
+        layer so Langfuse can trace it) and NOT into create_agent
+        (where it would ride a closure invisible to the traceable request)."""
+        mock_agent = MagicMock()
+        config = client._get_runnable_config("t1")
+
+        with (
+            patch("deerflow.client.create_chat_model"),
+            patch("deerflow.client.create_agent", return_value=mock_agent) as mock_create_agent,
+            patch("deerflow.client.build_middlewares", return_value=[]) as mock_build_middlewares,
+            patch("deerflow.client.apply_prompt_template", return_value="prompt text") as mock_apply_prompt,
+            patch.object(client, "_get_tools", return_value=[]),
+            patch("deerflow.runtime.checkpointer.get_checkpointer", return_value=MagicMock()),
+        ):
+            client._ensure_agent(config)
+
+        # apply_prompt_template result is handed to build_middlewares
+        mock_apply_prompt.assert_called_once()
+        assert mock_build_middlewares.call_args.kwargs.get("system_prompt") == "prompt text"
+        # create_agent must NOT receive the prompt directly (closure-invisible
+        # path). We pass system_prompt=None explicitly for clarity and to keep
+        # the schema explicit, never the rendered prompt.
+        assert mock_create_agent.call_args.kwargs.get("system_prompt") is None
+
     def test_skips_default_checkpointer_when_unconfigured(self, client):
         mock_agent = MagicMock()
         config = client._get_runnable_config("t1")

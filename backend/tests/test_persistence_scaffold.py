@@ -152,6 +152,84 @@ class TestMemoryRunStore:
         assert [r["run_id"] for r in rows] == ["r4", "r3"]
 
     @pytest.mark.anyio
+    async def test_get_last_system_prompt_returns_newest_captured(self, store):
+        await store.put("r1", thread_id="t1", model_name="m-a", created_at="2024-01-01T00:00:00+00:00")
+        await store.update_run_completion(
+            "r1",
+            status="success",
+            last_system_prompt="First prompt",
+            last_system_prompt_caller="lead_agent",
+            last_system_prompt_call_index=1,
+        )
+        await store.put("r2", thread_id="t1", model_name="m-b", created_at="2024-01-03T00:00:00+00:00")
+        await store.update_run_completion(
+            "r2",
+            status="success",
+            last_system_prompt="Second prompt",
+            last_system_prompt_caller="lead_agent",
+            last_system_prompt_call_index=1,
+        )
+        # r3 has no captured system prompt and must be ignored even though it
+        # is the newest run.
+        await store.put("r3", thread_id="t1", model_name="m-c", created_at="2024-01-09T00:00:00+00:00")
+        await store.update_run_completion("r3", status="success")
+
+        row = await store.get_last_system_prompt("t1")
+        assert row is not None
+        assert row["run_id"] == "r2"
+        assert row["system_prompt"] == "Second prompt"
+        assert row["caller"] == "lead_agent"
+        assert row["model_name"] == "m-b"
+        assert row["llm_call_index"] == 1
+
+    @pytest.mark.anyio
+    async def test_get_last_system_prompt_returns_none_when_none_captured(self, store):
+        await store.put("r1", thread_id="t1")
+        await store.update_run_completion("r1", status="success")
+        assert await store.get_last_system_prompt("t1") is None
+
+    @pytest.mark.anyio
+    async def test_get_last_system_prompt_scopes_to_thread(self, store):
+        await store.put("r1", thread_id="t1", model_name="m-a")
+        await store.update_run_completion(
+            "r1",
+            status="success",
+            last_system_prompt="Prompt in t1",
+            last_system_prompt_caller="lead_agent",
+        )
+        await store.put("r2", thread_id="t2", model_name="m-b")
+        await store.update_run_completion(
+            "r2",
+            status="success",
+            last_system_prompt="Prompt in t2",
+            last_system_prompt_caller="lead_agent",
+        )
+        row = await store.get_last_system_prompt("t1")
+        assert row is not None
+        assert row["system_prompt"] == "Prompt in t1"
+
+    @pytest.mark.anyio
+    async def test_get_last_system_prompt_owner_filter(self, store):
+        await store.put("r1", thread_id="t1", user_id="alice", model_name="m-a")
+        await store.update_run_completion(
+            "r1",
+            status="success",
+            last_system_prompt="Alice prompt",
+            last_system_prompt_caller="lead_agent",
+        )
+        await store.put("r2", thread_id="t1", user_id="bob", model_name="m-b")
+        await store.update_run_completion(
+            "r2",
+            status="success",
+            last_system_prompt="Bob prompt",
+            last_system_prompt_caller="lead_agent",
+        )
+        row = await store.get_last_system_prompt("t1", user_id="alice")
+        assert row is not None
+        assert row["system_prompt"] == "Alice prompt"
+        assert await store.get_last_system_prompt("t1", user_id="carol") is None
+
+    @pytest.mark.anyio
     async def test_delete_keeps_thread_index_consistent(self, store):
         await store.put("r1", thread_id="t1")
         await store.put("r2", thread_id="t1")

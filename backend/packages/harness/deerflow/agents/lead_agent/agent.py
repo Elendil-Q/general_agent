@@ -29,15 +29,26 @@ from langchain_core.runnables import RunnableConfig
 from deerflow.agents.lead_agent.prompt import apply_prompt_template
 from deerflow.agents.memory.summarization_hook import memory_flush_hook
 from deerflow.agents.middlewares.clarification_middleware import ClarificationMiddleware
-from deerflow.agents.middlewares.loop_detection_middleware import LoopDetectionMiddleware
+from deerflow.agents.middlewares.loop_detection_middleware import (
+    LoopDetectionMiddleware,
+)
 from deerflow.agents.middlewares.memory_middleware import MemoryMiddleware
-from deerflow.agents.middlewares.safety_finish_reason_middleware import SafetyFinishReasonMiddleware
-from deerflow.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
-from deerflow.agents.middlewares.summarization_middleware import BeforeSummarizationHook, DeerFlowSummarizationMiddleware
+from deerflow.agents.middlewares.safety_finish_reason_middleware import (
+    SafetyFinishReasonMiddleware,
+)
+from deerflow.agents.middlewares.subagent_limit_middleware import (
+    SubagentLimitMiddleware,
+)
+from deerflow.agents.middlewares.summarization_middleware import (
+    BeforeSummarizationHook,
+    DeerFlowSummarizationMiddleware,
+)
 from deerflow.agents.middlewares.title_middleware import TitleMiddleware
 from deerflow.agents.middlewares.todo_middleware import TodoMiddleware
 from deerflow.agents.middlewares.token_usage_middleware import TokenUsageMiddleware
-from deerflow.agents.middlewares.tool_error_handling_middleware import build_lead_runtime_middlewares
+from deerflow.agents.middlewares.tool_error_handling_middleware import (
+    build_lead_runtime_middlewares,
+)
 from deerflow.agents.middlewares.view_image_middleware import ViewImageMiddleware
 from deerflow.agents.thread_state import ThreadState
 from deerflow.config.agents_config import load_agent_config, validate_agent_name
@@ -104,7 +115,12 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
     # again at the model level would emit duplicate spans and break
     # ``session_id`` / ``user_id`` propagation.
     if config.model_name:
-        model = create_chat_model(name=config.model_name, thinking_enabled=False, app_config=resolved_app_config, attach_tracing=False)
+        model = create_chat_model(
+            name=config.model_name,
+            thinking_enabled=False,
+            app_config=resolved_app_config,
+            attach_tracing=False,
+        )
     else:
         model = create_chat_model(thinking_enabled=False, app_config=resolved_app_config, attach_tracing=False)
     model = model.with_config(tags=["middleware:summarize"])
@@ -276,6 +292,7 @@ def build_middlewares(
     available_skills: set[str] | None = None,
     app_config: AppConfig | None = None,
     deferred_setup=None,
+    system_prompt: str | None = None,
 ):
     """Build the lead-agent middleware chain based on runtime configuration.
 
@@ -292,6 +309,11 @@ def build_middlewares(
         app_config: Explicit AppConfig; falls back to ``get_app_config()`` when omitted.
         deferred_setup: Optional deferred-MCP-tool setup that attaches
             ``DeferredToolFilterMiddleware`` when ``tool_search`` is enabled.
+        system_prompt: Optional static system prompt. When provided, it is injected
+            as the outermost ``wrap_model_call`` layer via ``SystemPromptMiddleware``
+            instead of being passed to ``create_agent(system_prompt=...)`` (which
+            leaves it in an observability-invisible closure). When ``None`` (e.g.
+            subagent/initial-state paths), no prompt middleware is added.
 
     Returns:
         List of middleware instances.
@@ -299,16 +321,36 @@ def build_middlewares(
     resolved_app_config = app_config or get_app_config()
     middlewares = build_lead_runtime_middlewares(app_config=resolved_app_config, lazy_init=True)
 
+    # Inject the static system prompt as the outermost wrap_model_call layer
+    # instead of passing it to create_agent(system_prompt=...) (where it would
+    # live in a closure invisible to Langfuse tracing). Registered first so
+    # wrap_model_call composition runs it before SystemMessageCoalescingMiddleware
+    # (which needs request.system_message populated to merge prompt + reminders).
+    if system_prompt is not None:
+        from deerflow.agents.middlewares.system_prompt_middleware import (
+            SystemPromptMiddleware,
+        )
+
+        logger.info(
+            "Injecting static system prompt into middleware chain (length %d)",
+            len(system_prompt),
+        )
+        middlewares.insert(0, SystemPromptMiddleware(system_prompt))
+
     # Always inject current date (and optionally memory) as <system-reminder> into the
     # first HumanMessage to keep the system prompt fully static for prefix-cache reuse.
-    from deerflow.agents.middlewares.dynamic_context_middleware import DynamicContextMiddleware
+    from deerflow.agents.middlewares.dynamic_context_middleware import (
+        DynamicContextMiddleware,
+    )
 
     middlewares.append(DynamicContextMiddleware(agent_name=agent_name, app_config=resolved_app_config))
 
     # Deterministically load a full SKILL.md when the user starts the turn with
     # /skill:skill-name. This keeps the base system prompt metadata-only while giving
     # explicit user activation priority over model-side relevance guessing.
-    from deerflow.agents.middlewares.skill_activation_middleware import SkillActivationMiddleware
+    from deerflow.agents.middlewares.skill_activation_middleware import (
+        SkillActivationMiddleware,
+    )
 
     middlewares.append(SkillActivationMiddleware(available_skills=available_skills, app_config=resolved_app_config))
 
@@ -344,14 +386,18 @@ def build_middlewares(
     # The deferred set + catalog hash come from the build-time setup (assembled
     # after tool-policy filtering); promotion is read from graph state.
     if deferred_setup is not None and deferred_setup.deferred_names:
-        from deerflow.agents.middlewares.deferred_tool_filter_middleware import DeferredToolFilterMiddleware
+        from deerflow.agents.middlewares.deferred_tool_filter_middleware import (
+            DeferredToolFilterMiddleware,
+        )
 
         middlewares.append(DeferredToolFilterMiddleware(deferred_setup.deferred_names, deferred_setup.catalog_hash))
 
     # Coalesce every SystemMessage into a single leading one before the request
     # reaches the provider. Strict backends (vLLM, SGLang, Qwen, Anthropic)
     # reject non-leading SystemMessages. See system_message_coalescing_middleware.py.
-    from deerflow.agents.middlewares.system_message_coalescing_middleware import SystemMessageCoalescingMiddleware
+    from deerflow.agents.middlewares.system_message_coalescing_middleware import (
+        SystemMessageCoalescingMiddleware,
+    )
 
     middlewares.append(SystemMessageCoalescingMiddleware())
 
@@ -369,7 +415,9 @@ def build_middlewares(
     # TokenBudgetMiddleware - enforce per-run token limits
     token_budget_config = resolved_app_config.token_budget
     if token_budget_config.enabled:
-        from deerflow.agents.middlewares.token_budget_middleware import TokenBudgetMiddleware
+        from deerflow.agents.middlewares.token_budget_middleware import (
+            TokenBudgetMiddleware,
+        )
 
         middlewares.append(TokenBudgetMiddleware.from_config(token_budget_config))
 
@@ -478,7 +526,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             "is_plan_mode": is_plan_mode,
             "subagent_enabled": subagent_enabled,
             "tool_groups": agent_config.tool_groups if agent_config else None,
-            "available_skills": sorted(available_skills) if available_skills is not None else None,
+            "available_skills": (sorted(available_skills) if available_skills is not None else None),
         }
     )
 
@@ -501,11 +549,27 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         # Special bootstrap agent with minimal prompt for initial custom agent creation flow
         # Keep the bootstrap skill set intentionally narrow so agent creation
         # remains deterministic before the custom agent's own config exists.
-        raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
+        raw_tools = get_available_tools(
+            model_name=model_name,
+            subagent_enabled=subagent_enabled,
+            app_config=resolved_app_config,
+        ) + [setup_agent]
         filtered = filter_tools_by_skill_allowed_tools(raw_tools, skills_for_tool_policy)
         final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
+        system_prompt = apply_prompt_template(
+            subagent_enabled=subagent_enabled,
+            max_concurrent_subagents=max_concurrent_subagents,
+            available_skills=set(_BOOTSTRAP_SKILL_NAMES),
+            app_config=resolved_app_config,
+            deferred_names=setup.deferred_names,
+        )
         return create_agent(
-            model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, app_config=resolved_app_config, attach_tracing=False),
+            model=create_chat_model(
+                name=model_name,
+                thinking_enabled=thinking_enabled,
+                app_config=resolved_app_config,
+                attach_tracing=False,
+            ),
             tools=final_tools,
             middleware=build_middlewares(
                 config,
@@ -513,14 +577,9 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                 available_skills=set(_BOOTSTRAP_SKILL_NAMES),
                 app_config=resolved_app_config,
                 deferred_setup=setup,
+                system_prompt=system_prompt,
             ),
-            system_prompt=apply_prompt_template(
-                subagent_enabled=subagent_enabled,
-                max_concurrent_subagents=max_concurrent_subagents,
-                available_skills=set(_BOOTSTRAP_SKILL_NAMES),
-                app_config=resolved_app_config,
-                deferred_names=setup.deferred_names,
-            ),
+            system_prompt=None,
             state_schema=ThreadState,
         )
 
@@ -528,11 +587,30 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # The default agent (no agent_name) does not see this tool.
     extra_tools = [update_agent] if agent_name else []
     # Default lead agent (unchanged behavior)
-    raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
+    raw_tools = get_available_tools(
+        model_name=model_name,
+        groups=agent_config.tool_groups if agent_config else None,
+        subagent_enabled=subagent_enabled,
+        app_config=resolved_app_config,
+    )
     filtered = filter_tools_by_skill_allowed_tools(raw_tools + extra_tools, skills_for_tool_policy)
     final_tools, setup = assemble_deferred_tools(filtered, enabled=resolved_app_config.tool_search.enabled)
+    system_prompt = apply_prompt_template(
+        subagent_enabled=subagent_enabled,
+        max_concurrent_subagents=max_concurrent_subagents,
+        agent_name=agent_name,
+        available_skills=available_skills,
+        app_config=resolved_app_config,
+        deferred_names=setup.deferred_names,
+    )
     return create_agent(
-        model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False),
+        model=create_chat_model(
+            name=model_name,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
+            app_config=resolved_app_config,
+            attach_tracing=False,
+        ),
         tools=final_tools,
         middleware=build_middlewares(
             config,
@@ -541,14 +619,8 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             available_skills=available_skills,
             app_config=resolved_app_config,
             deferred_setup=setup,
+            system_prompt=system_prompt,
         ),
-        system_prompt=apply_prompt_template(
-            subagent_enabled=subagent_enabled,
-            max_concurrent_subagents=max_concurrent_subagents,
-            agent_name=agent_name,
-            available_skills=available_skills,
-            app_config=resolved_app_config,
-            deferred_names=setup.deferred_names,
-        ),
+        system_prompt=None,
         state_schema=ThreadState,
     )
