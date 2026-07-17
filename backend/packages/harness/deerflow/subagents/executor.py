@@ -581,9 +581,15 @@ class SubagentExecutor:
         )
 
     async def _load_skills(self) -> list[Skill]:
-        """Load enabled skill metadata based on config.skills."""
-        if self.config.skills is not None and len(self.config.skills) == 0:
-            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills=[] — skipping skill loading")
+        """Load enabled skill metadata based on config.skills.
+
+        ``config.skills`` semantics:
+        - ``None`` or ``[]`` — no skills loaded (progressive disclosure: subagents
+          must opt in to skill loading explicitly).
+        - ``["a", "b"]`` — only the named skills are loaded.
+        """
+        if self.config.skills is None or len(self.config.skills) == 0:
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills=%r — skipping skill loading", self.config.skills)
             return []
 
         try:
@@ -618,8 +624,7 @@ class SubagentExecutor:
         per-session and injects them as conversation items (developer messages),
         not as system prompt text. The config.skills whitelist controls which
         skills are loaded:
-        - None: load all enabled skills
-        - []: no skills
+        - None or []: no skills (progressive disclosure — subagents opt in explicitly)
         - ["skill-a", "skill-b"]: only these skills
 
         Returns:

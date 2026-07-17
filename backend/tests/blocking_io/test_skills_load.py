@@ -90,6 +90,7 @@ async def test_load_skills_via_to_thread_does_not_block_event_loop(tmp_path: Pat
             config=SubagentConfig(
                 name="demo",
                 description="Loads skills through the production async path.",
+                skills=["demo"],
             ),
             tools=[],
             app_config=SimpleNamespace(skills=SkillsConfig(path=str(tmp_path))),

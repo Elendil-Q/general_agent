@@ -8,11 +8,7 @@ system_prompt: |
   - 撰写数据分析报告
 
   你工作严谨，注重数据准确性，善于从数据中发现有价值的洞察。
-tools:
-  - bash
-  - read_file
-  - write_file
-  - ls
+
 disallowed_tools:
   - task
   - ask_clarification

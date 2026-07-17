@@ -17,6 +17,7 @@ import asyncio
 import importlib
 import sys
 import threading
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -351,8 +352,10 @@ class TestAgentConstruction:
 
         monkeypatch.setattr(sys.modules["deerflow.skills.storage"], "get_or_new_skill_storage", fake_get_or_new_skill_storage)
 
+        test_config = replace(base_config, skills=["demo-skill"])
+
         executor = SubagentExecutor(
-            config=base_config,
+            config=test_config,
             tools=[],
             app_config=app_config,
             thread_id="test-thread",
@@ -387,8 +390,10 @@ class TestAgentConstruction:
             lambda *, app_config=None: SimpleNamespace(load_skills=lambda *, enabled_only: [SimpleNamespace(name="my-skill", skill_file=skill_file, allowed_tools=None)]),
         )
 
+        test_config = replace(base_config, skills=["my-skill"])
+
         executor = SubagentExecutor(
-            config=base_config,
+            config=test_config,
             tools=[],
             thread_id="test-thread",
         )
@@ -425,8 +430,10 @@ class TestAgentConstruction:
             lambda *, app_config=None: SimpleNamespace(load_skills=lambda *, enabled_only: []),
         )
 
+        test_config = replace(base_config, skills=["my-skill"])
+
         executor = SubagentExecutor(
-            config=base_config,
+            config=test_config,
             tools=[],
             thread_id="test-thread",
         )
@@ -457,6 +464,7 @@ class TestAgentConstruction:
             system_prompt=None,
             max_turns=10,
             timeout_seconds=60,
+            skills=["my-skill"],
         )
 
         skill_dir = tmp_path / "my-skill"
@@ -943,8 +951,10 @@ class TestAsyncExecutionPath:
         mock_agent = MagicMock()
         mock_agent.astream = capturing_astream
 
+        test_config = replace(base_config, skills=["regression-skill"])
+
         executor = SubagentExecutor(
-            config=base_config,
+            config=test_config,
             tools=[],
             thread_id="test-thread",
         )
@@ -962,7 +972,7 @@ class TestAsyncExecutionPath:
             assert initial_messages[0] is system_messages[0], "SystemMessage must be the first message in the conversation"
             # The consolidated SystemMessage must carry both the system_prompt
             # and all skill content; nothing should be split across two messages.
-            assert base_config.system_prompt in system_messages[0].content
+            assert test_config.system_prompt in system_messages[0].content
             assert "Skill instruction text" in system_messages[0].content
 
 

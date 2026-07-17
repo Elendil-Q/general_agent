@@ -40,7 +40,10 @@ def _get_work_dir(thread_id: str | None) -> str:
         try:
             work_dir = paths.acp_workspace_dir(thread_id, user_id=get_effective_user_id())
         except ValueError:
-            logger.warning("Invalid thread_id %r for ACP workspace, falling back to global", thread_id)
+            logger.warning(
+                "Invalid thread_id %r for ACP workspace, falling back to global",
+                thread_id,
+            )
             work_dir = paths.base_dir / "acp-workspace"
     else:
         work_dir = paths.base_dir / "acp-workspace"
@@ -162,9 +165,18 @@ def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
     # Capture agents in closure so the function can reference it
     _agents = dict(agents)
 
-    async def _invoke(agent: str, prompt: str, config: Annotated[RunnableConfig, InjectedToolArg] = None) -> str:
+    async def _invoke(
+        agent: str,
+        prompt: str,
+        config: Annotated[RunnableConfig, InjectedToolArg] = None,
+    ) -> str:
         logger.info("Invoking ACP agent %s (prompt length: %d)", agent, len(prompt))
-        logger.debug("Invoking ACP agent %s with prompt: %.200s%s", agent, prompt, "..." if len(prompt) > 200 else "")
+        logger.debug(
+            "Invoking ACP agent %s with prompt: %.200s%s",
+            agent,
+            prompt,
+            "..." if len(prompt) > 200 else "",
+        )
         if agent not in _agents:
             available = ", ".join(_agents.keys())
             return f"Error: Unknown agent '{agent}'. Available: {available}"
@@ -201,15 +213,25 @@ def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
                 response = _build_permission_response(options, auto_approve=agent_config.auto_approve_permissions)
                 outcome = response.outcome.outcome
                 if outcome == "selected":
-                    logger.info("ACP permission auto-approved for tool call %s in session %s", tool_call.tool_call_id, session_id)
+                    logger.info(
+                        "ACP permission auto-approved for tool call %s in session %s",
+                        tool_call.tool_call_id,
+                        session_id,
+                    )
                 else:
-                    logger.warning("ACP permission denied for tool call %s in session %s (set auto_approve_permissions: true in config.yaml to enable)", tool_call.tool_call_id, session_id)
+                    logger.warning(
+                        "ACP permission denied for tool call %s in session %s (set auto_approve_permissions: true in config.yaml to enable)",
+                        tool_call.tool_call_id,
+                        session_id,
+                    )
                 return response
 
         client = _CollectingClient()
         cmd = agent_config.command
         args = agent_config.args or []
         physical_cwd = _get_work_dir(thread_id)
+
+        # 为ACP代理添加与主agent一致的MCP服务
         try:
             mcp_servers = _build_acp_mcp_servers()
         except ValueError as exc:
@@ -227,13 +249,22 @@ def build_invoke_acp_agent_tool(agents: dict) -> BaseTool:
             from acp import spawn_agent_process
 
             async with spawn_agent_process(client, cmd, *args, env=agent_env, cwd=physical_cwd) as (conn, proc):
-                logger.info("Spawning ACP agent '%s' with command '%s' and args %s in cwd %s", agent, cmd, args, physical_cwd)
+                logger.info(
+                    "Spawning ACP agent '%s' with command '%s' and args %s in cwd %s",
+                    agent,
+                    cmd,
+                    args,
+                    physical_cwd,
+                )
                 await conn.initialize(
                     protocol_version=PROTOCOL_VERSION,
                     client_capabilities=ClientCapabilities(),
                     client_info=Implementation(name="deerflow", title="DeerFlow", version="0.1.0"),
                 )
-                session_kwargs: dict[str, Any] = {"cwd": physical_cwd, "mcp_servers": mcp_servers}
+                session_kwargs: dict[str, Any] = {
+                    "cwd": physical_cwd,
+                    "mcp_servers": mcp_servers,
+                }
                 if agent_config.model:
                     session_kwargs["model"] = agent_config.model
                 session = await conn.new_session(**session_kwargs)
