@@ -1,3 +1,20 @@
+# uv's default cache (~/.cache/uv) is read-only in some sandboxed/ro-root
+# environments, which makes every `uv run`/`uv sync` fail at startup. Probe it
+# and redirect to a writable /tmp/uv-cache ONLY when the default is unwritable;
+# on a normal writable machine UV_CACHE_DIR stays empty (unset) so uv uses its
+# own resolution (honoring XDG_CACHE_HOME) unchanged. Override explicitly with
+# `make ... UV_CACHE_DIR=/path` or the env var.
+UV_CACHE_DIR ?= $(shell \
+	d="$$HOME/.cache/uv"; \
+	if mkdir -p "$$d" 2>/dev/null && touch "$$d/.uvwtest" 2>/dev/null; then \
+		rm -f "$$d/.uvwtest"; echo; \
+	else \
+		echo "/tmp/uv-cache"; \
+	fi)
+ifneq ($(strip $(UV_CACHE_DIR)),)
+export UV_CACHE_DIR
+endif
+
 install:
 	uv sync
 

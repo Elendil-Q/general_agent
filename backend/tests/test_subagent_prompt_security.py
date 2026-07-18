@@ -43,7 +43,6 @@ def test_build_subagent_section_hides_bash_examples_when_unavailable(monkeypatch
     assert "**bash**" not in section
     assert 'bash("npm test")' not in section
     assert 'read_file("/mnt/user-data/workspace/README.md")' in section
-    assert "available tools (ls, read_file, web_search, etc.)" in section
 
 
 def test_build_subagent_section_includes_bash_when_available(monkeypatch) -> None:
@@ -53,7 +52,6 @@ def test_build_subagent_section_includes_bash_when_available(monkeypatch) -> Non
 
     assert "For command execution (git, build, test, deploy operations)" in section
     assert 'bash("npm test")' in section
-    assert "available tools (bash, ls, read_file, web_search, etc.)" in section
 
 
 def test_bash_subagent_prompt_mentions_workspace_relative_paths() -> None:

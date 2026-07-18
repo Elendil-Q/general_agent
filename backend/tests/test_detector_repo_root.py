@@ -29,7 +29,16 @@ def test_all_detectors_share_the_resolved_root():
     assert thread_boundaries.REPO_ROOT == REPO_ROOT
 
 
-def test_unmarked_location_raises_instead_of_scanning_nothing(tmp_path: Path):
+def test_unmarked_location_raises_instead_of_scanning_nothing(monkeypatch, tmp_path: Path):
+    real_exists = Path.exists
+
+    def mock_exists(self):
+        if self.name == ".git":
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", mock_exists)
+
     start = tmp_path / "moved" / "detectors" / "blocking_io_static.py"
     with pytest.raises(RuntimeError, match=r"\.git"):
         resolve_repo_root(start)

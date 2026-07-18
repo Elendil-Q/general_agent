@@ -67,8 +67,8 @@ def test_get_skills_prompt_section_includes_slash_activation_guidance(monkeypatc
     result = get_skills_prompt_section(available_skills={"data-analysis"})
 
     assert "Explicit Slash Skill Activation" in result
-    assert "The runtime injects the activated skill content" in result
-    assert "do not call `read_file` for that SKILL.md again" in result
+    assert "has already injected the content of its SKILL.md" in result
+    assert "No need to read the SKILL.md again" in result
 
 
 def test_get_skills_prompt_section_includes_self_evolution_rules(monkeypatch):

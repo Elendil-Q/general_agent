@@ -638,7 +638,6 @@ Both can be modified at runtime via Gateway API endpoints or `DeerFlowClient` me
 ### Test-Driven Development (TDD) — MANDATORY
 
 **Every new feature or bug fix MUST be accompanied by unit tests. No exceptions.**
-
 - Write tests in `backend/tests/` following the existing naming convention `test_<feature>.py`
 - Run the full suite before and after your change: `make test`
 - Tests must pass before a feature is considered complete
@@ -652,6 +651,14 @@ make test
 # Run a specific test file
 PYTHONPATH=. uv run pytest tests/test_<feature>.py -v
 ```
+
+**Sandboxed / read-only-root environments** (e.g. agent sandboxes where `/` is mounted `ro`): `uv run`/`uv sync`/`uvx` write their cache to `~/.cache/uv` by default and fail at startup with `Read-only file system (os error 30)` when that path is unwritable. `make test`/`make dev`/`make gateway` auto-probe this and fall back to `UV_CACHE_DIR=/tmp/uv-cache` (see the probe at the top of `backend/Makefile`), so those targets work as-is. If you invoke `uv run`/`uv sync`/`uvx` **directly** (outside `make`), export it yourself first:
+
+```bash
+export UV_CACHE_DIR=/tmp/uv-cache   # only needed when ~/.cache/uv is unwritable
+```
+
+On a normal writable machine this is a no-op -- leave `UV_CACHE_DIR` unset and uv uses its own default (honoring `XDG_CACHE_HOME`). This is an environment quirk, not a project bug; a human running tests in their own terminal will not hit it.
 
 ### Running the Full Application
 

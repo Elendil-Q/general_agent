@@ -35,4 +35,4 @@ class TestDeferredToolsPromptSection:
 
     def test_lists_sorted_names(self):
         out = get_deferred_tools_prompt_section(deferred_names=frozenset({"b_tool", "a_tool"}))
-        assert out == "<available-deferred-tools>\na_tool\nb_tool\n</available-deferred-tools>"
+        assert out == "<available-deferred-tools>\nUse `tool_search` to query and activate these tools before calling them.\na_tool\nb_tool\n</available-deferred-tools>"

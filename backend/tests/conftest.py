@@ -156,3 +156,37 @@ def _force_auth_enabled(monkeypatch):
     """
     monkeypatch.setenv("DEER_FLOW_AUTH_DISABLED", "0")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _restore_named_logger_levels():
+    """Snapshot and restore the ``deerflow``/``app`` logger levels (and root).
+
+    Gateway lifespan startup calls ``apply_logging_level(config.log_level)``,
+    which sets the ``deerflow`` and ``app`` logger levels (e.g. to WARNING).
+    Tests that drive the real gateway via ``TestClient(app)`` (notably
+    ``test_replay_golden.py``) therefore leave these levels mutated, and any
+    later test relying on ``caplog`` to capture INFO logs from ``deerflow.*``
+    loggers sees an empty ``caplog.text`` because the record is filtered at the
+    named logger before it can propagate to root. Snapshot before / restore
+    after every test so order-dependent isolation failures disappear.
+
+    Compatible with ``test_logging_level_from_config.py``, which has its own
+    ``setup_method``/``teardown_method``: this fixture's teardown runs first
+    (outer yield), restoring the pre-test snapshot; the test's own teardown
+    then restores the value it captured at setup.
+    """
+    import logging
+
+    root = logging.root
+    snap = {
+        "root_level": root.level,
+        "deerflow_level": logging.getLogger("deerflow").level,
+        "app_level": logging.getLogger("app").level,
+    }
+    try:
+        yield
+    finally:
+        logging.getLogger("deerflow").setLevel(snap["deerflow_level"])
+        logging.getLogger("app").setLevel(snap["app_level"])
+        root.setLevel(snap["root_level"])

@@ -329,6 +329,12 @@ class TestWorkspaceSnapshots:
     def test_changed_workspace_files_detects_created_and_modified_files(self, paths: Paths):
         workspace = paths.sandbox_work_dir("t1", user_id="u1")
         existing = _workspace_file(paths, "existing.txt", content=b"old")
+        import os
+        import time
+
+        old_time = time.time() - 10
+        os.utime(existing, (old_time, old_time))
+
         before = mcp_tools._snapshot_workspace_files(workspace)
 
         existing.write_bytes(b"new")
