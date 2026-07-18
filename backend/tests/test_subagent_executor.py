@@ -1086,6 +1086,204 @@ class TestSkillAllowedTools:
 
 
 # -----------------------------------------------------------------------------
+# On-demand skills (skills_on_demand): catalog-only rendering + policy split
+# -----------------------------------------------------------------------------
+
+
+class TestOnDemandSkillsRendering:
+    """_render_on_demand_skills_section emits a catalog (no full SKILL.md)."""
+
+    def test_render_empty_returns_empty_string(self, classes, base_config):
+        SubagentExecutor = classes["SubagentExecutor"]
+        executor = SubagentExecutor(config=base_config, tools=[], thread_id="test-thread")
+        assert executor._render_on_demand_skills_section([]) == ""
+
+    def test_render_lists_name_description_location_not_content(self, classes, base_config):
+        SubagentExecutor = classes["SubagentExecutor"]
+        executor = SubagentExecutor(config=base_config, tools=[], thread_id="test-thread")
+        skills = [_skill("web-search", None), _skill("pdf-export", None)]
+        section = executor._render_on_demand_skills_section(skills)
+
+        assert "<available_skills>" in section
+        assert "web-search" in section
+        assert "pdf-export" in section
+        # descriptions appear (the _skill helper sets description to f"{name} skill")
+        assert "web-search skill" in section
+        # container location is the SKILL.md path under /mnt/skills (fallback)
+        assert "/mnt/skills/custom/web-search/SKILL.md" in section
+        assert "/mnt/skills/custom/pdf-export/SKILL.md" in section
+        # read_file instruction present so the subagent knows how to load
+        assert "read_file" in section
+
+    def test_render_uses_app_config_container_path_when_present(self, classes, base_config):
+        SubagentExecutor = classes["SubagentExecutor"]
+        from types import SimpleNamespace
+
+        app_config = SimpleNamespace(
+            models=[SimpleNamespace(name="default-model")],
+            skills=SimpleNamespace(container_path="/custom/skills"),
+            tool_search=SimpleNamespace(enabled=False),
+        )
+        executor = SubagentExecutor(config=base_config, tools=[], app_config=app_config, thread_id="test-thread")
+        section = executor._render_on_demand_skills_section([_skill("web-search", None)])
+        assert "/custom/skills/custom/web-search/SKILL.md" in section
+
+
+class TestOnDemandSkillsLoading:
+    """_load_on_demand_skills gates on config.skills_on_demand and filters by name."""
+
+    @pytest.mark.anyio
+    async def test_no_skills_on_demand_loads_nothing(self, classes, base_config, monkeypatch):
+        SubagentExecutor = classes["SubagentExecutor"]
+        executor = SubagentExecutor(config=base_config, tools=[], thread_id="test-thread")
+
+        # Storage would raise if called; assert it is never reached.
+        def boom(*a, **k):
+            raise AssertionError("storage must not be touched when skills_on_demand is None")
+
+        monkeypatch.setattr(sys.modules["deerflow.skills.storage"], "get_or_new_skill_storage", boom)
+
+        result = await executor._load_on_demand_skills()
+        assert result == []
+
+    @pytest.mark.anyio
+    async def test_empty_skills_on_demand_loads_nothing(self, classes, monkeypatch):
+        SubagentConfig = classes["SubagentConfig"]
+        config = SubagentConfig(
+            name="test-agent",
+            description="t",
+            system_prompt="t",
+            skills_on_demand=[],
+        )
+        SubagentExecutor = classes["SubagentExecutor"]
+        executor = SubagentExecutor(config=config, tools=[], thread_id="test-thread")
+
+        def boom(*a, **k):
+            raise AssertionError("storage must not be touched when skills_on_demand is []")
+
+        monkeypatch.setattr(sys.modules["deerflow.skills.storage"], "get_or_new_skill_storage", boom)
+
+        assert await executor._load_on_demand_skills() == []
+
+    @pytest.mark.anyio
+    async def test_skills_on_demand_filters_by_name(self, classes, monkeypatch):
+        SubagentConfig = classes["SubagentConfig"]
+        config = SubagentConfig(
+            name="test-agent",
+            description="t",
+            system_prompt="t",
+            skills_on_demand=["wanted"],
+        )
+        SubagentExecutor = classes["SubagentExecutor"]
+        executor = SubagentExecutor(config=config, tools=[], thread_id="test-thread")
+
+        all_skills = [_skill("wanted", None), _skill("other", None)]
+        monkeypatch.setattr(
+            sys.modules["deerflow.skills.storage"],
+            "get_or_new_skill_storage",
+            lambda *, app_config=None: SimpleNamespace(load_skills=lambda *, enabled_only: all_skills),
+        )
+
+        result = await executor._load_on_demand_skills()
+        assert [s.name for s in result] == ["wanted"]
+
+
+class TestBuildInitialStateOnDemandSplit:
+    """_build_initial_state injects default skills as content and on-demand as catalog."""
+
+    @pytest.mark.anyio
+    async def test_default_skill_content_and_on_demand_catalog_coexist(self, classes, monkeypatch, tmp_path):
+        SubagentConfig = classes["SubagentConfig"]
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        config = SubagentConfig(
+            name="test-agent",
+            description="t",
+            system_prompt="You are a test agent.",
+            skills=["default-skill"],
+            skills_on_demand=["ondemand-skill"],
+            max_turns=10,
+            timeout_seconds=60,
+        )
+
+        # default skill has a real SKILL.md body to read; on-demand skill only needs metadata.
+        default_dir = tmp_path / "default-skill"
+        default_dir.mkdir()
+        (default_dir / "SKILL.md").write_text("Default skill full body", encoding="utf-8")
+
+        def make_skill(name, allowed_tools):
+            if name == "default-skill":
+                skill_dir = default_dir
+            else:
+                skill_dir = tmp_path / name
+                skill_dir.mkdir(exist_ok=True)
+            return Skill(
+                name=name,
+                description=f"{name} skill",
+                license=None,
+                skill_dir=skill_dir,
+                skill_file=skill_dir / "SKILL.md",
+                relative_path=Path(name),
+                category="custom",
+                allowed_tools=allowed_tools,
+                enabled=True,
+            )
+
+        skills_on_disk = [make_skill("default-skill", None), make_skill("ondemand-skill", None)]
+        monkeypatch.setattr(
+            sys.modules["deerflow.skills.storage"],
+            "get_or_new_skill_storage",
+            lambda *, app_config=None: SimpleNamespace(load_skills=lambda *, enabled_only: skills_on_disk),
+        )
+
+        executor = SubagentExecutor(config=config, tools=[], thread_id="test-thread")
+        state, _final_tools, _deferred_setup = await executor._build_initial_state("Do the task")
+
+        messages = state["messages"]
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        assert len(messages) == 2
+        assert isinstance(messages[0], SystemMessage)
+        system_content = messages[0].content
+        # default skill: full content injected
+        assert "Default skill full body" in system_content
+        # on-demand skill: catalog entry only (name + location), NOT its SKILL.md body
+        assert "ondemand-skill" in system_content
+        assert "/mnt/skills/custom/ondemand-skill/SKILL.md" in system_content
+        assert "read_file" in system_content
+        assert isinstance(messages[1], HumanMessage)
+
+    @pytest.mark.anyio
+    async def test_on_demand_skill_allowed_tools_contribute_to_policy(self, classes, monkeypatch):
+        """An on-demand skill's allowed_tools filter the agent's tools even before read."""
+        SubagentConfig = classes["SubagentConfig"]
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        config = SubagentConfig(
+            name="test-agent",
+            description="t",
+            system_prompt="You are a test agent.",
+            skills_on_demand=["restricted"],
+            max_turns=10,
+            timeout_seconds=60,
+        )
+
+        on_demand_skills = [_skill("restricted", ["bash"])]
+        monkeypatch.setattr(
+            sys.modules["deerflow.skills.storage"],
+            "get_or_new_skill_storage",
+            lambda *, app_config=None: SimpleNamespace(load_skills=lambda *, enabled_only: on_demand_skills),
+        )
+
+        tools = [NamedTool("bash"), NamedTool("read_file"), NamedTool("web_search")]
+        executor = SubagentExecutor(config=config, tools=tools, thread_id="test-thread")
+        state, final_tools, _deferred_setup = await executor._build_initial_state("Task")
+
+        # Only the on-demand skill's allowed tool survives policy filtering.
+        assert [t.name for t in final_tools] == ["bash"]
+
+
+# -----------------------------------------------------------------------------
 # Sync Execution Path Tests
 # -----------------------------------------------------------------------------
 

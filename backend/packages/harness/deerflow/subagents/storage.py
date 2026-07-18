@@ -122,6 +122,7 @@ def parse_subagent_file(subagent_file: Path) -> SubagentConfig | None:
         exclusive_tools=data.get("exclusive_tools"),
         skills=data.get("skills"),
         model=data.get("model", "inherit"),
+        skills_on_demand=data.get("skills_on_demand"),
         max_turns=data.get("max_turns", 50),
         timeout_seconds=data.get("timeout_seconds", 900),
         workflow=data.get("workflow"),

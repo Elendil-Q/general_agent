@@ -106,6 +106,7 @@ class TestCustomSubagentConfig:
         assert config.tools is None
         assert config.disallowed_tools == ["task", "ask_clarification", "present_files"]
         assert config.skills is None
+        assert config.skills_on_demand is None
         assert config.model == "inherit"
         assert config.max_turns == 50
         assert config.timeout_seconds == 900
@@ -117,12 +118,14 @@ class TestCustomSubagentConfig:
             tools=["bash", "read_file", "write_file"],
             disallowed_tools=["task"],
             skills=["data-analysis", "visualization"],
+            skills_on_demand=["web-search", "pdf-export"],
             model="qwen3:32b",
             max_turns=80,
             timeout_seconds=600,
         )
         assert config.tools == ["bash", "read_file", "write_file"]
         assert config.skills == ["data-analysis", "visualization"]
+        assert config.skills_on_demand == ["web-search", "pdf-export"]
         assert config.model == "qwen3:32b"
         assert config.max_turns == 80
         assert config.timeout_seconds == 600
@@ -638,3 +641,306 @@ class TestSkillsFilterPassthrough:
         )
         available = set(config.skills) if config.skills is not None else None
         assert available == {"data-analysis", "web-search"}
+
+
+# ---------------------------------------------------------------------------
+# skills_on_demand field (catalog-only, read on demand via read_file)
+# ---------------------------------------------------------------------------
+
+
+class TestSubagentConfigSkillsOnDemand:
+    def test_default_skills_on_demand_is_none(self):
+        config = SubagentConfig(name="test", description="test", system_prompt="test")
+        assert config.skills_on_demand is None
+
+    def test_skills_on_demand_whitelist(self):
+        config = SubagentConfig(
+            name="test",
+            description="test",
+            system_prompt="test",
+            skills_on_demand=["web-search", "pdf-export"],
+        )
+        assert config.skills_on_demand == ["web-search", "pdf-export"]
+
+    def test_skills_on_demand_empty_list_means_none_loaded(self):
+        config = SubagentConfig(
+            name="test",
+            description="test",
+            system_prompt="test",
+            skills_on_demand=[],
+        )
+        assert config.skills_on_demand == []
+
+    def test_skills_and_skills_on_demand_are_independent(self):
+        """A name may appear in either or both; the two lists do not interact."""
+        config = SubagentConfig(
+            name="test",
+            description="test",
+            system_prompt="test",
+            skills=["data-analysis"],
+            skills_on_demand=["data-analysis", "web-search"],
+        )
+        assert config.skills == ["data-analysis"]
+        assert config.skills_on_demand == ["data-analysis", "web-search"]
+
+
+class TestSubagentOverrideConfigSkillsOnDemand:
+    def test_default_skills_on_demand_is_none(self):
+        override = SubagentOverrideConfig()
+        assert override.skills_on_demand is None
+
+    def test_skills_on_demand_whitelist(self):
+        override = SubagentOverrideConfig(skills_on_demand=["web-search", "data-analysis"])
+        assert override.skills_on_demand == ["web-search", "data-analysis"]
+
+    def test_skills_on_demand_empty_list(self):
+        override = SubagentOverrideConfig(skills_on_demand=[])
+        assert override.skills_on_demand == []
+
+    def test_skills_on_demand_coexists_with_skills(self):
+        override = SubagentOverrideConfig(
+            skills=["my-skill"],
+            skills_on_demand=["another-skill"],
+        )
+        assert override.skills == ["my-skill"]
+        assert override.skills_on_demand == ["another-skill"]
+
+
+class TestGetSkillsOnDemandFor:
+    def test_returns_none_when_no_override(self):
+        config = SubagentsAppConfig()
+        assert config.get_skills_on_demand_for("general-purpose") is None
+        assert config.get_skills_on_demand_for("unknown") is None
+
+    def test_returns_skills_on_demand_whitelist(self):
+        config = SubagentsAppConfig(
+            agents={
+                "general-purpose": SubagentOverrideConfig(skills_on_demand=["web-search", "coding"]),
+            }
+        )
+        assert config.get_skills_on_demand_for("general-purpose") == ["web-search", "coding"]
+
+    def test_returns_empty_list_for_no_on_demand_skills(self):
+        config = SubagentsAppConfig(
+            agents={
+                "bash": SubagentOverrideConfig(skills_on_demand=[]),
+            }
+        )
+        assert config.get_skills_on_demand_for("bash") == []
+
+    def test_returns_none_when_only_skills_set(self):
+        """Setting `skills` does not imply `skills_on_demand`."""
+        config = SubagentsAppConfig(
+            agents={
+                "bash": SubagentOverrideConfig(skills=["web-search"]),
+            }
+        )
+        assert config.get_skills_on_demand_for("bash") is None
+
+    def test_returns_none_for_unrelated_agent(self):
+        config = SubagentsAppConfig(
+            agents={
+                "bash": SubagentOverrideConfig(skills_on_demand=["web-search"]),
+            }
+        )
+        assert config.get_skills_on_demand_for("general-purpose") is None
+
+
+class TestLoadSubagentsConfigWithSkillsOnDemand:
+    def teardown_method(self):
+        _reset_subagents_config()
+
+    def test_load_with_skills_on_demand_override(self):
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {
+                    "general-purpose": {"skills_on_demand": ["web-search", "data-analysis"]},
+                },
+            }
+        )
+        cfg = get_subagents_app_config()
+        assert cfg.get_skills_on_demand_for("general-purpose") == ["web-search", "data-analysis"]
+
+    def test_load_with_empty_skills_on_demand(self):
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {
+                    "bash": {"skills_on_demand": []},
+                },
+            }
+        )
+        cfg = get_subagents_app_config()
+        assert cfg.get_skills_on_demand_for("bash") == []
+
+    def test_load_with_custom_agents_skills_on_demand(self):
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "custom_agents": {
+                    "analysis": {
+                        "description": "Data analysis specialist",
+                        "system_prompt": "You are a data analysis subagent.",
+                        "skills": ["data-analysis"],
+                        "skills_on_demand": ["visualization", "pdf-export"],
+                        "tools": ["bash", "read_file"],
+                        "max_turns": 80,
+                        "timeout_seconds": 600,
+                    },
+                },
+            }
+        )
+        cfg = get_subagents_app_config()
+        custom = cfg.custom_agents["analysis"]
+        assert custom.skills == ["data-analysis"]
+        assert custom.skills_on_demand == ["visualization", "pdf-export"]
+
+    def test_load_with_skills_and_skills_on_demand_together(self):
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {
+                    "general-purpose": {"skills": ["web-search"], "skills_on_demand": ["data-analysis"]},
+                },
+            }
+        )
+        cfg = get_subagents_app_config()
+        assert cfg.get_skills_for("general-purpose") == ["web-search"]
+        assert cfg.get_skills_on_demand_for("general-purpose") == ["data-analysis"]
+
+
+# ---------------------------------------------------------------------------
+# Registry: skills_on_demand override + custom agent passthrough
+# ---------------------------------------------------------------------------
+
+
+class TestRegistrySkillsOnDemand:
+    def teardown_method(self):
+        _reset_subagents_config()
+
+    def test_custom_agent_skills_on_demand_passthrough(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "analysis": {
+                        "description": "Analysis specialist",
+                        "system_prompt": "Analyze data.",
+                        "skills_on_demand": ["visualization", "pdf-export"],
+                        "tools": ["bash", "read_file"],
+                    },
+                },
+            }
+        )
+        config = get_subagent_config("analysis")
+        assert config is not None
+        assert config.skills_on_demand == ["visualization", "pdf-export"]
+        assert config.skills is None  # not set -> None
+
+    def test_skills_on_demand_override_applied_to_builtin(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "agents": {
+                    "general-purpose": {"skills_on_demand": ["web-search", "data-analysis"]},
+                },
+            }
+        )
+        config = get_subagent_config("general-purpose")
+        assert config.skills_on_demand == ["web-search", "data-analysis"]
+
+    def test_no_skills_on_demand_override_keeps_default(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        _reset_subagents_config()
+        config = get_subagent_config("general-purpose")
+        assert config.skills_on_demand is None
+
+    def test_skills_on_demand_override_does_not_mutate_builtin(self):
+        from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "agents": {
+                    "general-purpose": {"skills_on_demand": ["web-search"]},
+                },
+            }
+        )
+        _ = get_subagent_config("general-purpose")
+        assert BUILTIN_SUBAGENTS["general-purpose"].skills_on_demand is None
+
+    def test_custom_agent_with_skills_on_demand_override(self):
+        """Per-agent overrides also apply to custom agents' skills_on_demand."""
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "custom_agents": {
+                    "analysis": {
+                        "description": "Analysis",
+                        "system_prompt": "Analyze.",
+                        "skills_on_demand": ["visualization"],
+                        "timeout_seconds": 600,
+                    },
+                },
+                "agents": {
+                    "analysis": {"timeout_seconds": 300, "skills_on_demand": ["overridden-skill"]},
+                },
+            }
+        )
+        config = get_subagent_config("analysis")
+        assert config is not None
+        assert config.timeout_seconds == 300
+        assert config.skills_on_demand == ["overridden-skill"]
+
+
+# ---------------------------------------------------------------------------
+# Storage: skills_on_demand passthrough from YAML files
+# ---------------------------------------------------------------------------
+
+
+class TestStorageSkillsOnDemand:
+    def test_parse_subagent_file_reads_skills_on_demand(self, tmp_path):
+        from deerflow.subagents.storage import parse_subagent_file
+
+        subagent_file = tmp_path / "custom" / "analysis.yaml"
+        subagent_file.parent.mkdir(parents=True)
+        subagent_file.write_text(
+            """
+name: analysis
+description: Analysis specialist
+system_prompt: Analyze data.
+skills: [data-analysis]
+skills_on_demand: [visualization, pdf-export]
+tools: [bash, read_file]
+""",
+            encoding="utf-8",
+        )
+
+        config = parse_subagent_file(subagent_file)
+        assert config is not None
+        assert config.name == "analysis"
+        assert config.skills == ["data-analysis"]
+        assert config.skills_on_demand == ["visualization", "pdf-export"]
+
+    def test_parse_subagent_file_omits_skills_on_demand_when_absent(self, tmp_path):
+        from deerflow.subagents.storage import parse_subagent_file
+
+        subagent_file = tmp_path / "custom" / "analysis.yaml"
+        subagent_file.parent.mkdir(parents=True)
+        subagent_file.write_text(
+            """
+name: analysis
+description: Analysis specialist
+system_prompt: Analyze data.
+""",
+            encoding="utf-8",
+        )
+
+        config = parse_subagent_file(subagent_file)
+        assert config is not None
+        assert config.skills_on_demand is None

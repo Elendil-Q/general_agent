@@ -33,6 +33,10 @@ class SubagentOverrideConfig(BaseModel):
         default=None,
         description="Skill names whitelist for this subagent (None = inherit all enabled skills, [] = no skills)",
     )
+    skills_on_demand: list[str] | None = Field(
+        default=None,
+        description="Skill names to expose as on-demand for this subagent (catalog only; the subagent reads SKILL.md via read_file when needed). None = no on-demand skills, [] = no on-demand skills.",
+    )
 
 
 class CustomSubagentConfig(BaseModel):
@@ -60,6 +64,10 @@ class CustomSubagentConfig(BaseModel):
     skills: list[str] | None = Field(
         default=None,
         description="Skill names whitelist (None = inherit all enabled skills, [] = no skills)",
+    )
+    skills_on_demand: list[str] | None = Field(
+        default=None,
+        description="Skill names to expose as on-demand (catalog only; the subagent reads SKILL.md via read_file when the task matches, mirroring the lead agent). None/[] = no on-demand skills. Independent of `skills`.",
     )
     model: str = Field(
         default="inherit",
@@ -169,6 +177,21 @@ class SubagentsAppConfig(BaseModel):
             return override.skills
         return None
 
+    def get_skills_on_demand_for(self, agent_name: str) -> list[str] | None:
+        """Get the on-demand skills override for a specific agent.
+
+        Args:
+            agent_name: The name of the subagent.
+
+        Returns:
+            On-demand skill names if overridden, None otherwise (subagent will
+            use whatever its own config declares, typically no on-demand skills).
+        """
+        override = self.agents.get(agent_name)
+        if override is not None and override.skills_on_demand is not None:
+            return override.skills_on_demand
+        return None
+
     def get_subagents_path(self) -> Path:
         """Resolve the subagents directory path for YAML file discovery.
 
@@ -221,6 +244,8 @@ def load_subagents_config_from_dict(config_dict: dict) -> None:
             parts.append(f"model={override.model}")
         if override.skills is not None:
             parts.append(f"skills={override.skills}")
+        if override.skills_on_demand is not None:
+            parts.append(f"skills_on_demand={override.skills_on_demand}")
         if parts:
             overrides_summary[name] = ", ".join(parts)
 

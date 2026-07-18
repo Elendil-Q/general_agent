@@ -26,12 +26,12 @@ def ask_clarification_tool(
 
     Choose the interaction mode that best fits the question:
 
-    - **single_choice**: The user picks one option from ``options``. Use when the answer is one of a small known set.
+    - **single_choice**: The user picks one option from ``options``.
     - **multi_choice**: The user picks zero or more options from ``options``.
     - **text**: The user types free-form text. Use when no preset options apply.
-    - **free**: Open-ended clarification that ends the current turn — the user
-      replies in their next message. Use for complex, multi-part questions that
-      a simple form cannot capture.
+    - **free**: Open-ended clarification that ends the current turn — the user replies in their next message. Use for complex, multi-part questions that a simple form cannot capture.
+
+    **Most clarifications should use a structured mode instead of free mode**.
 
     Both single_choice and multi_choice mode remain a fillin form for custom input.
 
@@ -43,6 +43,7 @@ def ask_clarification_tool(
         options: Preset choices for single_choice / multi_choice. Ignored for
             text / free. Always provide concrete options for the choice modes.
     """
+
     # Placeholder: the actual logic is handled by ClarificationMiddleware, which
     # intercepts this tool call and interrupts execution to present the question.
     return "Clarification request processed by middleware"

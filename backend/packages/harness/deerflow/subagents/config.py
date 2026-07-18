@@ -18,7 +18,16 @@ class SubagentConfig:
         tools: Optional list of tool names to allow. If None, inherits all tools.
         disallowed_tools: Optional list of tool names to deny.
         skills: Optional list of skill names to load. If None or [], no skills are loaded. Only loads when explicitly set to a non-empty list.
-                If an empty list, no skills are loaded.
+               If an empty list, no skills are loaded.
+        skills_on_demand: Optional list of skill names to expose on demand. If None or [],
+                no on-demand skills are listed. On-demand skills are NOT injected into the
+                context up front - only a catalog entry (name + description + container
+                location) is added to the system prompt, and the subagent reads the skill's
+                SKILL.md via ``read_file`` when the task matches (mirrors the lead agent's
+                progressive-loading pattern). ``skills_on_demand`` is independent of
+                ``skills``: a name may appear in either or both (in both = full content
+                injected AND listed in the catalog, which is redundant but not an error).
+                Does not apply to workflow subagents.
         model: Model to use - 'inherit' uses parent's model.
         max_turns: Maximum agent turns before stopping. Built-in agents use the
             value set here (general-purpose=150, bash=60) unless the global
@@ -45,6 +54,7 @@ class SubagentConfig:
     disallowed_tools: list[str] | None = field(default_factory=lambda: ["task"])
     exclusive_tools: list[str] | None = None
     skills: list[str] | None = None
+    skills_on_demand: list[str] | None = None
     model: str = "inherit"
     max_turns: int = 50
     timeout_seconds: int = 900

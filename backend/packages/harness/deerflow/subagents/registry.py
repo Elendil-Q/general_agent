@@ -47,6 +47,7 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
             disallowed_tools=custom.disallowed_tools,
             exclusive_tools=custom.exclusive_tools,
             skills=custom.skills,
+            skills_on_demand=custom.skills_on_demand,
             model=custom.model,
             max_turns=custom.max_turns,
             timeout_seconds=custom.timeout_seconds,
@@ -121,6 +122,12 @@ def get_subagent_config(name: str, *, app_config: Any | None = None) -> Subagent
     if effective_skills is not None and effective_skills != config.skills:
         logger.debug("Subagent '%s': skills overridden (%s -> %s)", name, config.skills, effective_skills)
         overrides["skills"] = effective_skills
+
+    # On-demand skills: per-agent override only (no global default)
+    effective_skills_on_demand = subagents_config.get_skills_on_demand_for(name)
+    if effective_skills_on_demand is not None and effective_skills_on_demand != config.skills_on_demand:
+        logger.debug("Subagent '%s': skills_on_demand overridden (%s -> %s)", name, config.skills_on_demand, effective_skills_on_demand)
+        overrides["skills_on_demand"] = effective_skills_on_demand
 
     if overrides:
         config = replace(config, **overrides)

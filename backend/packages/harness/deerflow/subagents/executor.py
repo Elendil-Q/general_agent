@@ -650,6 +650,72 @@ class SubagentExecutor:
 
         return messages
 
+    async def _load_on_demand_skills(self) -> list[Skill]:
+        """Load metadata for on-demand skills (``config.skills_on_demand``).
+
+        On-demand skills are NOT injected as full content. Only their catalog
+        metadata (name + description + container location) is rendered into the
+        system prompt via :meth:`_render_on_demand_skills_section`; the subagent
+        reads the skill's SKILL.md via ``read_file`` when the task matches,
+        mirroring the lead agent's progressive-loading pattern.
+
+        Returns only metadata - this method never reads SKILL.md contents.
+        """
+        if self.config.skills_on_demand is None or len(self.config.skills_on_demand) == 0:
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills_on_demand=%r - skipping on-demand skill loading", self.config.skills_on_demand)
+            return []
+
+        try:
+            from deerflow.skills.storage import get_or_new_skill_storage
+
+            storage_kwargs = {"app_config": self.app_config} if self.app_config is not None else {}
+            storage = await asyncio.to_thread(get_or_new_skill_storage, **storage_kwargs)
+            all_skills = await asyncio.to_thread(storage.load_skills, enabled_only=True)
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} loaded {len(all_skills)} enabled skills from disk for on-demand catalog")
+        except Exception:
+            logger.exception(f"[trace={self.trace_id}] Failed to load on-demand skills for subagent {self.config.name}")
+            raise
+
+        if not all_skills:
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} no enabled skills found for on-demand catalog")
+            return []
+
+        allowed = set(self.config.skills_on_demand)
+        return [s for s in all_skills if s.name in allowed]
+
+    def _skills_container_path(self) -> str:
+        """Resolve the container base path where skills are mounted in the sandbox."""
+        try:
+            app_config = self.app_config or get_app_config()
+            return app_config.skills.container_path
+        except Exception:
+            return "/mnt/skills"
+
+    def _render_on_demand_skills_section(self, skills: list[Skill]) -> str:
+        """Render the on-demand skills catalog for the system prompt.
+
+        Mirrors the lead agent's ``<skill_system>`` catalog: each skill lists
+        only its name, description, and container location. The subagent is
+        instructed to ``read_file`` the SKILL.md at the location when the task
+        matches. Returns an empty string when there are no on-demand skills so
+        callers can append unconditionally.
+        """
+        if not skills:
+            return ""
+
+        container_base_path = self._skills_container_path()
+        skill_items = "\n".join(
+            f"    <skill>\n        <name>{skill.name}</name>\n        <description>{skill.description}</description>\n        <location>{skill.get_container_file_path(container_base_path)}</location>\n    </skill>" for skill in skills
+        )
+        return f"""<available_skills>
+The following skills are available on demand. Each lists only its name and a short
+description here; the full SKILL.md is NOT in the prompt. When the task matches a
+skill's use case, call `read_file` on the SKILL.md at the skill's <location> to load
+its full workflow and instructions, then follow it. Load referenced resources from
+the same skill directory only when needed during execution.
+{skill_items}
+</available_skills>"""
+
     async def _build_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], "DeferredToolSetup | None"]:
         """Build the initial state for agent execution.
 
@@ -676,9 +742,18 @@ class SubagentExecutor:
             get_deferred_tools_prompt_section,
         )
 
-        # Load skills as conversation items (Codex pattern)
-        skills = await self._load_skills()
-        filtered_tools = self._apply_skill_allowed_tools(skills)
+        # Load skills as conversation items (Codex pattern):
+        # - default skills (config.skills): full SKILL.md content injected.
+        # - on-demand skills (config.skills_on_demand): catalog entry only
+        #   (name + description + location); the subagent reads their SKILL.md
+        #   via read_file when the task matches, mirroring the lead agent.
+        default_skills = await self._load_skills()
+        on_demand_skills = await self._load_on_demand_skills()
+        # Both default and on-demand skills contribute to the allowed-tools
+        # policy: an on-demand skill's allowed_tools apply even before the
+        # agent reads it, so the tools are callable once the skill is loaded
+        # (no mid-session capability jump).
+        filtered_tools = self._apply_skill_allowed_tools(default_skills + on_demand_skills)
         # Assemble deferred tool_search AFTER policy filtering (fail-closed),
         # mirroring the lead path so subagents stop binding full MCP schemas.
         # The generated tool_search helper is intentionally not subject to the
@@ -687,7 +762,8 @@ class SubagentExecutor:
         # surface a tool the policy denied. This matches the lead agent.
         enabled = (self.app_config or get_app_config()).tool_search.enabled
         final_tools, deferred_setup = assemble_deferred_tools(filtered_tools, enabled=enabled)
-        skill_messages = await self._load_skill_messages(skills)
+        skill_messages = await self._load_skill_messages(default_skills)
+        on_demand_section = self._render_on_demand_skills_section(on_demand_skills)
 
         # Combine system_prompt and skills into a single SystemMessage.
         # Some LLM APIs reject multiple SystemMessages with
@@ -697,6 +773,8 @@ class SubagentExecutor:
             system_parts.append(self.config.system_prompt)
         for skill_msg in skill_messages:
             system_parts.append(skill_msg.content)
+        if on_demand_section:
+            system_parts.append(on_demand_section)
         # Name the deferred MCP tools in the prompt; their schemas stay withheld
         # until tool_search promotes them. Empty set -> "" -> appends nothing.
         deferred_section = get_deferred_tools_prompt_section(deferred_names=deferred_setup.deferred_names)

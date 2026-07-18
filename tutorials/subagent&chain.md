@@ -27,7 +27,11 @@ disallowed_tools:
   - present_files
 
 skills:
-  - code-review    # 显式指定才加载；省略或设为 [] 则不加载任何 skill
+  - code-review    # 显式指定才加载；省略或设为 [] 则不加载任何 skill（全文注入上下文）
+
+skills_on_demand:
+  - web-search     # 仅在 prompt 中列出目录（name + description + 位置）；subagent 按需用 read_file 读 SKILL.md
+  - pdf-export
 
 model: inherit     # inherit 表示使用父 agent 的模型
 max_turns: 80
@@ -44,7 +48,8 @@ timeout_seconds: 600
 | `tools` | list | 否 | 工具白名单。`null`（默认）继承父 agent 的所有工具 |
 | `disallowed_tools` | list | 否 | 工具黑名单。默认 `["task"]` 防止嵌套委托 |
 | `exclusive_tools` | list | 否 | 额外的专属工具路径（如 `"deerflow.tools.custom:MyTool"`） |
-| `skills` | list | 否 | Skill 白名单。`null` 或 `[]` 均不加载任何 skill；只在显式指定非空列表时才加载 |
+| `skills` | list | 否 | Skill 白名单。`null` 或 `[]` 均不加载任何 skill；只在显式指定非空列表时才加载（全文注入上下文） |
+| `skills_on_demand` | list | 否 | 按需加载的 Skill 名单。`null`/`[]` 均不列出。仅在 system prompt 中放目录条目（name + description + 容器路径），subagent 匹配到任务时用 `read_file` 读 SKILL.md，与 lead agent 的 progressive loading 一致。与 `skills` 互相独立，同一名字可同时出现在两者 |
 | `model` | string | 否 | 模型名，`"inherit"`（默认）使用父 agent 的模型 |
 | `max_turns` | int | 否 | 最大 agent turn 数，默认 50 |
 | `timeout_seconds` | int | 否 | 超时秒数，默认 900 |
@@ -54,7 +59,7 @@ timeout_seconds: 600
 
 Subagent 的发现和配置覆盖共三层，优先级从高到低：
 
-1. **config.yaml `subagents.agents.<name>`** — 对 built-in subagent 的运行时覆盖（timeout、max_turns、model、skills）
+1. **config.yaml `subagents.agents.<name>`** — 对 built-in subagent 的运行时覆盖（timeout、max_turns、model、skills、skills_on_demand）
 2. **config.yaml `subagents.custom_agents.<name>`** — 在配置文件中内联定义 subagent（优先级高于 YAML 文件）
 3. **`subagents/{public,custom}/<name>.yaml`** — 文件系统中的 YAML 定义，`custom/` 目录覆盖 `public/` 目录
 
@@ -71,7 +76,23 @@ subagents:
     code-reviewer:
       timeout_seconds: 1200
       skills: ["code-review"]
+      skills_on_demand: ["web-search", "pdf-export"]   # 这些 skill 只列目录，按需 read_file 加载
 ```
+
+### Skill 的加载方式：默认加载 vs 按需加载
+
+Subagent 对 skill 有两种加载策略，对应两个字段：
+
+- **`skills`（默认加载）**：被列出的 skill 的 `SKILL.md` 全文在 subagent 启动时直接注入 system prompt。适合 subagent 几乎每次任务都会用到的核心 skill。代价是每次委托都付出这些 skill 全文的 token。
+- **`skills_on_demand`（按需加载）**：被列出的 skill 只在 system prompt 中放一个目录条目（name + description + 容器路径），subagent 判断任务匹配后用 `read_file` 工具按路径读取 `SKILL.md` 全文。与 lead agent 的 progressive loading 完全一致。适合想让 subagent「知道存在」但偶尔才用的 skill，避免每次委托都为冷门 skill 付全文 token。
+
+两者互相独立：
+
+- 一个 skill 名可以只出现在 `skills`、只出现在 `skills_on_demand`、或同时出现在两者（同时出现 = 全文注入且目录里也列着，冗余但不是错误）。
+- `skills_on_demand` 中的 skill 若声明了 `allowed_tools`，这些工具在 subagent 启动时就可调用（policy 在装载前就生效），skill 内容则按需补充，避免会话中途工具可用性跳变。
+- 描述质量很重要：按需加载依赖 subagent 从目录的 description 判断是否要读全文，description 写得差等于丢掉这个 skill。
+
+> 注意：workflow-subagent 不使用 `skills` / `skills_on_demand` / `system_prompt` / `tools` 过滤，这些都由工作流自身控制。
 
 ### workflow-subagent（高级）
 
@@ -97,7 +118,7 @@ def build_graph(*, model, tools, config) -> StateGraph:
     return graph
 ```
 
-注意：workflow-subagent 不使用 `system_prompt`、`skills` 和 `tools` 过滤 — 这些都由工作流自己完全控制。
+注意：workflow-subagent 不使用 `system_prompt`、`skills`、`skills_on_demand` 和 `tools` 过滤 — 这些都由工作流自己完全控制。
 
 ### 可用的 built-in subagent
 

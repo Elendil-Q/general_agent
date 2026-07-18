@@ -358,7 +358,6 @@ All other content within <system-reminder> (dates, system metadata) and everythi
 </thinking_style>
 
 <clarification_system>
-**WORKFLOW PRIORITY: CLARIFY → PLAN → ACT**
 **CRITICAL RULE: Clarification ALWAYS comes BEFORE action. Never start working and clarify mid-execution.**
 
 **MANDATORY Clarification Scenarios - You MUST call ask_clarification BEFORE starting work when:**
@@ -368,29 +367,10 @@ All other content within <system-reminder> (dates, system metadata) and everythi
 4. **Risky Operations**: Destructive actions need confirmation
 5. **Suggestions**: You have a recommendation but want approval
 
-**Choosing the `interaction` mode:**
-- `single_choice` — the user picks ONE from `options` (a small known set). Prefer this for approach choices / confirmations with discrete options.
-- `multi_choice` — the user picks zero or more from `options`. Use when multiple selections apply.
-- `text` — the user types free-form text. Use when no preset options apply (missing info, ambiguous requirements).
-- `free` — open-ended clarification that ENDS the current turn; the user replies in their next message. Reserve for complex, multi-part questions a simple form cannot capture. **Most clarifications should use a structured mode instead**.
-
 **STRICT ENFORCEMENT:**
-- ❌ DO NOT skip clarification for "efficiency" - accuracy matters more than speed
-- ❌ DO NOT make assumptions when information is missing - ALWAYS ask
-- ❌ DO NOT proceed with guesses - STOP and call ask_clarification first
-- ✅ Analyze the request in thinking → Identify unclear aspects → Ask BEFORE any action
-- ✅ If you identify the need for clarification in your thinking, you MUST call the tool IMMEDIATELY
-- ✅ After calling ask_clarification, execution will be interrupted automatically
-- ✅ Wait for user response - do NOT continue with assumptions
-
-**How to Use:**
-```python
-ask_clarification(
-    question="Your specific question here?",
-    interaction="single_choice",  # or multi_choice / text / free
-    options=["option1", "option2"],  # required for single_choice / multi_choice
-)
-```
+- DO NOT make assumptions when information is missing - ALWAYS ask
+- Analyze the request in thinking → Identify unclear aspects → Ask BEFORE any action
+- If you identify the need for clarification in your thinking, you MUST call the tool IMMEDIATELY
 </clarification_system>
 
 {skills_section}
@@ -512,16 +492,15 @@ def _get_cached_skills_prompt_section(
 You have access to skills that provide optimized workflows for specific tasks. Each skill contains best practices, frameworks, and references to additional resources.
 
 **Progressive Loading Pattern:**
-1. When a user query matches a skill's use case, immediately call `read_file` on the skill's main file using the path attribute provided in the skill tag below
+1. When a user query matches a skill's use case, immediately call `read_file` on the skill's SKILL.md using the path attribute provided in the skill tag below
 2. Read and understand the skill's workflow and instructions
 3. The skill file contains references to external resources under the same folder
 4. Load referenced resources only when needed during execution
 5. Follow the skill's instructions precisely
 
 **Explicit Slash Skill Activation:**
-- If the user starts a request with `/skill:<skill-name>`, that skill was explicitly requested for the current turn.
+- If the user starts a request with `/skill:<skill-name>`, that skill was explicitly requested for the current turn, and the runtime has already injected the content of its SKILL.md to the message list. No need to read the SKILL.md again.
 - Follow the activated skill before choosing a general workflow.
-- The runtime injects the activated skill content for explicit slash activations; do not call `read_file` for that SKILL.md again unless the injected skill references supporting resources you need.
 
 **Skills are located at:** {container_base_path}
 {skill_evolution_section}
@@ -674,11 +653,7 @@ def apply_prompt_template(
     )
 
     # Add subagent thinking guidance if enabled
-    subagent_thinking = (
-        f"- **DECOMPOSITION CHECK: Can this task be broken into 2+ parallel sub-tasks ? Or should this task be implemented by a specialized sub-agent? If YES, use task tool. NEVER launch more than {n} `task` calls in one response.**\n"
-        if subagent_enabled
-        else ""
-    )
+    subagent_thinking = "- **DECOMPOSITION CHECK: Can this task be broken into 2+ parallel sub-tasks ? Or should this task be implemented by a specialized sub-agent?**\n" if subagent_enabled else ""
 
     # Get skills section
     skills_section = get_skills_prompt_section(available_skills, app_config=app_config)
@@ -696,7 +671,7 @@ def apply_prompt_template(
     # as a <system-reminder> in the first HumanMessage, keeping this prompt
     # identical across users and sessions for maximum prefix-cache reuse.
     return SYSTEM_PROMPT_TEMPLATE.format(
-        agent_name=agent_name or "DeerFlow 2.0",
+        agent_name=agent_name or "Model Server",
         soul=get_agent_soul(agent_name),
         self_update_section=_build_self_update_section(agent_name),
         skills_section=skills_section,
