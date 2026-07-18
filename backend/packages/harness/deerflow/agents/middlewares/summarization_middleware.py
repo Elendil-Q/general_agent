@@ -20,6 +20,11 @@ from deerflow.agents.middlewares.tool_call_metadata import clone_ai_message_with
 
 logger = logging.getLogger(__name__)
 
+# Fallback context window (tokens) for ``fraction``-type trigger/keep limits when
+# neither the model's ``context_window`` config nor its LangChain profile provides
+# ``max_input_tokens``. 128K matches the de-facto standard for modern chat models.
+DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000
+
 
 @dataclass(frozen=True)
 class SummarizationEvent:
@@ -108,8 +113,14 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         preserve_recent_skill_count: int = 5,
         preserve_recent_skill_tokens: int = 25_000,
         preserve_recent_skill_tokens_per_skill: int = 5_000,
+        context_window: int | None = None,
         **kwargs,
     ) -> None:
+        # Explicit context window from config.yaml ``models[].context_window``.
+        # Takes precedence over the LangChain model profile for fraction limits.
+        # Must be set BEFORE super().__init__(): the parent validates fraction-type
+        # trigger/keep limits via _get_profile_limits() during its own __init__.
+        self._context_window = context_window if context_window and context_window > 0 else None
         super().__init__(*args, **kwargs)
         self._skills_container_path = skills_container_path or "/mnt/skills"
         self._skill_file_read_tool_names = frozenset(skill_file_read_tool_names or {"read_file", "read", "view", "cat"})
@@ -129,6 +140,22 @@ class DeerFlowSummarizationMiddleware(SummarizationMiddleware):
         existing_tags = list((getattr(self.model, "config", None) or {}).get("tags") or [])
         merged_tags = [*existing_tags, TAG_NOSTREAM] if TAG_NOSTREAM not in existing_tags else existing_tags
         self._summary_model = self.model.with_config(tags=merged_tags)
+
+    @override
+    def _get_profile_limits(self) -> int | None:
+        """Resolve the model's max input tokens for ``fraction``-type limits.
+
+        Priority: ``models[].context_window`` from config.yaml > LangChain model
+        profile (``max_input_tokens``) > built-in 128K default. The default keeps
+        fractional triggers working for OpenAI-compatible gateways whose models
+        are absent from LangChain's profile catalog, instead of raising.
+        """
+        if self._context_window is not None:
+            return self._context_window
+        profile_limit = super()._get_profile_limits()
+        if profile_limit is not None:
+            return profile_limit
+        return DEFAULT_CONTEXT_WINDOW_TOKENS
 
     @override
     def _create_summary(self, messages_to_summarize: list[AnyMessage]) -> str:

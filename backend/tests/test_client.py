@@ -1041,6 +1041,7 @@ class TestGetModel:
         model_cfg.description = "A test model"
         model_cfg.supports_thinking = True
         model_cfg.supports_reasoning_effort = True
+        model_cfg.context_window = 200000
         client._app_config.get_model_config.return_value = model_cfg
 
         result = client.get_model("test-model")
@@ -1051,6 +1052,7 @@ class TestGetModel:
             "description": "A test model",
             "supports_thinking": True,
             "supports_reasoning_effort": True,
+            "context_window": 200000,
         }
 
     def test_not_found(self, client):

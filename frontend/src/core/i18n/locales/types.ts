@@ -277,6 +277,8 @@ export interface Translations {
     input: string;
     output: string;
     total: string;
+    context: string;
+    contextUnknownMax: string;
     view: string;
     unavailable: string;
     unavailableShort: string;

@@ -54,7 +54,7 @@ export default function AgentChatPage() {
   const [isWelcomeMode, setIsWelcomeMode] = useState(isNewThread);
   const [settings, setSettings] = useThreadSettings(threadId);
   const [localSettings, setLocalSettings] = useLocalSettings();
-  const { tokenUsageEnabled } = useModels();
+  const { models, tokenUsageEnabled } = useModels();
   const threadTokenUsage = useThreadTokenUsage(
     isNewThread || isMock ? undefined : threadId,
     { enabled: tokenUsageEnabled && !isMock },
@@ -167,6 +167,9 @@ export default function AgentChatPage() {
   const tokenUsageInlineMode = tokenUsageEnabled
     ? localSettings.tokenUsage.inlineMode
     : "off";
+  const maxContextTokens =
+    models.find((m) => m.name === settings.context.model_name)
+      ?.context_window ?? null;
   const hasTodos = (thread.values.todos?.length ?? 0) > 0;
 
   return (
@@ -220,6 +223,7 @@ export default function AgentChatPage() {
               <TokenUsageIndicator
                 threadId={isNewThread ? undefined : threadId}
                 backendUsage={backendTokenUsage}
+                maxContextTokens={maxContextTokens}
                 enabled={tokenUsageEnabled}
                 messages={thread.messages}
                 pendingMessages={pendingUsageMessages}

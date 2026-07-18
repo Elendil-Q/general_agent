@@ -100,11 +100,34 @@ export function selectHeaderTokenUsage({
 }
 
 /**
- * Format a token count for display: 1234 -> "1,234", 12345 -> "12.3K"
+ * Estimate current context-window occupancy in tokens.
+ *
+ * The most recent usage-bearing AI message reports the full prompt size of
+ * that LLM call (system prompt + history + tool schemas) as `input_tokens`;
+ * adding its `output_tokens` approximates the context occupied after the call.
+ * Later snapshots of the same message id win (e.g. in-flight updates).
+ */
+export function selectCurrentContextUsage(
+  messages: Message[],
+  pendingMessages: Message[] = [],
+): number | null {
+  let latest: TokenUsage | null = null;
+  for (const message of [...messages, ...pendingMessages]) {
+    const usage = getUsageMetadata(message);
+    if (usage) {
+      latest = usage;
+    }
+  }
+  return latest ? latest.inputTokens + latest.outputTokens : null;
+}
+
+/**
+ * Format a token count for display: 1234 -> "1,234", 12345 -> "12.3K", 200000 -> "200K"
  */
 export function formatTokenCount(count: number): string {
   if (count < 10_000) {
     return count.toLocaleString();
   }
-  return `${(count / 1000).toFixed(1)}K`;
+  const k = count / 1000;
+  return `${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}K`;
 }

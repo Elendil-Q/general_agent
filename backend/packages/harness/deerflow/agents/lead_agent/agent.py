@@ -87,8 +87,17 @@ def _resolve_model_name(requested_model_name: str | None = None, *, app_config: 
     return default_model_name
 
 
-def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> DeerFlowSummarizationMiddleware | None:
-    """Create and configure the summarization middleware from config."""
+def _create_summarization_middleware(*, app_config: AppConfig | None = None, context_window: int | None = None) -> DeerFlowSummarizationMiddleware | None:
+    """Create and configure the summarization middleware from config.
+
+    Args:
+        app_config: Application config; falls back to the cached global.
+        context_window: ``context_window`` of the runtime model, used for
+            ``fraction``-type trigger/keep limits. When omitted (or None),
+            falls back to the summarization model's own ``context_window``,
+            then the default model's, then LangChain profile / 128K default
+            inside the middleware itself.
+    """
     resolved_app_config = app_config or get_app_config()
     config = resolved_app_config.summarization
 
@@ -147,6 +156,14 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
     # config is not expected to change after startup.
     skills_container_path = resolved_app_config.skills.container_path or "/mnt/skills"
 
+    # Resolve the context window for fraction-type limits: runtime model first
+    # (its window is what actually constrains the conversation), then the
+    # summarization model's, then the default model's.
+    if context_window is None:
+        candidate_name = config.model_name or (resolved_app_config.models[0].name if resolved_app_config.models else None)
+        candidate = resolved_app_config.get_model_config(candidate_name) if candidate_name else None
+        context_window = candidate.context_window if candidate else None
+
     return DeerFlowSummarizationMiddleware(
         **kwargs,
         skills_container_path=skills_container_path,
@@ -155,6 +172,7 @@ def _create_summarization_middleware(*, app_config: AppConfig | None = None) -> 
         preserve_recent_skill_count=config.preserve_recent_skill_count,
         preserve_recent_skill_tokens=config.preserve_recent_skill_tokens,
         preserve_recent_skill_tokens_per_skill=config.preserve_recent_skill_tokens_per_skill,
+        context_window=context_window,
     )
 
 
@@ -354,8 +372,13 @@ def build_middlewares(
 
     middlewares.append(SkillActivationMiddleware(available_skills=available_skills, app_config=resolved_app_config))
 
-    # Add summarization middleware if enabled
-    summarization_middleware = _create_summarization_middleware(app_config=resolved_app_config)
+    # Add summarization middleware if enabled. Fraction-type limits resolve
+    # against the runtime model's context_window first (see middleware).
+    runtime_model_config = resolved_app_config.get_model_config(model_name) if model_name else None
+    summarization_middleware = _create_summarization_middleware(
+        app_config=resolved_app_config,
+        context_window=runtime_model_config.context_window if runtime_model_config else None,
+    )
     if summarization_middleware is not None:
         middlewares.append(summarization_middleware)
 

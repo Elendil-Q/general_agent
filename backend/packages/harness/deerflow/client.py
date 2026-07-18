@@ -864,6 +864,7 @@ class DeerFlowClient:
                     "description": getattr(model, "description", None),
                     "supports_thinking": getattr(model, "supports_thinking", False),
                     "supports_reasoning_effort": getattr(model, "supports_reasoning_effort", False),
+                    "context_window": getattr(model, "context_window", None),
                 }
                 for model in self._app_config.models
             ],
@@ -935,6 +936,7 @@ class DeerFlowClient:
             "description": getattr(model, "description", None),
             "supports_thinking": getattr(model, "supports_thinking", False),
             "supports_reasoning_effort": getattr(model, "supports_reasoning_effort", False),
+            "context_window": getattr(model, "context_window", None),
         }
 
     # ------------------------------------------------------------------

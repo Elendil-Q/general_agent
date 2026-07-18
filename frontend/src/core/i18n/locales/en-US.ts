@@ -357,11 +357,13 @@ export const enUS: Translations = {
     input: "Input",
     output: "Output",
     total: "Total",
+    context: "Context",
+    contextUnknownMax: "max unknown",
     view: "Display",
     unavailable:
       "No token usage yet. Usage appears only after a successful model response when the provider returns usage_metadata.",
     unavailableShort: "No usage returned",
-    note: "Header totals use persisted thread usage, plus visible in-flight usage while a run is still streaming. Per-turn and debug usage come from currently visible messages only. Totals may differ from provider billing pages.",
+    note: "Context occupancy is estimated from the most recent model call (input + output tokens) against the model's configured context_window. Totals use persisted thread usage, plus visible in-flight usage while a run is still streaming. Per-turn and debug usage come from currently visible messages only. Figures may differ from provider billing pages.",
     presets: {
       off: "Off",
       summary: "Summary",

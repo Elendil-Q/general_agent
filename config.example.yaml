@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 16
+config_version: 17
 
 # ============================================================================
 # Logging
@@ -66,6 +66,9 @@ models:
   #   supports_thinking: true
   #   supports_vision: true
   #   supports_reasoning_effort: true
+  #   context_window: 256000         # Model context window in tokens (metadata only,
+  #                                  # never sent to the provider). Lets the workspace UI
+  #                                  # show context occupancy (used / max). Omit to hide it.
   #   when_thinking_enabled:
   #     extra_body:
   #       thinking:
@@ -86,6 +89,7 @@ models:
   #   max_tokens: 4096
   #   temperature: 0.7
   #   supports_vision: true # Enable vision support for view_image tool
+  #   context_window: 128000 # Context window in tokens (UI display only)
 
   # Example: OpenAI Responses API model
   # - name: gpt-5-responses

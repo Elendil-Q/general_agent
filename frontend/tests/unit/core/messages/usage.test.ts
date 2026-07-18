@@ -1,7 +1,12 @@
 import type { Message } from "@langchain/langgraph-sdk";
 import { expect, test } from "@rstest/core";
 
-import { accumulateUsage, selectHeaderTokenUsage } from "@/core/messages/usage";
+import {
+  accumulateUsage,
+  formatTokenCount,
+  selectCurrentContextUsage,
+  selectHeaderTokenUsage,
+} from "@/core/messages/usage";
 import {
   getAssistantTurnUsageMessages,
   getMessageGroups,
@@ -161,4 +166,82 @@ test("falls back to visible messages when backend usage is unavailable or zero",
     outputTokens: 5,
     totalTokens: 15,
   });
+});
+
+test("returns the last usage-bearing AI message as current context usage", () => {
+  const messages = [
+    {
+      id: "ai-1",
+      type: "ai",
+      content: "First answer",
+      usage_metadata: {
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 120,
+      },
+    },
+    {
+      id: "human-1",
+      type: "human",
+      content: "Follow-up",
+    },
+    {
+      id: "ai-2",
+      type: "ai",
+      content: "Second answer",
+      usage_metadata: {
+        input_tokens: 150,
+        output_tokens: 30,
+        total_tokens: 180,
+      },
+    },
+  ] as Message[];
+
+  expect(selectCurrentContextUsage(messages)).toBe(180);
+});
+
+test("prefers pending in-flight usage snapshots for current context usage", () => {
+  const messages = [
+    {
+      id: "ai-1",
+      type: "ai",
+      content: "Completed answer",
+      usage_metadata: {
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 120,
+      },
+    },
+  ] as Message[];
+  const pendingMessages = [
+    {
+      id: "ai-2",
+      type: "ai",
+      content: "Streaming answer",
+      usage_metadata: {
+        input_tokens: 200,
+        output_tokens: 5,
+        total_tokens: 205,
+      },
+    },
+  ] as Message[];
+
+  expect(selectCurrentContextUsage(messages, pendingMessages)).toBe(205);
+});
+
+test("returns null current context usage when no usage metadata exists", () => {
+  const messages = [
+    { id: "human-1", type: "human", content: "Hi" },
+    { id: "ai-1", type: "ai", content: "Hello" },
+  ] as Message[];
+
+  expect(selectCurrentContextUsage(messages)).toBeNull();
+});
+
+test("formats token counts compactly", () => {
+  expect(formatTokenCount(999)).toBe("999");
+  expect(formatTokenCount(1234)).toBe("1,234");
+  expect(formatTokenCount(12345)).toBe("12.3K");
+  expect(formatTokenCount(200000)).toBe("200K");
+  expect(formatTokenCount(128000)).toBe("128K");
 });

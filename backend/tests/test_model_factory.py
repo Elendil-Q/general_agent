@@ -103,6 +103,19 @@ def test_raises_when_model_not_found(monkeypatch):
         factory_module.create_chat_model(name="ghost-model")
 
 
+def test_context_window_is_not_forwarded_to_model_constructor(monkeypatch):
+    """``context_window`` is UI metadata; providers must never receive it as a kwarg."""
+    model = _make_model("ctx-model")
+    model.context_window = 200000
+    cfg = _make_app_config([model])
+    _patch_factory(monkeypatch, cfg)
+
+    FakeChatModel.captured_kwargs = {}
+    factory_module.create_chat_model(name="ctx-model")
+
+    assert "context_window" not in FakeChatModel.captured_kwargs
+
+
 def test_appends_all_tracing_callbacks(monkeypatch):
     cfg = _make_app_config([_make_model("alpha")])
     _patch_factory(monkeypatch, cfg)

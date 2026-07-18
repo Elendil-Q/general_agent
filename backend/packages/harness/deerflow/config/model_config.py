@@ -32,6 +32,13 @@ class ModelConfig(BaseModel):
         description="Extra settings to be passed to the model when thinking is disabled",
     )
     supports_vision: bool = Field(default_factory=lambda: False, description="Whether the model supports vision/image inputs")
+    context_window: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Model context window size in tokens. Metadata only — never passed to the model constructor. Exposed via the models API so the frontend can display context occupancy (used vs. max). Leave unset to hide the max-context display."
+        ),
+    )
     stream_chunk_timeout: float | None = Field(
         default=None,
         description=(

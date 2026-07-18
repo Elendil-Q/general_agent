@@ -14,9 +14,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Progress } from "@/components/ui/progress";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   formatTokenCount,
+  selectCurrentContextUsage,
   selectHeaderTokenUsage,
   type TokenUsage,
 } from "@/core/messages/usage";
@@ -33,6 +35,7 @@ interface TokenUsageIndicatorProps {
   messages: Message[];
   pendingMessages?: Message[];
   backendUsage?: TokenUsage | null;
+  maxContextTokens?: number | null;
   enabled?: boolean;
   preferences: TokenUsagePreferences;
   onPreferencesChange: (preferences: TokenUsagePreferences) => void;
@@ -44,6 +47,7 @@ export function TokenUsageIndicator({
   messages,
   pendingMessages,
   backendUsage,
+  maxContextTokens,
   enabled = false,
   preferences,
   onPreferencesChange,
@@ -60,11 +64,31 @@ export function TokenUsageIndicator({
       }),
     [backendUsage, messages, pendingMessages, threadId],
   );
+  const contextTokens = useMemo(
+    () => selectCurrentContextUsage(messages, pendingMessages),
+    [messages, pendingMessages],
+  );
+  const contextPercent =
+    contextTokens != null && maxContextTokens
+      ? Math.min(100, (contextTokens / maxContextTokens) * 100)
+      : null;
   const preset = getTokenUsageViewPreset(preferences);
 
   if (!enabled) {
     return null;
   }
+
+  const headerText = (() => {
+    if (!preferences.headerTotal) {
+      return t.tokenUsage.presets[presetKeyToTranslationKey(preset)];
+    }
+    if (contextTokens != null) {
+      return maxContextTokens
+        ? `${formatTokenCount(contextTokens)} / ${formatTokenCount(maxContextTokens)}`
+        : formatTokenCount(contextTokens);
+    }
+    return usage ? formatTokenCount(usage.totalTokens) : "-";
+  })();
 
   return (
     <DropdownMenu>
@@ -79,19 +103,33 @@ export function TokenUsageIndicator({
         >
           <CoinsIcon size={14} />
           <span>{t.tokenUsage.label}</span>
-          <span className="font-mono">
-            {preferences.headerTotal
-              ? usage
-                ? formatTokenCount(usage.totalTokens)
-                : "-"
-              : t.tokenUsage.presets[presetKeyToTranslationKey(preset)]}
-          </span>
+          <span className="font-mono">{headerText}</span>
           <ChevronDownIcon className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="bottom" align="end" className="w-80">
         <DropdownMenuLabel>{t.tokenUsage.title}</DropdownMenuLabel>
         <div className="px-2 py-1 text-xs">
+          {contextTokens != null && (
+            <div className="mb-2 space-y-1.5">
+              <div className="flex justify-between gap-4">
+                <span>{t.tokenUsage.context}</span>
+                <span className="font-mono font-medium">
+                  {maxContextTokens
+                    ? `${formatTokenCount(contextTokens)} / ${formatTokenCount(maxContextTokens)}`
+                    : `${formatTokenCount(contextTokens)} (${t.tokenUsage.contextUnknownMax})`}
+                </span>
+              </div>
+              {contextPercent != null && (
+                <div className="flex items-center gap-2">
+                  <Progress value={contextPercent} className="h-1.5 flex-1" />
+                  <span className="text-muted-foreground font-mono">
+                    {contextPercent.toFixed(1)}%
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
           {usage ? (
             <div className="space-y-1">
               <div className="flex justify-between gap-4">

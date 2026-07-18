@@ -278,6 +278,7 @@ DeerFlow 默认启用 `web_search`（DuckDuckGo，无需 API key）与 `web_fetc
 | `api_key` / `gemini_api_key` | API key，建议 `$ENV_VAR` |
 | `base_url` / `api_base` | Provider 基础 URL |
 | `max_tokens` | 最大输出 token |
+| `context_window` | 最大上下文窗口 |
 | `temperature` | 采样温度 |
 | `supports_thinking` | 是否支持扩展思考 |
 | `supports_reasoning_effort` | 是否支持 reasoning effort |

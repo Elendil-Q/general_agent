@@ -580,7 +580,7 @@ Returns `{}` when Langfuse is not in the enabled providers — LangSmith-only de
 ### Config Schema
 
 **`config.yaml`** key sections:
-- `models[]` - LLM configs with `use` class path, `supports_thinking`, `supports_vision`, provider-specific fields
+- `models[]` - LLM configs with `use` class path, `supports_thinking`, `supports_vision`, provider-specific fields; optional `context_window` (tokens) is UI metadata exposed via `GET /api/models` so the workspace header can show context occupancy (used / max) — never forwarded to the provider constructor
 - vLLM reasoning models should use `deerflow.models.vllm_provider:VllmChatModel`; for Qwen-style parsers prefer `when_thinking_enabled.extra_body.chat_template_kwargs.enable_thinking`, and DeerFlow will also normalize the older `thinking` alias
 - `tools[]` - Tool configs with `use` variable path and `group`
 - `tool_groups[]` - Logical groupings for tools

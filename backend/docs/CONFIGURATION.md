@@ -30,6 +30,7 @@ models:
     api_key: $OPENAI_API_KEY       # API key (use env var)
     max_tokens: 4096               # Max tokens per request
     temperature: 0.7               # Sampling temperature
+    context_window: 128000         # Context window in tokens 
 ```
 
 **Supported Providers**:

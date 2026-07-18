@@ -1027,3 +1027,51 @@ def test_multiple_id_swap_triplets_preserve_chronological_order() -> None:
         f"{base2}__memory",
         f"{base2}__user",
     ]
+
+
+# ---------------------------------------------------------------------------
+# fraction 触发类型的上下文窗口来源优先级:
+# config.yaml models[].context_window > model.profile > 128K 默认值
+# ---------------------------------------------------------------------------
+
+
+def _fraction_middleware(*, model, context_window=None) -> DeerFlowSummarizationMiddleware:
+    return DeerFlowSummarizationMiddleware(
+        model=model,
+        trigger=("fraction", 0.8),
+        keep=("messages", 2),
+        token_counter=len,
+        context_window=context_window,
+    )
+
+
+class _ProfiledChatModel(_StaticChatModel):
+    profile: dict = {"max_input_tokens": 64_000}
+
+
+def test_fraction_limit_prefers_configured_context_window_over_profile() -> None:
+    mw = _fraction_middleware(model=_ProfiledChatModel(), context_window=200_000)
+    assert mw._get_profile_limits() == 200_000
+
+
+def test_fraction_limit_uses_model_profile_when_no_config() -> None:
+    mw = _fraction_middleware(model=_ProfiledChatModel())
+    assert mw._get_profile_limits() == 64_000
+
+
+def test_fraction_limit_falls_back_to_default_without_config_or_profile() -> None:
+    # MagicMock has no valid profile mapping; must not raise, must return 128K.
+    mw = _fraction_middleware(model=MagicMock())
+    assert mw._get_profile_limits() == 128_000
+
+
+def test_fraction_trigger_no_longer_raises_without_profile() -> None:
+    # Parent class raises ValueError for fraction limits when the model profile
+    # is unavailable; the 128K default must keep construction working.
+    mw = DeerFlowSummarizationMiddleware(
+        model=MagicMock(),
+        trigger=("fraction", 0.8),
+        keep=("fraction", 0.3),
+        token_counter=len,
+    )
+    assert mw._get_profile_limits() == 128_000

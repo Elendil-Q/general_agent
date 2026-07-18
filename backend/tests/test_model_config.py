@@ -28,3 +28,19 @@ def test_responses_api_fields_round_trip_in_model_dump():
 
     assert dumped["use_responses_api"] is True
     assert dumped["output_version"] == "responses/v1"
+
+
+def test_context_window_is_declared_in_model_schema():
+    assert "context_window" in ModelConfig.model_fields
+
+
+def test_context_window_defaults_to_none():
+    assert _make_model().context_window is None
+
+
+def test_context_window_round_trips_in_model_dump():
+    config = _make_model(context_window=200000)
+
+    dumped = config.model_dump(exclude_none=True)
+
+    assert dumped["context_window"] == 200000

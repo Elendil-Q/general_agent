@@ -404,7 +404,7 @@ def test_build_middlewares_uses_loop_detection_config(monkeypatch):
 
     monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
     monkeypatch.setattr(lead_agent_module, "build_lead_runtime_middlewares", lambda *, app_config, lazy_init=True: [])
-    monkeypatch.setattr(lead_agent_module, "_create_summarization_middleware", lambda *, app_config=None: None)
+    monkeypatch.setattr(lead_agent_module, "_create_summarization_middleware", lambda *, app_config=None, context_window=None: None)
     monkeypatch.setattr(lead_agent_module, "_create_todo_list_middleware", lambda is_plan_mode: None)
 
     middlewares = lead_agent_module.build_middlewares(
@@ -430,7 +430,7 @@ def test_build_middlewares_omits_loop_detection_when_disabled(monkeypatch):
 
     monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
     monkeypatch.setattr(lead_agent_module, "build_lead_runtime_middlewares", lambda *, app_config, lazy_init=True: [])
-    monkeypatch.setattr(lead_agent_module, "_create_summarization_middleware", lambda *, app_config=None: None)
+    monkeypatch.setattr(lead_agent_module, "_create_summarization_middleware", lambda *, app_config=None, context_window=None: None)
     monkeypatch.setattr(lead_agent_module, "_create_todo_list_middleware", lambda is_plan_mode: None)
 
     middlewares = lead_agent_module.build_middlewares(
@@ -530,3 +530,70 @@ def test_memory_middleware_uses_explicit_memory_config_without_global_read(monke
     middleware = MemoryMiddleware(memory_config=MemoryConfig(enabled=False))
 
     assert middleware.after_agent({"messages": []}, runtime=MagicMock(context={"thread_id": "thread-1"})) is None
+
+
+def test_create_summarization_middleware_respects_runtime_context_window(monkeypatch):
+    """context_window from build_middlewares reaches the middleware via _create_summarization_middleware."""
+    model = _make_model("ctx-model", supports_thinking=False)
+    model.context_window = 99_999
+    app_config = _make_app_config([model])
+    app_config.summarization = SummarizationConfig(enabled=True)
+    app_config.memory = MemoryConfig(enabled=False)
+
+    captured: dict[str, object] = {}
+
+    def _fake_middleware(**kwargs):
+        captured.update(kwargs)
+        return kwargs
+
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(lead_agent_module, "build_lead_runtime_middlewares", lambda *, app_config, lazy_init=True: [])
+    monkeypatch.setattr(lead_agent_module, "_create_todo_list_middleware", lambda is_plan_mode: None)
+    monkeypatch.setattr(lead_agent_module, "DeerFlowSummarizationMiddleware", _fake_middleware)
+
+    from unittest.mock import MagicMock
+
+    fake_model = MagicMock()
+    fake_model.with_config.return_value = fake_model
+    monkeypatch.setattr(lead_agent_module, "create_chat_model", lambda **_: fake_model)
+
+    lead_agent_module.build_middlewares(
+        {"configurable": {"is_plan_mode": False, "subagent_enabled": False}},
+        model_name="ctx-model",
+        app_config=app_config,
+    )
+
+    assert captured.get("context_window") == 99_999
+
+
+def test_create_summarization_middleware_context_window_defaults_to_none(monkeypatch):
+    """When the runtime model has no context_window, the middleware gets None."""
+    model = _make_model("no-ctx-model", supports_thinking=False)
+    app_config = _make_app_config([model])
+    app_config.summarization = SummarizationConfig(enabled=True)
+    app_config.memory = MemoryConfig(enabled=False)
+
+    captured: dict[str, object] = {}
+
+    def _fake_middleware(**kwargs):
+        captured.update(kwargs)
+        return kwargs
+
+    monkeypatch.setattr(lead_agent_module, "get_app_config", lambda: app_config)
+    monkeypatch.setattr(lead_agent_module, "build_lead_runtime_middlewares", lambda *, app_config, lazy_init=True: [])
+    monkeypatch.setattr(lead_agent_module, "_create_todo_list_middleware", lambda is_plan_mode: None)
+    monkeypatch.setattr(lead_agent_module, "DeerFlowSummarizationMiddleware", _fake_middleware)
+
+    from unittest.mock import MagicMock
+
+    fake_model = MagicMock()
+    fake_model.with_config.return_value = fake_model
+    monkeypatch.setattr(lead_agent_module, "create_chat_model", lambda **_: fake_model)
+
+    lead_agent_module.build_middlewares(
+        {"configurable": {"is_plan_mode": False, "subagent_enabled": False}},
+        model_name="no-ctx-model",
+        app_config=app_config,
+    )
+
+    assert captured.get("context_window") is None
