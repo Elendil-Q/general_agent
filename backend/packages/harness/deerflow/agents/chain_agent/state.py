@@ -8,9 +8,36 @@ is ``NotRequired`` so the lead agent's ``ThreadState`` ignores it on later
 turns.
 """
 
-from typing import NotRequired
+from typing import Annotated, NotRequired
 
 from deerflow.agents.thread_state import ThreadState
+
+
+def merge_node_outputs(
+    existing: dict[str, str] | None,
+    new: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Reducer for the inter-node ``node_outputs`` channel.
+
+    Without a reducer, LangGraph's default "last write wins" semantics would
+    make parallel root nodes clobber each other's results - each root returns
+    the full ``node_outputs`` dict it read, and only one survives. With this
+    reducer, nodes return *incremental* updates (``{node_name: result}``) that
+    are merged into the running dict.
+
+    An empty dict (``{}``) is treated as an explicit "clear" so a fresh chain
+    run can wipe stale ``node_outputs`` left in the checkpoint from a previous
+    turn (the chain graph sets ``node_outputs={}`` in its graph input).
+    """
+    if new is None:
+        return existing
+    if not new:
+        return {}
+    if existing is None:
+        return dict(new)
+    merged = dict(existing)
+    merged.update(new)
+    return merged
 
 
 class ChainState(ThreadState):
@@ -23,4 +50,4 @@ class ChainState(ThreadState):
     """
 
     # node name -> final subagent result text
-    node_outputs: NotRequired[dict[str, str] | None]
+    node_outputs: Annotated[NotRequired[dict[str, str] | None], merge_node_outputs]

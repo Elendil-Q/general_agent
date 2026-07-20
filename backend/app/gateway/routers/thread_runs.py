@@ -39,6 +39,18 @@ router = APIRouter(prefix="/api/threads", tags=["runs"])
 REGENERATE_HISTORY_SCAN_LIMIT = 200
 
 
+async def _to_thread(fn, /, *args, **kwargs):
+    """Offload a sync callable to a worker thread.
+
+    Thin wrapper around :func:`asyncio.to_thread` so tests can monkeypatch it
+    to run synchronously (the sandbox blocks worker-thread file IO under the
+    test executor's shutdown, which would otherwise hang the suite). The
+    production path keeps the real offload so the event loop is never blocked
+    by progress-file IO.
+    """
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 def compute_run_durations(runs) -> dict[str, int]:
     """Map run_id -> duration in seconds from run timestamps."""
     from datetime import datetime
@@ -161,6 +173,42 @@ class ThreadSystemPromptResponse(BaseModel):
     captured_at: str | None = None
     run_id: str | None = None
     llm_call_index: int | None = None
+
+
+class ChainProgressNodeResponse(BaseModel):
+    """One node's progress within a chain run."""
+
+    name: str
+    status: str
+    result: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class ChainProgressSummary(BaseModel):
+    """Summary of one chain's resumable progress for a thread."""
+
+    chain_name: str
+    run_id: str
+    status: str
+    completed_count: int
+    total_count: int
+    input: str = ""
+    updated_at: str = ""
+    resumable: bool
+
+
+class ChainProgressDetail(ChainProgressSummary):
+    """Full progress document for one chain, including per-node state."""
+
+    terminal_nodes: list[str] = Field(default_factory=list)
+    nodes: list[ChainProgressNodeResponse] = Field(default_factory=list)
+
+
+class ChainProgressListResponse(BaseModel):
+    """List of chain progress summaries for a thread."""
+
+    chains: list[ChainProgressSummary]
 
 
 # ---------------------------------------------------------------------------
@@ -810,6 +858,123 @@ async def thread_system_prompt(
         run_id=row.get("run_id"),
         llm_call_index=row.get("llm_call_index"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Chain progress (/chain-resume: recovery)
+# ---------------------------------------------------------------------------
+
+
+async def _thread_has_interrupt(checkpointer: Any, thread_id: str) -> bool:
+    """Return True when the thread's latest checkpoint carries a HITL interrupt.
+
+    A chain paused via ``interrupt()`` (e.g. a subagent ``ask_clarification``)
+    resumes through ``Command(resume=...)`` on the same run, not through
+    ``/chain-resume:``. Such a checkpoint exposes ``__interrupt__`` in its
+    channel values; we exclude it from the resumable list so the user is not
+    offered a slash command that would fight the HITL flow.
+    """
+    try:
+        ckpt_tuple = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
+    except Exception:
+        logger.warning("Failed to read checkpoint for chain-resume check thread %s", thread_id, exc_info=True)
+        return False
+    if ckpt_tuple is None:
+        return False
+    checkpoint = getattr(ckpt_tuple, "checkpoint", {}) or {}
+    channel_values = checkpoint.get("channel_values", {}) if isinstance(checkpoint, dict) else {}
+    interrupts = channel_values.get("__interrupt__") if isinstance(channel_values, dict) else None
+    return bool(interrupts)
+
+
+def _progress_summary(progress: Any, *, resumable: bool) -> ChainProgressSummary:
+    return ChainProgressSummary(
+        chain_name=progress.chain_name,
+        run_id=progress.run_id,
+        status=progress.status,
+        completed_count=progress.completed_count(),
+        total_count=progress.total_count(),
+        input=progress.input,
+        updated_at=progress.updated_at,
+        resumable=resumable,
+    )
+
+
+@router.get("/{thread_id}/chains/progress", response_model=ChainProgressListResponse)
+@require_permission("threads", "read", owner_check=True)
+async def list_chain_progress(thread_id: str, request: Request) -> ChainProgressListResponse:
+    """List resumable chain progress documents for a thread.
+
+    Each entry reports completed/total node counts and a ``resumable`` flag.
+    A chain is resumable when it is not completed, has no in-flight run, and
+    the thread's checkpoint does not carry a HITL ``interrupt()`` (which
+    resumes via ``Command(resume=...)`` instead).
+    """
+    from deerflow.chains.progress import ChainProgressStore
+
+    user_id = await get_current_user(request)
+    progresses = await _to_thread(ChainProgressStore.list_for_thread, thread_id, user_id=user_id)
+
+    run_mgr = get_run_manager(request)
+    has_inflight = await run_mgr.has_inflight(thread_id)
+    checkpointer = get_checkpointer(request)
+    has_interrupt = await _thread_has_interrupt(checkpointer, thread_id) if (has_inflight or progresses) else False
+
+    summaries: list[ChainProgressSummary] = []
+    for progress in progresses:
+        resumable = progress.status != "completed" and not has_inflight and not has_interrupt
+        summaries.append(_progress_summary(progress, resumable=resumable))
+    return ChainProgressListResponse(chains=summaries)
+
+
+@router.get("/{thread_id}/chains/{chain_name}/progress", response_model=ChainProgressDetail)
+@require_permission("threads", "read", owner_check=True)
+async def get_chain_progress(thread_id: str, chain_name: str, request: Request) -> ChainProgressDetail:
+    """Full progress detail for one chain in a thread."""
+    from deerflow.chains.progress import ChainProgressStore
+
+    user_id = await get_current_user(request)
+    store = ChainProgressStore(thread_id, chain_name, user_id=user_id)
+    progress = await _to_thread(store.load)
+    if progress is None:
+        raise HTTPException(status_code=404, detail=f"No progress for chain {chain_name!r}")
+
+    run_mgr = get_run_manager(request)
+    has_inflight = await run_mgr.has_inflight(thread_id)
+    has_interrupt = False
+    if has_inflight or progress.status != "completed":
+        checkpointer = get_checkpointer(request)
+        has_interrupt = await _thread_has_interrupt(checkpointer, thread_id)
+    resumable = progress.status != "completed" and not has_inflight and not has_interrupt
+    summary = _progress_summary(progress, resumable=resumable)
+    return ChainProgressDetail(
+        **summary.model_dump(),
+        terminal_nodes=list(progress.terminal_nodes),
+        nodes=[
+            ChainProgressNodeResponse(
+                name=name,
+                status=node.status,
+                result=node.result,
+                started_at=node.started_at,
+                completed_at=node.completed_at,
+            )
+            for name, node in progress.nodes.items()
+        ],
+    )
+
+
+@router.delete("/{thread_id}/chains/{chain_name}/progress")
+@require_permission("threads", "delete", owner_check=True)
+async def delete_chain_progress(thread_id: str, chain_name: str, request: Request) -> Response:
+    """Discard a chain's progress file (clear a stale/interrupted entry)."""
+    from deerflow.chains.progress import ChainProgressStore
+
+    user_id = await get_current_user(request)
+    store = ChainProgressStore(thread_id, chain_name, user_id=user_id)
+    deleted = await _to_thread(store.delete)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No progress for chain {chain_name!r}")
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------

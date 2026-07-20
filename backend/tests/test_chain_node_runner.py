@@ -152,3 +152,98 @@ nodes:
     assert "GENERIC-RESULT" in patched_runner.seen_prompts[1]
     # node_outputs populated for both.
     assert set(result["node_outputs"]) == {"a", "b"}
+
+
+@pytest.mark.anyio
+async def test_resume_skips_completed_nodes(tmp_path, patched_runner):
+    """``completed_nodes`` short-circuits nodes that already finished."""
+    chain_yaml = """
+description: skip chain
+nodes:
+  researcher:
+    subagent: general-purpose
+    prompt: "research: {input}"
+  reporter:
+    subagent: general-purpose
+    depends_on: [researcher]
+    prompt: "report from: {node_outputs.researcher}"
+"""
+    f = tmp_path / "skip.yaml"
+    f.write_text(chain_yaml, encoding="utf-8")
+    from deerflow.chains.parser import parse_chain_file
+    from deerflow.chains.types import ChainCategory
+
+    chain = parse_chain_file(f, ChainCategory.PUBLIC)
+    completed = {"researcher": "CACHED-RESEARCH"}
+    graph = graph_module.build_chain_graph(
+        chain,
+        app_config=SimpleNamespace(),
+        completed_nodes=completed,
+        resume_input="the original task",
+    )
+    compiled = graph.compile()
+
+    result = await compiled.ainvoke(
+        {"messages": []},
+        config={"configurable": {"thread_id": "t1"}, "context": {}},
+    )
+
+    # The researcher node was skipped (cached), only the reporter ran.
+    assert patched_runner.seen_prompts == ["report from: CACHED-RESEARCH"]
+    assert result["node_outputs"]["researcher"] == "CACHED-RESEARCH"
+    assert result["node_outputs"]["reporter"] == "REPORT-RESULT"
+    # The terminal reporter still appends its AIMessage.
+    assert any(m.content == "REPORT-RESULT" for m in result["messages"] if isinstance(m, AIMessage))
+
+
+class _RecordingProgressStore:
+    """Minimal progress store stub recording method calls."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    def mark_node_running(self, run_id, node_name):
+        self.calls.append(("mark_node_running", run_id, node_name))
+
+    def update_node(self, run_id, node_name, result, *, status="completed"):
+        self.calls.append(("update_node", run_id, node_name, result, status))
+
+
+@pytest.mark.anyio
+async def test_progress_store_writes_per_node(tmp_path, patched_runner):
+    """``progress_store`` + ``run_id`` drive mark_node_running / update_node."""
+    chain_yaml = """
+description: progress chain
+nodes:
+  a:
+    subagent: general-purpose
+  b:
+    subagent: general-purpose
+    depends_on: [a]
+"""
+    f = tmp_path / "progress.yaml"
+    f.write_text(chain_yaml, encoding="utf-8")
+    from deerflow.chains.parser import parse_chain_file
+    from deerflow.chains.types import ChainCategory
+
+    chain = parse_chain_file(f, ChainCategory.PUBLIC)
+    progress = _RecordingProgressStore()
+    graph = graph_module.build_chain_graph(
+        chain,
+        app_config=SimpleNamespace(),
+        progress_store=progress,
+        run_id="run-xyz",
+    )
+    compiled = graph.compile()
+
+    await compiled.ainvoke(
+        {"messages": [HumanMessage(content="hi")]},
+        config={"configurable": {"thread_id": "t1"}, "context": {}},
+    )
+
+    running = [c for c in progress.calls if c[0] == "mark_node_running"]
+    updates = [c for c in progress.calls if c[0] == "update_node"]
+    assert {c[2] for c in running} == {"a", "b"}
+    assert {c[1] for c in updates} == {"run-xyz"}
+    assert {c[2] for c in updates} == {"a", "b"}
+    assert all(c[3] for c in updates)  # non-empty result text

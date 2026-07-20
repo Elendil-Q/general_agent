@@ -117,6 +117,10 @@ export const enUS: Translations = {
       "Replace the suggestion placeholder before sending.",
     disclaimer:
       "Results are generated via LLM reasoning, tool calls, and knowledge-base retrieval, for reference only.",
+    chainPickerTitle: "Select a chain",
+    chainPickerEmpty: "No chains available",
+    chainResumePickerTitle: "Select a chain to resume",
+    chainResumePickerEmpty: "No chains to resume",
     suggestions: [
       {
         suggestion: "Write",
@@ -243,6 +247,8 @@ export const enUS: Translations = {
     reportIssue: "Report a issue",
     contactUs: "Contact us",
     about: "About DeerFlow",
+    skills: "Skills",
+    mcpServices: "MCP Services",
     logout: "Log out",
     gatewayUnavailable: "Gateway is temporarily unavailable.",
     gatewayUnavailableRetrying: "Retrying in the background…",
@@ -422,7 +428,7 @@ export const enUS: Translations = {
       appearance: "Appearance",
       channels: "Channels",
       memory: "Memory",
-      tools: "Tools",
+      tools: "MCP Services",
       skills: "Skills",
       notification: "Notification",
       about: "About",

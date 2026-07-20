@@ -1,9 +1,9 @@
-"""Chain graph node runner — each node invokes one subagent to completion.
+"""Chain graph node runner - each node invokes one subagent to completion.
 
-This is the "方案 2 inline subagent" path: a node resolves a subagent from the
+This is the "inline subagent" path: a node resolves a subagent from the
 existing registry, builds it via the shared ``build_subagent_agent`` helper
 (same middleware chain / tool policy as a ``task``-tool subagent), and runs it
-to completion with ``ainvoke``. No background executor, no polling — the node
+to completion with ``ainvoke``. No background executor, no polling - the node
 is an async coroutine on the chain graph's own event loop.
 """
 
@@ -63,6 +63,9 @@ def _extract_user_input(state: ChainState) -> str:
     Nodes never append to ``messages`` (only the terminal node does, at the
     very end), so the last message in state is reliably the user's input
     throughout the chain run. Falls back to the first message if needed.
+    Returns ``""`` when there is no usable message (e.g. a ``/chain-resume:``
+    run seeded from the checkpoint with no new HumanMessage); the caller then
+    falls back to ``resume_input``.
     """
     messages = state.get("messages") or []
     if not messages:
@@ -72,6 +75,14 @@ def _extract_user_input(state: ChainState) -> str:
     if text:
         return text
     return _extract_text(messages[0])
+
+
+def _extract_user_input_with_resume(state: ChainState, resume_input: str | None) -> str:
+    """``_extract_user_input`` with a ``resume_input`` fallback for resume runs."""
+    text = _extract_user_input(state)
+    if text:
+        return text
+    return resume_input or ""
 
 
 def _render_prompt(node: ChainNode, user_input: str, node_outputs: dict[str, str]) -> str:
@@ -115,31 +126,66 @@ def _extract_final_text(final_state: dict) -> str:
     return ""
 
 
-def make_subagent_node(node_name: str, node: ChainNode, *, app_config: AppConfig, is_terminal: bool = False):
+def make_subagent_node(
+    node_name: str,
+    node: ChainNode,
+    *,
+    app_config: AppConfig,
+    is_terminal: bool = False,
+    completed_nodes: dict[str, str] | None = None,
+    resume_input: str | None = None,
+    progress_store: Any = None,
+    run_id: str | None = None,
+):
     """Build an async graph node that runs one subagent to completion.
 
     The node:
       1. resolves the subagent config by name from the existing registry
-      2. assembles + policy-filters tools (``subagent_enabled=False`` — no
+      2. assembles + policy-filters tools (``subagent_enabled=False`` - no
          recursive ``task`` tool, same as ``task``-tool subagents)
       3. builds the agent via the shared ``build_subagent_agent`` helper
       4. renders the prompt (``{input}`` + upstream ``{node_outputs.<name>}``)
       5. seeds ``sandbox``/``thread_data`` from the chain state and forwards
          the run config (so middleware sees ``thread_id``/``app_config``/...)
-      6. ``await agent.ainvoke(...)`` to completion (no checkpointer — stateless)
+      6. ``await agent.ainvoke(...)`` to completion (no checkpointer - stateless)
       7. writes the final text into ``state["node_outputs"][node_name]``
 
     When ``is_terminal`` is set (no other node depends on this one), the
     result is also appended as a final ``AIMessage`` to ``messages`` so it
     streams to the frontend and persists to the thread for the next turn.
+
+    Resume support: ``completed_nodes`` (node name -> cached result) lets a
+    node short-circuit on a ``/chain-resume:`` run - the cached result is
+    replayed into ``node_outputs`` without re-invoking the subagent, and no
+    duplicate terminal ``AIMessage`` is appended. ``resume_input`` supplies
+    the original user input when the resume run has no new HumanMessage.
+    ``progress_store`` / ``run_id`` (best-effort, never fail the run) record
+    per-node start/finish into the persistent progress file.
     """
+    cached_result = (completed_nodes or {}).get(node_name)
+
+    def _progress(method: str, *args: Any) -> None:
+        if progress_store is None or not run_id:
+            return
+        try:
+            getattr(progress_store, method)(run_id, *args)
+        except Exception:
+            logger.warning("chain progress %s failed for node %r", method, node_name, exc_info=True)
 
     async def run_node(state: ChainState, config: RunnableConfig) -> dict:
+        node_outputs = dict(state.get("node_outputs") or {})
+
+        # Resume short-circuit: this node already completed in the
+        # interrupted run. Replay its cached result and skip the subagent.
+        if cached_result is not None:
+            logger.info("Chain node %r skipped (already completed in resume)", node_name)
+            return {"node_outputs": {node_name: cached_result}}
+
         sub_config = get_subagent_config(node.subagent, app_config=app_config)
         if sub_config is None:
             raise ValueError(f"Chain node {node_name!r} references unknown subagent {node.subagent!r}. Define it under subagents.custom_agents or use a built-in.")
         if sub_config.workflow:
-            raise ValueError(f"Chain node {node_name!r} references subagent {node.subagent!r} which is a workflow subagent — chain nodes must reference create_agent-based subagents.")
+            raise ValueError(f"Chain node {node_name!r} references subagent {node.subagent!r} which is a workflow subagent - chain nodes must reference create_agent-based subagents.")
 
         # Resolve the parent model from the chain run config (the user's
         # selected model) so ``model: inherit`` subagents use the right model.
@@ -164,8 +210,7 @@ def make_subagent_node(node_name: str, node: ChainNode, *, app_config: AppConfig
             model_name=effective_model,
         )
 
-        node_outputs = dict(state.get("node_outputs") or {})
-        user_input = _extract_user_input(state)
+        user_input = _extract_user_input_with_resume(state, resume_input)
         prompt = _render_prompt(node, user_input, node_outputs)
 
         # Seed the subagent state with sandbox/thread_data so sandbox + file
@@ -189,11 +234,15 @@ def make_subagent_node(node_name: str, node: ChainNode, *, app_config: AppConfig
         )
 
         logger.info("Chain node %r running subagent %r", node_name, node.subagent)
+        _progress("mark_node_running", node_name)
         final_state = await agent.ainvoke(sub_state, config=sub_run_config)
         result_text = _extract_final_text(final_state)
 
-        node_outputs[node_name] = result_text
-        result: dict[str, Any] = {"node_outputs": node_outputs}
+        _progress("update_node", node_name, result_text)
+
+        # Incremental update so the ``merge_node_outputs`` reducer combines
+        # parallel branches instead of clobbering them.
+        result: dict[str, Any] = {"node_outputs": {node_name: result_text}}
         if is_terminal:
             # Persist the chain's final answer into the thread so subsequent
             # lead-agent turns can reference it, and so it streams to the

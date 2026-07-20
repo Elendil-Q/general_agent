@@ -11,3 +11,14 @@ export interface Chain {
   category: string;
   nodes: ChainNode[];
 }
+
+export interface ChainProgressSummary {
+  chain_name: string;
+  run_id: string;
+  status: string;
+  completed_count: number;
+  total_count: number;
+  input: string;
+  updated_at: string;
+  resumable: boolean;
+}

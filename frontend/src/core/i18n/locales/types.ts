@@ -93,6 +93,10 @@ export interface Translations {
     followupConfirmReplace: string;
     suggestionPlaceholderRequired: string;
     disclaimer: string;
+    chainPickerTitle: string;
+    chainPickerEmpty: string;
+    chainResumePickerTitle: string;
+    chainResumePickerEmpty: string;
     suggestions: {
       suggestion: string;
       prompt: string;
@@ -172,6 +176,8 @@ export interface Translations {
     reportIssue: string;
     contactUs: string;
     about: string;
+    skills: string;
+    mcpServices: string;
     logout: string;
     gatewayUnavailable: string;
     gatewayUnavailableRetrying: string;

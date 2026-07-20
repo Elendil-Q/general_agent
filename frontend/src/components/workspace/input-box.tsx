@@ -8,8 +8,10 @@ import {
   LightbulbIcon,
   PaperclipIcon,
   PlusIcon,
+  RotateCcwIcon,
   SparklesIcon,
   RocketIcon,
+  WorkflowIcon,
   XIcon,
   ZapIcon,
 } from "lucide-react";
@@ -60,7 +62,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { fetch } from "@/core/api/fetcher";
 import type { Chain } from "@/core/chains";
-import { useChains } from "@/core/chains/hooks";
+import type { ChainProgressSummary } from "@/core/chains";
+import { useChainProgress, useChains } from "@/core/chains/hooks";
 import { getBackendBaseURL } from "@/core/config";
 import { useEffectiveEffortsConfig, EFFORT_ORDER } from "@/core/effort/hooks";
 import type { EffortFlags } from "@/core/effort/types";
@@ -183,6 +186,7 @@ interface SlashCommand {
   name: string;
   description: string;
   category?: string;
+  placeholder?: boolean;
 }
 
 function getSlashCommandQuery(value: string): string | null {
@@ -194,6 +198,34 @@ function getSlashCommandQuery(value: string): string | null {
     return null;
   }
   return query;
+}
+
+type ChainPickerMode = "chain" | "chain-resume";
+
+/**
+ * Detect a *bare* ``/chain`` or ``/chain-resume`` command (no ``:name``,
+ * no additional text beyond optional trailing whitespace).
+ *
+ * Returns the picker mode to activate, or ``null`` when the input is not a
+ * bare chain command. When active, a dedicated picker listing every
+ * available/resumable chain is shown (instead of the fuzzy-filtered
+ * autocomplete), and Enter is intercepted so the bare command is never sent
+ * to the LLM.
+ */
+function getChainPickerMode(value: string): ChainPickerMode | null {
+  const trimmed = value.trim();
+  if (trimmed === "/chain") return "chain";
+  if (trimmed === "/chain-resume") return "chain-resume";
+  return null;
+}
+
+/**
+ * True when *value* is a bare ``/chain`` or ``/chain-resume`` with no
+ * ``:name``. Used as a submit guard so the bare command can never reach the
+ * LLM (the user must pick a chain from the picker first).
+ */
+function isBareChainCommand(value: string): boolean {
+  return getChainPickerMode(value) !== null;
 }
 
 function buildSlashCommands(skills: Skill[]): SlashCommand[] {
@@ -211,13 +243,43 @@ function buildSlashCommands(skills: Skill[]): SlashCommand[] {
 
 function buildChainSlashCommands(chains: Chain[]): SlashCommand[] {
   // Chains become `/chain:<name>` slash commands. They are the first non-skill
-  // command type in the web autocomplete — the generic SlashCommand interface
+  // command type in the web autocomplete - the generic SlashCommand interface
   // already supported this, it just had no non-skill source until now.
-  return chains.map((chain) => ({
-    name: `chain:${chain.name}`,
-    description: chain.description,
-    category: "chain",
-  }));
+  if (chains.length > 0) {
+    return chains.map((chain) => ({
+      name: `chain:${chain.name}`,
+      description: chain.description,
+      category: "chain",
+    }));
+  }
+  return [
+    {
+      name: "chain",
+      description: "No chains available",
+      category: "chain",
+      placeholder: true,
+    },
+  ];
+}
+function buildChainResumeSlashCommands(
+  progress: ChainProgressSummary[],
+): SlashCommand[] {
+  const resumable = progress.filter((entry) => entry.resumable);
+  if (resumable.length > 0) {
+    return resumable.map((entry) => ({
+      name: `chain-resume:${entry.chain_name}`,
+      description: `Resume ${entry.chain_name} (${entry.completed_count}/${entry.total_count})`,
+      category: "chain-resume",
+    }));
+  }
+  return [
+    {
+      name: "chain-resume",
+      description: "No chains to resume",
+      category: "chain-resume",
+      placeholder: true,
+    },
+  ];
 }
 
 function getMatchingSlashCommands(
@@ -324,6 +386,7 @@ export function InputBox({
   const { textInput } = usePromptInputController();
   const { skills } = useSkills();
   const { chains } = useChains();
+  const { chainProgress } = useChainProgress(threadId);
   const promptRootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const promptHistoryIndexRef = useRef<number | null>(null);
@@ -495,6 +558,11 @@ export function InputBox({
       if (!message.text.trim() && message.files.length === 0) {
         return;
       }
+      // Bare /chain or /chain-resume (no :name) must never reach the LLM -
+      // the user is expected to pick a chain from the picker first.
+      if (isBareChainCommand(message.text)) {
+        return;
+      }
       const placeholder = findSuggestionTemplatePlaceholder(message.text);
       if (placeholder) {
         toast.error(t.inputBox.suggestionPlaceholderRequired);
@@ -605,9 +673,17 @@ export function InputBox({
     () => getSlashCommandQuery(textInput.value ?? ""),
     [textInput.value],
   );
+  const chainPickerMode = useMemo(
+    () => getChainPickerMode(textInput.value ?? ""),
+    [textInput.value],
+  );
   const slashCommands = useMemo(
-    () => [...buildSlashCommands(skills), ...buildChainSlashCommands(chains)],
-    [skills, chains],
+    () => [
+      ...buildSlashCommands(skills),
+      ...buildChainResumeSlashCommands(chainProgress),
+      ...buildChainSlashCommands(chains),
+    ],
+    [skills, chains, chainProgress],
   );
   const slashCommandSuggestions = useMemo(
     () =>
@@ -616,19 +692,53 @@ export function InputBox({
         : getMatchingSlashCommands(slashCommands, slashCommandQuery),
     [slashCommands, slashCommandQuery],
   );
+  // When the bare picker is active, show *every* available/resumable chain
+  // (unfiltered) so the user can browse the full list rather than a
+  // fuzzy-filtered subset.
+  const chainPickerItems = useMemo<SlashCommand[]>(() => {
+    if (chainPickerMode === "chain") return buildChainSlashCommands(chains);
+    if (chainPickerMode === "chain-resume")
+      return buildChainResumeSlashCommands(chainProgress);
+    return [];
+  }, [chainPickerMode, chains, chainProgress]);
+  // Unified list: chain picker takes priority over the fuzzy filter.
+  const activeSlashCommands =
+    chainPickerMode !== null ? chainPickerItems : slashCommandSuggestions;
   const showSlashCommandSuggestions =
     !disabled &&
     textareaFocused &&
-    slashCommandQuery !== null &&
-    slashCommandSuggestions.length > 0 &&
+    (chainPickerMode !== null || slashCommandQuery !== null) &&
+    activeSlashCommands.length > 0 &&
+    dismissedSkillSuggestionValue !== textInput.value;
+  // The bare picker shows even when empty so the user gets feedback that the
+  // command was recognised but there is nothing to select.
+  const showChainPickerEmpty =
+    !disabled &&
+    textareaFocused &&
+    chainPickerMode !== null &&
+    chainPickerItems.length === 0 &&
     dismissedSkillSuggestionValue !== textInput.value;
 
   useEffect(() => {
     setSkillSuggestionIndex(0);
-  }, [slashCommandQuery, slashCommandSuggestions.length]);
+  }, [
+    slashCommandQuery,
+    slashCommandSuggestions.length,
+    chainPickerMode,
+    chainPickerItems.length,
+  ]);
 
   const applySlashCommandSuggestion = useCallback(
     (command: SlashCommand) => {
+      if (command.placeholder) {
+        toast.info(
+          command.category === "chain"
+            ? t.inputBox.chainPickerEmpty
+            : t.inputBox.chainResumePickerEmpty,
+        );
+        setDismissedSkillSuggestionValue(textInput.value);
+        return;
+      }
       const nextValue = `/${command.name} `;
       textInput.setInput(nextValue);
       setDismissedSkillSuggestionValue(nextValue);
@@ -641,29 +751,35 @@ export function InputBox({
         textarea.setSelectionRange(nextValue.length, nextValue.length);
       });
     },
-    [textInput],
+    [textInput, t],
   );
 
   const handleSlashCommandSuggestionKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (!showSlashCommandSuggestions) {
+      // The bare chain picker must intercept Enter even when the list is
+      // empty (showChainPickerEmpty) so the bare command is never submitted
+      // to the LLM. When there are items, Enter/Tab selects the highlighted
+      // one; when empty, Enter is simply swallowed.
+      if (!showSlashCommandSuggestions && !showChainPickerEmpty) {
         return;
       }
 
       if (event.key === "ArrowDown") {
+        if (activeSlashCommands.length === 0) return;
         event.preventDefault();
         setSkillSuggestionIndex(
-          (index) => (index + 1) % slashCommandSuggestions.length,
+          (index) => (index + 1) % activeSlashCommands.length,
         );
         return;
       }
 
       if (event.key === "ArrowUp") {
+        if (activeSlashCommands.length === 0) return;
         event.preventDefault();
         setSkillSuggestionIndex(
           (index) =>
-            (index - 1 + slashCommandSuggestions.length) %
-            slashCommandSuggestions.length,
+            (index - 1 + activeSlashCommands.length) %
+            activeSlashCommands.length,
         );
         return;
       }
@@ -673,7 +789,7 @@ export function InputBox({
           return;
         }
         event.preventDefault();
-        const selectedCommand = slashCommandSuggestions[skillSuggestionIndex];
+        const selectedCommand = activeSlashCommands[skillSuggestionIndex];
         if (selectedCommand) {
           applySlashCommandSuggestion(selectedCommand);
         }
@@ -688,8 +804,9 @@ export function InputBox({
     [
       applySlashCommandSuggestion,
       showSlashCommandSuggestions,
+      showChainPickerEmpty,
+      activeSlashCommands,
       skillSuggestionIndex,
-      slashCommandSuggestions,
       textInput.value,
     ],
   );
@@ -928,45 +1045,69 @@ export function InputBox({
           </div>
         </div>
       )}
-      {showSlashCommandSuggestions && (
+      {(showSlashCommandSuggestions || showChainPickerEmpty) && (
         <div className="absolute right-0 bottom-full left-0 z-40 mb-2 px-1">
           <div
             aria-label="Slash command suggestions"
             className="bg-popover/95 text-popover-foreground border-border max-h-72 overflow-y-auto rounded-xl border p-1 shadow-lg backdrop-blur-sm"
             role="listbox"
           >
-            {slashCommandSuggestions.map((command, index) => {
-              const selected = index === skillSuggestionIndex;
-              return (
-                <button
-                  aria-selected={selected}
-                  className={cn(
-                    "flex min-h-12 w-full min-w-0 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors",
-                    selected
-                      ? "bg-accent text-accent-foreground"
-                      : "text-popover-foreground hover:bg-accent/70 hover:text-accent-foreground",
-                  )}
-                  key={command.name}
-                  onClick={() => applySlashCommandSuggestion(command)}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onMouseEnter={() => setSkillSuggestionIndex(index)}
-                  role="option"
-                  type="button"
-                >
-                  <SparklesIcon className="text-muted-foreground size-4 shrink-0" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
-                      /{command.name}
-                    </span>
-                    {command.description && (
-                      <span className="text-muted-foreground block truncate text-xs">
-                        {command.description}
-                      </span>
+            {showChainPickerEmpty ? (
+              <div
+                className="text-muted-foreground flex min-h-12 items-center gap-3 rounded-lg px-3 py-2 text-sm"
+                role="presentation"
+              >
+                {chainPickerMode === "chain-resume" ? (
+                  <RotateCcwIcon className="size-4 shrink-0" />
+                ) : (
+                  <WorkflowIcon className="size-4 shrink-0" />
+                )}
+                <span>
+                  {chainPickerMode === "chain-resume"
+                    ? t.inputBox.chainResumePickerEmpty
+                    : t.inputBox.chainPickerEmpty}
+                </span>
+              </div>
+            ) : (
+              activeSlashCommands.map((command, index) => {
+                const selected = index === skillSuggestionIndex;
+                return (
+                  <button
+                    aria-selected={selected}
+                    className={cn(
+                      "flex min-h-12 w-full min-w-0 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors",
+                      selected
+                        ? "bg-accent text-accent-foreground"
+                        : "text-popover-foreground hover:bg-accent/70 hover:text-accent-foreground",
                     )}
-                  </span>
-                </button>
-              );
-            })}
+                    key={command.name}
+                    onClick={() => applySlashCommandSuggestion(command)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseEnter={() => setSkillSuggestionIndex(index)}
+                    role="option"
+                    type="button"
+                  >
+                    {command.category === "chain-resume" ? (
+                      <RotateCcwIcon className="text-muted-foreground size-4 shrink-0" />
+                    ) : command.category === "chain" ? (
+                      <WorkflowIcon className="text-muted-foreground size-4 shrink-0" />
+                    ) : (
+                      <SparklesIcon className="text-muted-foreground size-4 shrink-0" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        /{command.name}
+                      </span>
+                      {command.description && (
+                        <span className="text-muted-foreground block truncate text-xs">
+                          {command.description}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
       )}

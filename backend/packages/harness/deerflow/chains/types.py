@@ -5,6 +5,8 @@ single flat ``.yaml`` file under ``chains/{public,custom}/<name>.yaml``; the
 filename (sans extension) is the chain name.
 """
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -63,3 +65,30 @@ class Chain:
 
     def __repr__(self) -> str:
         return f"Chain(name={self.name!r}, nodes={list(self.nodes)}, category={self.category!r})"
+
+
+def compute_chain_hash(chain: "Chain") -> str:
+    """Compute a stable hash of a chain's structural spec.
+
+    The hash covers node names, ``subagent``, ``depends_on``, and ``prompt``
+    for every node - the fields that define how the chain executes. Metadata
+    such as ``description``/``category``/``chain_file`` is intentionally
+    excluded so cosmetic edits (rewording a description, moving the file) do
+    not invalidate a resumable progress file.
+
+    Used by :class:`deerflow.chains.progress.ChainProgressStore` to reject
+    ``/chain-resume:`` when the underlying chain definition has changed since
+    the interrupted run.
+    """
+    payload: list[dict[str, object]] = []
+    for name, node in chain.nodes.items():
+        payload.append(
+            {
+                "name": name,
+                "subagent": node.subagent,
+                "depends_on": list(node.depends_on),
+                "prompt": node.prompt,
+            }
+        )
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

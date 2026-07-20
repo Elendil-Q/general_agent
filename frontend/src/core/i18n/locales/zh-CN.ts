@@ -112,6 +112,10 @@ export const zhCN: Translations = {
     suggestionPlaceholderRequired: "发送前请先填写建议模板中的占位内容。",
     disclaimer:
       "结果基于大语言模型推理、工具调用与知识库检索等生成，仅供参考。",
+    chainPickerTitle: "选择 Chain",
+    chainPickerEmpty: "没有可用的 Chain",
+    chainResumePickerTitle: "选择要恢复的 Chain",
+    chainResumePickerEmpty: "没有可恢复的 Chain",
     suggestions: [
       {
         suggestion: "写作",
@@ -231,6 +235,8 @@ export const zhCN: Translations = {
     reportIssue: "报告问题",
     contactUs: "联系我们",
     about: "关于 DeerFlow",
+    skills: "技能",
+    mcpServices: "MCP服务",
     logout: "退出登录",
     gatewayUnavailable: "网关暂时不可用。",
     gatewayUnavailableRetrying: "正在后台重试…",
@@ -406,7 +412,7 @@ export const zhCN: Translations = {
       appearance: "外观",
       channels: "渠道",
       memory: "记忆",
-      tools: "工具",
+      tools: "MCP服务",
       skills: "技能",
       notification: "通知",
       about: "关于",

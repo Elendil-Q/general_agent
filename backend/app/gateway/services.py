@@ -23,6 +23,7 @@ from langgraph.types import Command
 from app.gateway.deps import get_checkpointer, get_run_context, get_run_manager, get_stream_bridge
 from app.gateway.internal_auth import INTERNAL_SYSTEM_ROLE, get_trusted_internal_owner_user_id
 from app.gateway.utils import sanitize_log_param
+from deerflow.chains.types import compute_chain_hash
 from deerflow.config.app_config import get_app_config
 from deerflow.runtime import (
     END_SENTINEL,
@@ -126,6 +127,9 @@ def normalize_input(raw_input: dict[str, Any] | None) -> dict[str, Any]:
 _CHAIN_COMMAND_RE = re.compile(r"^/chain:([a-z0-9]+(?:-[a-z0-9]+)*)(?:[ \t]+|$)")
 
 
+_CHAIN_RESUME_COMMAND_RE = re.compile(r"^/chain-resume:([a-z0-9]+(?:-[a-z0-9]+)*)(?:[ \t]+|$)")
+
+
 def _extract_last_message_text(messages: list) -> str | None:
     """Best-effort text extraction from the last message of a LangGraph Platform input list."""
     if not messages:
@@ -146,6 +150,89 @@ def _extract_last_message_text(messages: list) -> str | None:
                 parts.append(block["text"])
         return "\n".join(parts) if parts else None
     return None
+
+
+def _maybe_parse_chain_resume_command(body_input: Any) -> str | None:
+    """Detect a ``/chain-resume:<name>`` prefix in the last user message.
+
+    Returns the chain name, or ``None`` when the command is absent / the input
+    is not a recognisable message body. Unlike ``/chain:``, the resume command
+    consumes the *entire* message - the chain replays from its progress file
+    with no new user text - so only the name is returned (the input is then
+    replaced with an empty user turn in :func:`start_run`).
+    """
+    if not isinstance(body_input, dict):
+        return None
+    messages = body_input.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+    text = _extract_last_message_text(messages)
+    if not text:
+        return None
+    match = _CHAIN_RESUME_COMMAND_RE.match(text)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _resolve_chain_user_id(request: Request) -> str | None:
+    """Resolve the owner user id for chain progress scoping.
+
+    Mirrors the worker's ``user_id`` plumbing: the auth-stamped request user
+    wins; the trusted internal owner header is the fallback for channel runs.
+    Returns ``None`` when no owner can be determined (the harness then falls
+    back to its DEFAULT_USER_ID bucket).
+    """
+    user = getattr(request.state, "user", None)
+    user_id = getattr(user, "id", None)
+    if user_id is not None:
+        return str(user_id)
+    return get_trusted_internal_owner_user_id(request)
+
+
+def _validate_chain_resume(progress: Any, chain_name: str) -> None:
+    """Validate a progress document is eligible for ``/chain-resume:``.
+
+    Raises ``HTTPException`` (404/409) when the progress is missing, already
+    completed, or the underlying chain definition has drifted from the one
+    that produced the progress file.
+    """
+    if progress is None:
+        raise HTTPException(status_code=404, detail=f"No resumable progress for chain {chain_name!r}")
+    if progress.status == "completed":
+        raise HTTPException(status_code=409, detail=f"Chain {chain_name!r} already completed")
+    if progress.status not in ("running", "interrupted", "failed"):
+        raise HTTPException(status_code=409, detail=f"Chain {chain_name!r} is not resumable (status: {progress.status})")
+
+
+def _chain_done_callback(
+    record: RunRecord,
+    progress_store: Any,
+    run_id: str,
+) -> None:
+    """``add_done_callback`` for a chain run: finalise the progress file.
+
+    Mapped from the run's terminal status:
+      * user-initiated cancel (interrupt or rollback) -> ``interrupted`` so
+        the progress stays recoverable (rollback wipes the checkpoint, not
+        the progress file).
+      * real error (no abort) -> ``failed``.
+      * success -> ``mark_completed_if_done`` (a HITL ``interrupt()`` pause
+        surfaces as ``success`` with an unfinished graph; it is left
+        non-completed and excluded from ``resumable`` by the ``__interrupt__``
+        check in the progress endpoints).
+
+    All writes are best-effort: this callback must never raise.
+    """
+    try:
+        if record.abort_event.is_set():
+            progress_store.mark_status(run_id, "interrupted")
+        elif record.status == RunStatus.error:
+            progress_store.mark_status(run_id, "failed")
+        else:
+            progress_store.mark_completed_if_done(run_id)
+    except Exception:
+        logger.warning("chain progress done-callback failed for run %s", run_id, exc_info=True)
 
 
 def _with_stripped_content(message: Any, remaining_text: str) -> Any:
@@ -308,6 +395,7 @@ def build_run_config(
     *,
     assistant_id: str | None = None,
     chain_name: str | None = None,
+    chain_resume: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a RunnableConfig dict for the agent.
 
@@ -319,7 +407,7 @@ def build_run_config(
     falls back from ``context`` to ``configurable``).  An explicit
     ``agent_name`` in either container takes precedence over the value
     derived from ``assistant_id``.  ``make_lead_agent`` reads this key to
-    load the matching ``agents/<name>/SOUL.md`` and per-agent config —
+    load the matching ``agents/<name>/SOUL.md`` and per-agent config -
     without it the agent silently runs as the default lead agent.
 
     This mirrors the channel manager's ``_resolve_run_params`` logic so that
@@ -391,6 +479,17 @@ def build_run_config(
             configurable["chain_name"] = chain_name
         if isinstance(runtime_context, dict):
             runtime_context["chain_name"] = chain_name
+    if chain_resume:
+        # Forward the resume payload (completed_nodes + original input) so
+        # make_chain_agent can short-circuit completed nodes. user_id is also
+        # carried so the harness-side ChainProgressStore resolves the same
+        # progress file without touching the app layer.
+        configurable = config.setdefault("configurable", {})
+        runtime_context = config.setdefault("context", {})
+        if isinstance(configurable, dict):
+            configurable["chain_resume"] = chain_resume
+        if isinstance(runtime_context, dict):
+            runtime_context["chain_resume"] = chain_resume
     if metadata:
         config.setdefault("metadata", {}).update(metadata)
     return config
@@ -567,8 +666,10 @@ async def start_run(
         # --- Chain pipeline dispatch (/chain:<name> slash command) ---
         # On the initial run, detect the /chain:<name> prefix in the user
         # message and persist chain_name to thread metadata. On resume (no
-        # message), recover chain_name from the metadata so the chain graph —
-        # not the lead agent — resumes its own checkpoint.
+        # message), recover chain_name from the metadata so the chain graph -
+        # not the lead agent - resumes its own checkpoint. A separate
+        # /chain-resume:<name> command recovers a force-cancelled chain from
+        # its progress file (see ChainProgressStore).
         command = getattr(body, "command", None)
         is_resume = bool(command and command.get("resume") is not None)
         chain_name, stripped_input = _maybe_parse_chain_command(body.input)
@@ -594,7 +695,61 @@ async def start_run(
             graph_input = Command(resume=command["resume"])
         else:
             graph_input = normalize_input(body.input)
-        config = build_run_config(thread_id, body.config, body.metadata, assistant_id=body.assistant_id, chain_name=chain_name)
+
+        # --- Chain progress file (create on new run, resume on /chain-resume:) ---
+        chain_resume: dict[str, Any] | None = None
+        chain_progress_store = None
+        if chain_name:
+            from deerflow.chains.progress import ChainProgressStore
+            from deerflow.chains.storage.chain_storage import get_or_new_chain_storage
+
+            resume_chain_name = _maybe_parse_chain_resume_command(body.input)
+            chain_user_id = _resolve_chain_user_id(request)
+            chain_progress_store = ChainProgressStore(thread_id, chain_name, user_id=chain_user_id)
+
+            if resume_chain_name and resume_chain_name == chain_name:
+                # /chain-resume:<name> recovery: validate + reload the chain
+                # spec, verify its hash has not drifted, then mark the
+                # completed nodes so the graph short-circuits them.
+                progress = await asyncio.to_thread(chain_progress_store.load)
+                _validate_chain_resume(progress, chain_name)
+                chain_spec = get_or_new_chain_storage(app_config=get_app_config()).load_chain(chain_name)
+                if chain_spec is None:
+                    raise HTTPException(status_code=404, detail=f"Unknown chain {chain_name!r}")
+                if progress.chain_hash and progress.chain_hash != compute_chain_hash(chain_spec):
+                    raise HTTPException(status_code=409, detail=f"Chain {chain_name!r} definition changed since the interrupted run")
+                await asyncio.to_thread(chain_progress_store.start_resume, record.run_id)
+                chain_resume = {
+                    "completed_nodes": progress.completed_nodes(),
+                    "input": progress.input,
+                }
+                # No new user message: seed the graph from the checkpoint and
+                # explicitly clear any stale node_outputs.
+                graph_input = {"node_outputs": {}}
+            elif not is_resume:
+                # Fresh /chain:<name> run: create a new progress document
+                # (overwriting any stale one) and seed node_outputs empty so
+                # the reducer wipes residues from a previous turn.
+                chain_spec = get_or_new_chain_storage(app_config=get_app_config()).load_chain(chain_name)
+                if chain_spec is not None:
+                    user_text = _extract_last_message_text((body.input or {}).get("messages") or []) or ""
+                    await asyncio.to_thread(chain_progress_store.create, chain_spec, record.run_id, user_text)
+                if isinstance(graph_input, dict):
+                    graph_input.setdefault("node_outputs", {})
+                else:
+                    graph_input = {"node_outputs": {}}
+            # On a HITL Command(resume=...) run for an existing chain, leave
+            # graph_input as the Command and don't touch progress - the
+            # chain graph's own checkpoint drives that resume.
+
+        config = build_run_config(
+            thread_id,
+            body.config,
+            body.metadata,
+            assistant_id=body.assistant_id,
+            chain_name=chain_name,
+            chain_resume=chain_resume,
+        )
         await apply_checkpoint_to_run_config(config, body=body, thread_id=thread_id, request=request)
 
         # Merge DeerFlow-specific context overrides into both ``configurable`` and ``context``.
@@ -622,6 +777,11 @@ async def start_run(
             )
         )
         record.task = task
+
+        # Chain runs register a done callback to finalise the progress file
+        # (interrupted/failed/completed) once the background task settles.
+        if chain_progress_store is not None:
+            task.add_done_callback(lambda _t: _chain_done_callback(record, chain_progress_store, record.run_id))
 
         # Title sync is handled by worker.py's finally block which reads the
         # title from the checkpoint and calls thread_store.update_display_name
