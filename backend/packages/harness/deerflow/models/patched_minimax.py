@@ -25,6 +25,8 @@ from langchain_openai.chat_models.base import (
     _create_usage_metadata,
 )
 
+from deerflow.models.assistant_payload_replay import restore_assistant_payloads, restore_reasoning_content
+
 _THINK_TAG_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL)
 
 
@@ -115,6 +117,18 @@ class PatchedChatMiniMax(ChatOpenAI):
         else:
             payload["extra_body"] = {"reasoning_split": True}
         self._strip_user_message_names(payload)
+        # Replay reasoning_content onto historical assistant messages.
+        # MiniMax's thinking API returns reasoning_content (mapped from
+        # reasoning_details by this adapter) and requires it on every
+        # assistant message in multi-turn requests - without this, the next
+        # call after a tool-call/clarification round trips a 400:
+        # "The reasoning_content in the thinking mode must be passed back
+        # to the API."
+        restore_assistant_payloads(
+            payload.get("messages", []),
+            self._convert_input(input_).to_messages(),
+            restore_reasoning_content,
+        )
         return payload
 
     @staticmethod

@@ -171,3 +171,23 @@ def test_convert_chunk_to_generation_chunk_preserves_reasoning_deltas():
 
     assert combined.additional_kwargs["reasoning_content"] == "The user asks."
     assert combined.content == "最终答案"
+
+
+def test_replays_reasoning_content_on_historical_assistant_message():
+    """Regression: MiniMax's thinking API requires reasoning_content on every
+    historical assistant message in multi-turn requests. Without replay, the
+    next call after a tool-call / clarification round trips a 400:
+    "The reasoning_content in the thinking mode must be passed back to the API."
+    """
+    model = _make_model()
+
+    human = HumanMessage(content="Check Beijing weather.")
+    ai = AIMessage(
+        content="",
+        additional_kwargs={"reasoning_content": "I need to call the weather tool."},
+    )
+
+    payload = model._get_request_payload([human, ai])
+
+    assistant = next(m for m in payload["messages"] if m.get("role") == "assistant")
+    assert assistant["reasoning_content"] == "I need to call the weather tool."

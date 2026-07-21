@@ -163,6 +163,31 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     _enable_stream_usage_by_default(model_config.use, model_settings_from_config)
     _apply_stream_chunk_timeout_default(model_config.use, model_settings_from_config)
 
+    # Auto-patch bare OpenAI/DeepSeek-compatible classes so reasoning_content is
+    # captured on fresh responses AND replayed on historical assistant messages.
+    # Without this, multi-turn tool-call conversations (e.g. after ask_clarification)
+    # hit a 400: "The reasoning_content in the thinking mode must be passed back to
+    # the API." Users who explicitly select a patched adapter, or a custom subclass,
+    # are left alone (identity check, not issubclass).
+    if thinking_enabled and model_config.supports_thinking:
+        from langchain_openai import ChatOpenAI
+
+        if model_class is ChatOpenAI:
+            from deerflow.models.patched_openai import PatchedChatOpenAI
+
+            logger.debug(f"Auto-patching {name}: ChatOpenAI -> PatchedChatOpenAI for reasoning_content passthrough")
+            model_class = PatchedChatOpenAI
+        else:
+            try:
+                from langchain_deepseek import ChatDeepSeek
+            except ImportError:
+                ChatDeepSeek = None
+            if ChatDeepSeek is not None and model_class is ChatDeepSeek:
+                from deerflow.models.patched_deepseek import PatchedChatDeepSeek
+
+                logger.debug(f"Auto-patching {name}: ChatDeepSeek -> PatchedChatDeepSeek for reasoning_content passthrough")
+                model_class = PatchedChatDeepSeek
+
     # For Codex Responses API models: map thinking mode to reasoning_effort
     from deerflow.models.openai_codex_provider import CodexChatModel
 

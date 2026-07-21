@@ -148,6 +148,26 @@ models:
           type: enabled
 ```
 
+**Reasoning content passthrough (automatic)**:
+
+DeepSeek-style thinking APIs (DeepSeek via Novita / OpenRouter / SiliconFlow, MiMo, and other OpenAI-compatible thinking endpoints) return a `reasoning_content` field on assistant messages and require that field to be echoed back on **every** historical assistant message in multi-turn requests. If it is dropped, the API rejects the next call with:
+
+```
+The reasoning_content in the thinking mode must be passed back to the API.
+```
+
+This commonly fires mid-conversation after a clarification round: the assistant emits an `AIMessage` carrying `reasoning_content` plus a tool call, the tool result is appended, and the next LLM call replays that history - without `reasoning_content` on the prior assistant message, the API returns 400.
+
+When a model declares `supports_thinking: true` **and** the current request enables thinking, DeerFlow automatically upgrades a bare `langchain_openai:ChatOpenAI` (or `langchain_deepseek:ChatDeepSeek`) to the corresponding patched adapter (`PatchedChatOpenAI` / `PatchedChatDeepSeek`) so that `reasoning_content` is captured on fresh responses and replayed on historical assistant messages. No config edit is required - the bare-`ChatOpenAI` thinking examples in this file are correct as-is.
+
+The auto-upgrade uses an identity check (`is`, not `issubclass`), so:
+
+- An explicit `PatchedChat*` adapter selection is always honored and never double-wrapped.
+- A custom `ChatOpenAI` / `ChatDeepSeek` subclass is left alone.
+- When thinking is disabled for the request, no swap occurs (replay is not required).
+
+`PatchedChatOpenAI` handles both Gemini `thought_signature` replay (see below) and `reasoning_content` capture+replay, so it is the correct default for any OpenAI-compatible thinking endpoint. `PatchedChatMiniMax` (for MiniMax's `reasoning_details` format) likewise replays `reasoning_content` on historical assistant messages in multi-turn conversations.
+
 **Gemini with thinking via OpenAI-compatible gateway**:
 
 When routing Gemini through an OpenAI-compatible proxy (Vertex AI OpenAI compat endpoint, AI Studio, or third-party gateways) with thinking enabled, the API attaches a `thought_signature` to each tool-call object returned in the response.  Every subsequent request that replays those assistant messages **must** echo those signatures back on the tool-call entries or the API returns:

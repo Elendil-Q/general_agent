@@ -410,6 +410,58 @@ function DebugStepLabel({
   );
 }
 
+const BASH_COMMAND_PREVIEW_LINES = 25;
+const BASH_COMMAND_PREVIEW_CHARS = 4000;
+
+/**
+ * Renders a bash tool-call command, truncating very large commands (e.g. a
+ * heredoc that writes a whole file) to a preview so highlight.js and the DOM
+ * don't choke on tens of thousands of characters. The full command is still
+ * available via the expand toggle.
+ */
+function BashCommandCodeBlock({ command }: { command: string }) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const lines = useMemo(() => command.split("\n"), [command]);
+  const exceedsLimit =
+    lines.length > BASH_COMMAND_PREVIEW_LINES ||
+    command.length > BASH_COMMAND_PREVIEW_CHARS;
+  const displayed = useMemo(() => {
+    if (!exceedsLimit || expanded) {
+      return command;
+    }
+    const preview = lines
+      .slice(0, BASH_COMMAND_PREVIEW_LINES)
+      .join("\n")
+      .slice(0, BASH_COMMAND_PREVIEW_CHARS);
+    return preview;
+  }, [command, expanded, exceedsLimit, lines]);
+
+  return (
+    <div className="relative">
+      <CodeBlock
+        className="mx-0 cursor-pointer border-none px-0"
+        showLineNumbers={false}
+        language="bash"
+        code={displayed}
+      />
+      {exceedsLimit && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground h-7 w-full justify-center text-xs"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded
+            ? t.toolCalls.collapseCommand
+            : t.toolCalls.showFullCommand(lines.length)}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function ToolCall({
   id,
   messageId,
@@ -620,14 +672,7 @@ function ToolCall({
         label={resolveLabel(description)}
         icon={SquareTerminalIcon}
       >
-        {command && (
-          <CodeBlock
-            className="mx-0 cursor-pointer border-none px-0"
-            showLineNumbers={false}
-            language="bash"
-            code={command}
-          />
-        )}
+        {command && <BashCommandCodeBlock command={command} />}
       </ChainOfThoughtStep>
     );
   } else if (name === "ask_clarification") {

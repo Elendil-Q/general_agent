@@ -249,6 +249,8 @@ export interface Translations {
     clickToViewContent: string;
     writeTodos: string;
     skillInstallTooltip: string;
+    showFullCommand: (lineCount: number) => string;
+    collapseCommand: string;
   };
 
   // Uploads

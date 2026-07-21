@@ -106,6 +106,13 @@ export function selectHeaderTokenUsage({
  * that LLM call (system prompt + history + tool schemas) as `input_tokens`;
  * adding its `output_tokens` approximates the context occupied after the call.
  * Later snapshots of the same message id win (e.g. in-flight updates).
+ *
+ * Snapshots whose `input_tokens` is 0 carry no context-size information: they
+ * surface transiently while a streamed message is in flight (an empty
+ * `usage_metadata` merged by `AIMessageChunk.concat` before usage finalizes)
+ * or from provider snapshots that report 0 input tokens. Letting such a
+ * snapshot win would reset the indicator to 0 mid-run, so it is skipped in
+ * favour of the last input-bearing measurement.
  */
 export function selectCurrentContextUsage(
   messages: Message[],
@@ -114,7 +121,7 @@ export function selectCurrentContextUsage(
   let latest: TokenUsage | null = null;
   for (const message of [...messages, ...pendingMessages]) {
     const usage = getUsageMetadata(message);
-    if (usage) {
+    if (usage && usage.inputTokens > 0) {
       latest = usage;
     }
   }

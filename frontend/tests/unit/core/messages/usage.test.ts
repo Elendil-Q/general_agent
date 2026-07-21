@@ -229,6 +229,46 @@ test("prefers pending in-flight usage snapshots for current context usage", () =
   expect(selectCurrentContextUsage(messages, pendingMessages)).toBe(205);
 });
 
+test("ignores zero-input in-flight snapshots so the indicator does not reset mid-run", () => {
+  // While a streamed message is in flight, an empty `usage_metadata` can be
+  // merged before the model reports real token counts (input_tokens: 0). Such
+  // a snapshot must not win over the last real measurement - otherwise the
+  // context indicator briefly drops to 0 ("归零") during a run.
+  const messages = [
+    {
+      id: "ai-1",
+      type: "ai",
+      content: "Completed answer",
+      usage_metadata: {
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 120,
+      },
+    },
+    {
+      id: "ai-2",
+      type: "ai",
+      content: "",
+      usage_metadata: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    },
+  ] as Message[];
+
+  expect(selectCurrentContextUsage(messages)).toBe(120);
+});
+
+test("returns null when only zero-input snapshots are present", () => {
+  const messages = [
+    {
+      id: "ai-1",
+      type: "ai",
+      content: "",
+      usage_metadata: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    },
+  ] as Message[];
+
+  expect(selectCurrentContextUsage(messages)).toBeNull();
+});
+
 test("returns null current context usage when no usage metadata exists", () => {
   const messages = [
     { id: "human-1", type: "human", content: "Hi" },

@@ -317,6 +317,9 @@ export const zhCN: Translations = {
     clickToViewContent: "点击查看文件内容",
     writeTodos: "更新 To-do 列表",
     skillInstallTooltip: "安装技能并使其可在 DeerFlow 中使用",
+    showFullCommand: (lineCount: number) =>
+      `查看完整命令（共 ${lineCount} 行）`,
+    collapseCommand: "收起命令",
   },
 
   uploads: {

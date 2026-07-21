@@ -330,6 +330,9 @@ export const enUS: Translations = {
     clickToViewContent: "Click to view file content",
     writeTodos: "Update to-do list",
     skillInstallTooltip: "Install skill and make it available to DeerFlow",
+    showFullCommand: (lineCount: number) =>
+      `Show full command (${lineCount} lines)`,
+    collapseCommand: "Collapse command",
   },
 
   // Subtasks

@@ -1195,3 +1195,185 @@ def test_stream_chunk_timeout_popped_for_non_openai_provider_when_user_set_it(mo
     factory_module.create_chat_model(name="anthropic-with-stray-timeout")
 
     assert "stream_chunk_timeout" not in captured
+
+
+# ---------------------------------------------------------------------------
+# Auto-swap bare ChatOpenAI/ChatDeepSeek -> patched for reasoning_content
+# (regression for 400: "reasoning_content in the thinking mode must be passed
+# back to the API" after ask_clarification in multi-turn tool-call flows)
+# ---------------------------------------------------------------------------
+
+
+def test_auto_swaps_bare_chatopenai_when_thinking_enabled():
+    """Bare ``langchain_openai:ChatOpenAI`` with ``supports_thinking: true`` is
+    auto-upgraded to ``PatchedChatOpenAI`` when thinking is enabled, so
+    reasoning_content is captured and replayed without an explicit adapter
+    swap in config.yaml.
+    """
+    from deerflow.models.patched_openai import PatchedChatOpenAI
+
+    model = ModelConfig(
+        name="deepseek-via-novita",
+        display_name="DeepSeek V3.2 (Novita)",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="deepseek-v3.2",
+        api_key="test-key",
+        base_url="https://api.novita.ai/v3",
+        supports_thinking=True,
+        when_thinking_enabled={"extra_body": {"thinking": {"type": "enabled"}}},
+        supports_vision=False,
+    )
+    cfg = _make_app_config([model])
+
+    chat_model = factory_module.create_chat_model(
+        name="deepseek-via-novita",
+        thinking_enabled=True,
+        app_config=cfg,
+        attach_tracing=False,
+    )
+
+    assert isinstance(chat_model, PatchedChatOpenAI)
+
+
+def test_does_not_swap_when_thinking_disabled():
+    """When thinking is disabled, the auto-swap gate is off and bare
+    ``ChatOpenAI`` is used as-is (reasoning_content replay is not required)."""
+    from langchain_openai import ChatOpenAI
+
+    model = ModelConfig(
+        name="deepseek-via-novita",
+        display_name="DeepSeek V3.2 (Novita)",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="deepseek-v3.2",
+        api_key="test-key",
+        base_url="https://api.novita.ai/v3",
+        supports_thinking=True,
+        when_thinking_enabled={"extra_body": {"thinking": {"type": "enabled"}}},
+        supports_vision=False,
+    )
+    cfg = _make_app_config([model])
+
+    chat_model = factory_module.create_chat_model(
+        name="deepseek-via-novita",
+        thinking_enabled=False,
+        app_config=cfg,
+        attach_tracing=False,
+    )
+
+    assert type(chat_model) is ChatOpenAI
+
+
+def test_does_not_swap_explicit_patched_adapter():
+    """An explicit ``PatchedChatOpenAI`` selection is honored as-is - the
+    identity check (``is``, not ``issubclass``) prevents double-wrapping."""
+    from deerflow.models.patched_openai import PatchedChatOpenAI
+
+    model = ModelConfig(
+        name="explicit-patched",
+        display_name="Explicit Patched",
+        description=None,
+        use="deerflow.models.patched_openai:PatchedChatOpenAI",
+        model="deepseek-v3.2",
+        api_key="test-key",
+        base_url="https://api.novita.ai/v3",
+        supports_thinking=True,
+        when_thinking_enabled={"extra_body": {"thinking": {"type": "enabled"}}},
+        supports_vision=False,
+    )
+    cfg = _make_app_config([model])
+
+    chat_model = factory_module.create_chat_model(
+        name="explicit-patched",
+        thinking_enabled=True,
+        app_config=cfg,
+        attach_tracing=False,
+    )
+
+    assert type(chat_model) is PatchedChatOpenAI
+
+
+def test_does_not_swap_custom_subclass(monkeypatch):
+    """A user's custom ``ChatOpenAI`` subclass is left alone: the identity
+    check (``is``, not ``issubclass``) protects subclasses from being clobbered.
+    """
+    from langchain_openai import ChatOpenAI
+
+    class _CustomChatOpenAISubclass(ChatOpenAI):
+        pass
+
+    model = ModelConfig(
+        name="custom-sub",
+        display_name="Custom Sub",
+        description=None,
+        use="langchain_openai:ChatOpenAI",
+        model="custom-sub",
+        api_key="test-key",
+        base_url="https://example.com/v1",
+        supports_thinking=True,
+        when_thinking_enabled={"extra_body": {"thinking": {"type": "enabled"}}},
+        supports_vision=False,
+    )
+    cfg = _make_app_config([model])
+    _patch_factory(monkeypatch, cfg, model_class=_CustomChatOpenAISubclass)
+
+    chat_model = factory_module.create_chat_model(
+        name="custom-sub",
+        thinking_enabled=True,
+    )
+
+    assert type(chat_model) is _CustomChatOpenAISubclass
+
+
+def test_auto_swaps_bare_chatdeepseek_when_thinking_enabled(monkeypatch):
+    """Bare ``langchain_deepseek:ChatDeepSeek`` with ``supports_thinking: true``
+    is auto-upgraded to ``PatchedChatDeepSeek`` when thinking is enabled.
+
+    ``langchain_deepseek`` is not installed in the test environment, so we
+    inject a lightweight stub into ``sys.modules`` to exercise the swap path
+    that the factory's ``try: from langchain_deepseek import ChatDeepSeek``
+    branch takes when the package IS available.
+    """
+    import sys
+    import types
+
+    from langchain_openai import ChatOpenAI
+
+    # Build a minimal langchain_deepseek stub whose ChatDeepSeek is a distinct
+    # class (not ChatOpenAI itself) so the identity check in the factory routes
+    # to the DeepSeek branch rather than the OpenAI branch.
+    fake_module = types.ModuleType("langchain_deepseek")
+
+    class ChatDeepSeek(ChatOpenAI):
+        pass
+
+    fake_module.ChatDeepSeek = ChatDeepSeek
+    monkeypatch.setitem(sys.modules, "langchain_deepseek", fake_module)
+    # Force a fresh import of patched_deepseek so its module-level
+    # ``from langchain_deepseek import ChatDeepSeek`` picks up our stub.
+    monkeypatch.delitem(sys.modules, "deerflow.models.patched_deepseek", raising=False)
+
+    from deerflow.models.patched_deepseek import PatchedChatDeepSeek
+
+    model = ModelConfig(
+        name="deepseek-native",
+        display_name="DeepSeek",
+        description=None,
+        use="langchain_deepseek:ChatDeepSeek",
+        model="deepseek-chat",
+        api_key="test-key",
+        base_url="https://api.deepseek.com/v1",
+        supports_thinking=True,
+        when_thinking_enabled={"extra_body": {"thinking": {"type": "enabled"}}},
+        supports_vision=False,
+    )
+    cfg = _make_app_config([model])
+    _patch_factory(monkeypatch, cfg, model_class=ChatDeepSeek)
+
+    chat_model = factory_module.create_chat_model(
+        name="deepseek-native",
+        thinking_enabled=True,
+    )
+
+    assert isinstance(chat_model, PatchedChatDeepSeek)
