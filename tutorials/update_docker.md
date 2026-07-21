@@ -115,9 +115,8 @@ docker build --platform linux/arm64 \
   --build-arg DEV_IMAGE=deer-flow-dev-frontend:latest \
   -t deer-flow-frontend:prod-from-dev \
   -f - . <<'EOF'
-ARG DEV_IMAGE
+ARG DEV_IMAGE=deer-flow-dev-frontend:latest
 FROM ${DEV_IMAGE}
-# 删除 dev 镜像里的旧源码（保留 node_modules），让下面的 COPY 干净落地
 RUN cd /app/frontend && find . -mindepth 1 -maxdepth 1 -not -name node_modules -exec rm -rf {} +
 COPY frontend ./frontend
 RUN cd /app/frontend && pnpm build
@@ -160,7 +159,7 @@ docker build --platform linux/arm64 \
   --build-arg DEV_IMAGE=deer-flow-dev-frontend:latest \
   -t deer-flow-frontend:latest \
   -f - . <<'EOF'
-ARG DEV_IMAGE
+ARG DEV_IMAGE=deer-flow-dev-frontend:latest
 FROM ${DEV_IMAGE}
 RUN cd /app/frontend && find . -mindepth 1 -maxdepth 1 -not -name node_modules -exec rm -rf {} +
 COPY frontend ./frontend
@@ -299,7 +298,7 @@ docker build --platform linux/arm64 \
   --build-arg DEV_IMAGE=deer-flow-dev-gateway:latest \
   -t deer-flow-gateway:local \
   -f - . <<'DOCKERFILE'
-ARG DEV_IMAGE
+ARG DEV_IMAGE=deer-flow-dev-gateway:latest
 FROM ${DEV_IMAGE}
 
 # 清理旧源码和旧 .venv（源机构建，架构不匹配），让下面的 COPY 干净落地
@@ -361,7 +360,7 @@ docker volume rm deer-flow-dev_gateway-venv
 ```bash
 cd "$REPO"
 docker build --platform linux/arm64   --build-arg DEV_IMAGE=deer-flow-dev-gateway:latest   -t deer-flow-gateway:local   -f - . <<'DOCKERFILE'
-ARG DEV_IMAGE
+ARG DEV_IMAGE=deer-flow-dev-gateway:latest
 FROM ${DEV_IMAGE}
 RUN cd /app/backend && find . -mindepth 1 -maxdepth 1   -not -name .venv -exec rm -rf {} +
 COPY backend ./backend
@@ -394,7 +393,7 @@ docker build --platform linux/arm64 \
   --build-arg DEV_IMAGE=deer-flow-dev-gateway:latest \
   -t deer-flow-gateway:updated \
   -f - . <<'DOCKERFILE'
-ARG DEV_IMAGE
+ARG DEV_IMAGE=deer-flow-dev-gateway:latest
 FROM ${DEV_IMAGE}
 
 # 清掉旧 .venv（源机构架，native 扩展架构不匹配）和旧源码

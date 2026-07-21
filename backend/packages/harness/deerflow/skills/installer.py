@@ -149,12 +149,18 @@ def _move_staged_skill_into_reserved_target(staging_target: Path, target: Path) 
             shutil.rmtree(target)
 
 
-async def _scan_skill_file_or_raise(skill_dir: Path, path: Path, skill_name: str, *, executable: bool) -> None:
+async def _scan_skill_file_or_raise(skill_dir: Path, path: Path, skill_name: str) -> None:
     rel_path = path.relative_to(skill_dir).as_posix()
     location = f"{skill_name}/{rel_path}"
+    executable = _is_script_support_file(Path(rel_path))
     try:
         content = await asyncio.to_thread(path.read_text, encoding="utf-8")
     except UnicodeDecodeError as e:
+        # Binary files under scripts/ are acceptable and cannot be
+        # text-scanned — skip with a warning instead of blocking.
+        if executable:
+            logger.warning("Skipping security scan for binary executable %s: %s", location, e)
+            return
         raise SkillSecurityScanError(f"Security scan failed for skill '{skill_name}': {location} must be valid UTF-8") from e
 
     try:
@@ -182,7 +188,7 @@ def _collect_scannable_files(skill_dir: Path) -> list[Path]:
 async def _scan_skill_archive_contents_or_raise(skill_dir: Path, skill_name: str) -> None:
     """Run the skill security scanner against all installable text and script files."""
     skill_md = skill_dir / "SKILL.md"
-    await _scan_skill_file_or_raise(skill_dir, skill_md, skill_name, executable=False)
+    await _scan_skill_file_or_raise(skill_dir, skill_md, skill_name)
 
     for path in await asyncio.to_thread(_collect_scannable_files, skill_dir):
         rel_path = path.relative_to(skill_dir)
@@ -193,7 +199,7 @@ async def _scan_skill_archive_contents_or_raise(skill_dir: Path, skill_name: str
         if not _should_scan_support_file(rel_path):
             continue
 
-        await _scan_skill_file_or_raise(skill_dir, path, skill_name, executable=_is_script_support_file(rel_path))
+        await _scan_skill_file_or_raise(skill_dir, path, skill_name)
 
 
 def _run_async_install(coro):
