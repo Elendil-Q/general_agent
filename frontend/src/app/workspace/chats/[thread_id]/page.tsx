@@ -12,6 +12,7 @@ import {
   useThreadChat,
 } from "@/components/workspace/chats";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
+import { FileBrowserTrigger } from "@/components/workspace/file-browser/file-browser-trigger";
 import { InputBox } from "@/components/workspace/input-box";
 import {
   MessageList,
@@ -215,6 +216,7 @@ export default function ChatPage() {
             )}
           >
             <SidebarTrigger className="md:hidden" />
+            <FileBrowserTrigger />
             <div className="flex min-w-0 flex-1 items-center text-sm font-medium">
               <ThreadTitle threadId={threadId} thread={thread} />
             </div>

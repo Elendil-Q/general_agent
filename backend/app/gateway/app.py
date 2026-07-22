@@ -21,6 +21,7 @@ from app.gateway.routers import (
     channels,
     efforts,
     feedback,
+    files,
     mcp,
     memory,
     models,
@@ -382,6 +383,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Chains API is mounted at /api/chains
     app.include_router(chains.router)
+
+    # Files API is mounted at /api/threads/{thread_id}/files
+    app.include_router(files.router)
 
     # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)

@@ -18,10 +18,15 @@ import {
   ArtifactFileList,
   useArtifacts,
 } from "../artifacts";
+import { useFileBrowser } from "../file-browser/context";
+import { FileBrowserPanel } from "../file-browser/file-browser-panel";
 import { useThread } from "../messages/context";
 
-const CLOSE_MODE = { chat: 100, artifacts: 0 };
-const OPEN_MODE = { chat: 60, artifacts: 40 };
+// Three-panel layouts: { "file-browser", chat, artifacts } percentages
+const LAYOUT_BOTH_CLOSED = { "file-browser": 0, chat: 100, artifacts: 0 };
+const LAYOUT_FILE_BROWSER_ONLY = { "file-browser": 20, chat: 80, artifacts: 0 };
+const LAYOUT_ARTIFACTS_ONLY = { "file-browser": 0, chat: 60, artifacts: 40 };
+const LAYOUT_BOTH_OPEN = { "file-browser": 18, chat: 47, artifacts: 35 };
 
 const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   children,
@@ -42,6 +47,9 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     selectedArtifact,
   } = useArtifacts();
 
+  const { open: fileBrowserOpen, setOpen: setFileBrowserOpen } =
+    useFileBrowser();
+
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
   useEffect(() => {
     const threadArtifacts = Array.isArray(thread.values.artifacts)
@@ -58,14 +66,6 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     if (threadArtifacts) {
       setArtifacts(threadArtifacts);
     }
-
-    // DO NOT automatically deselect the artifact when switching threads, because the artifacts auto discovering is not work now.
-    // if (
-    //   selectedArtifact &&
-    //   !thread.values.artifacts?.includes(selectedArtifact)
-    // ) {
-    //   deselect();
-    // }
 
     if (
       env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" &&
@@ -97,27 +97,64 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     return pathname.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
   }, [pathname]);
 
+  // Compute three-panel layout based on which panels are open
+  const layout = useMemo(() => {
+    const hasFileBrowser = fileBrowserOpen;
+    const hasArtifacts = artifactPanelOpen;
+
+    if (hasFileBrowser && hasArtifacts) return LAYOUT_BOTH_OPEN;
+    if (hasFileBrowser) return LAYOUT_FILE_BROWSER_ONLY;
+    if (hasArtifacts) return LAYOUT_ARTIFACTS_ONLY;
+    return LAYOUT_BOTH_CLOSED;
+  }, [fileBrowserOpen, artifactPanelOpen]);
+
   useEffect(() => {
     if (layoutRef.current) {
-      if (artifactPanelOpen) {
-        layoutRef.current.setLayout(OPEN_MODE);
-      } else {
-        layoutRef.current.setLayout(CLOSE_MODE);
-      }
+      layoutRef.current.setLayout(layout);
     }
-  }, [artifactPanelOpen]);
+  }, [layout]);
 
   return (
     <ResizablePanelGroup
       id={`${resizableIdBase}-panels`}
       orientation="horizontal"
-      defaultLayout={{ chat: 100, artifacts: 0 }}
+      defaultLayout={{ "file-browser": 0, chat: 100, artifacts: 0 }}
       resizeTargetMinimumSize={{ coarse: 0, fine: 0 }}
       groupRef={layoutRef}
     >
+      {/* ── File Browser Panel (left) ── */}
+      <ResizablePanel
+        className={cn(
+          "transition-all duration-300 ease-in-out",
+          !fileBrowserOpen && "opacity-0",
+        )}
+        defaultSize={0}
+        id="file-browser"
+      >
+        <div
+          className={cn(
+            "h-full transition-transform duration-300 ease-in-out",
+            fileBrowserOpen ? "translate-x-0" : "-translate-x-full",
+          )}
+        >
+          <FileBrowserPanel
+            threadId={threadId}
+            onClose={() => setFileBrowserOpen(false)}
+          />
+        </div>
+      </ResizablePanel>
+
+      <ResizableHandle
+        id={`${resizableIdBase}-file-browser-separator`}
+        disabled
+        className={cn(!fileBrowserOpen && "pointer-events-none opacity-0")}
+      />
+
+      {/* ── Chat Panel (center) ── */}
       <ResizablePanel className="relative" defaultSize={100} id="chat">
         {children}
       </ResizablePanel>
+
       <ResizableHandle
         id={`${resizableIdBase}-separator`}
         disabled
@@ -126,6 +163,8 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
           !artifactPanelOpen && "pointer-events-none opacity-0",
         )}
       />
+
+      {/* ── Artifacts Panel (right) ── */}
       <ResizablePanel
         className={cn(
           "transition-all duration-300 ease-in-out",
