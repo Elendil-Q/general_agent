@@ -3,10 +3,10 @@ export type SubagentSource = "builtin" | "global" | "user";
 export interface Subagent {
   name: string;
   description: string;
-  system_prompt: string;
-  tools: string[];
-  skills: string[];
-  skills_on_demand: string[];
+  system_prompt: string | null;
+  tools: string[] | null;
+  skills: string[] | null;
+  skills_on_demand: string[] | null;
   model: string;
   max_turns: number;
   timeout_seconds: number;
@@ -18,7 +18,7 @@ export interface Subagent {
 export interface CreateSubagentRequest {
   name: string;
   description: string;
-  system_prompt: string;
+  system_prompt?: string | null;
   tools?: string[];
   skills?: string[];
   skills_on_demand?: string[];
@@ -29,10 +29,10 @@ export interface CreateSubagentRequest {
 
 export interface UpdateSubagentRequest {
   description?: string;
-  system_prompt?: string;
-  tools?: string[];
-  skills?: string[];
-  skills_on_demand?: string[];
+  system_prompt?: string | null;
+  tools?: string[] | null;
+  skills?: string[] | null;
+  skills_on_demand?: string[] | null;
   model?: string;
   max_turns?: number;
   timeout_seconds?: number;
