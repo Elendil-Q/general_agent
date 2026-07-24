@@ -256,6 +256,8 @@ export const enUS: Translations = {
     fieldMaxTurns: "Max Turns",
     fieldTimeout: "Timeout (seconds)",
     fieldSkillsOnDemand: "Skills on demand",
+    fieldTools: "Tools",
+    fieldSkills: "Skills",
     advanced: "Advanced",
     nameTaken: "Name already in use.",
     saved: "Saved",

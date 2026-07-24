@@ -242,6 +242,8 @@ export const zhCN: Translations = {
     fieldMaxTurns: "最大轮次",
     fieldTimeout: "超时时间（秒）",
     fieldSkillsOnDemand: "按需技能",
+    fieldTools: "工具",
+    fieldSkills: "技能",
     advanced: "高级",
     nameTaken: "名称已被占用。",
     saved: "已保存",

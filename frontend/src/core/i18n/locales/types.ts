@@ -183,6 +183,8 @@ export interface Translations {
     fieldMaxTurns: string;
     fieldTimeout: string;
     fieldSkillsOnDemand: string;
+    fieldTools: string;
+    fieldSkills: string;
     advanced: string;
     nameTaken: string;
     saved: string;
