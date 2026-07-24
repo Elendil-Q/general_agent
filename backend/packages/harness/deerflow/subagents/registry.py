@@ -4,6 +4,10 @@ import logging
 from dataclasses import replace
 from typing import Any
 
+from deerflow.config.subagents_user_config import (
+    list_user_subagent_names,
+    load_user_subagent,
+)
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
 from deerflow.subagents.config import SubagentConfig
@@ -60,23 +64,38 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
     return storage.load_subagent(name)
 
 
-def get_subagent_config(name: str, *, app_config: Any | None = None) -> SubagentConfig | None:
+def get_subagent_config(
+    name: str,
+    *,
+    user_id: str | None = None,
+    app_config: Any | None = None,
+) -> SubagentConfig | None:
     """Get a subagent configuration by name, with config.yaml overrides applied.
 
     Resolution order (mirrors Codex's config layering):
-    1. Built-in subagents (general-purpose, bash)
-    2. Custom subagents from config.yaml custom_agents section
-    3. Per-agent overrides from config.yaml agents section (timeout, max_turns, model, skills)
+    1. Built-in subagents (general-purpose, bash) - names reserved, never shadowed
+    2. Per-user subagent files (shadows the global custom layer) - only when
+       ``user_id`` is provided
+    3. Custom subagents from config.yaml custom_agents section / shared YAML files
+    4. Per-agent overrides from config.yaml agents section (timeout, max_turns, model, skills)
 
     Args:
         name: The name of the subagent.
+        user_id: Optional user id; when set, per-user subagent files are
+            consulted between the built-in and global custom layers so a
+            per-user definition shadows the global one. ``None`` (the default)
+            is byte-identical to the legacy behavior.
         app_config: Optional AppConfig or SubagentsAppConfig to resolve overrides from.
 
     Returns:
         SubagentConfig if found (with any config.yaml overrides applied), None otherwise.
     """
-    # Step 1: Look up built-in, then fall back to custom_agents
+    # Step 1: Look up built-in, then per-user (shadows global), then global custom.
+    # Built-in names are reserved: a per-user file named after a built-in is
+    # never consulted (validate_subagent_name also rejects such names at write time).
     config = BUILTIN_SUBAGENTS.get(name)
+    if config is None and user_id is not None:
+        config = load_user_subagent(name, user_id=user_id)
     if config is None:
         config = _build_custom_subagent_config(name, app_config=app_config)
     if config is None:
@@ -149,13 +168,38 @@ def list_subagents(*, app_config: Any | None = None) -> list[SubagentConfig]:
     return configs
 
 
-def get_subagent_names(*, app_config: Any | None = None) -> list[str]:
-    """Get all available subagent names (built-in + YAML-discovered + config.yaml custom).
+def get_subagent_names(
+    *,
+    user_id: str | None = None,
+    app_config: Any | None = None,
+) -> list[str]:
+    """Get all available subagent names (built-in + per-user + YAML-discovered + config.yaml custom).
+
+    Names are merged in resolution order, keeping the first occurrence so
+    built-in names stay reserved and a per-user name shadows the global
+    custom layer:
+    1. Built-in subagents
+    2. Per-user subagent files (only when ``user_id`` is provided)
+    3. YAML-discovered subagents (shared public/custom files)
+    4. config.yaml ``custom_agents`` section
+
+    Args:
+        user_id: Optional user id; when set, per-user subagent names are
+            merged after the built-in layer. ``None`` is byte-identical to
+            the legacy behavior.
+        app_config: Optional AppConfig or SubagentsAppConfig to resolve from.
 
     Returns:
         List of subagent names.
     """
-    names = list(BUILTIN_SUBAGENTS.keys())
+    names: list[str] = list(BUILTIN_SUBAGENTS.keys())
+
+    # Merge per-user subagents (shadows the global custom layer); built-in
+    # names are already present so a colliding per-user name is skipped.
+    if user_id is not None:
+        for user_name in list_user_subagent_names(user_id=user_id):
+            if user_name not in names:
+                names.append(user_name)
 
     # Merge YAML-discovered subagents
     storage_kwargs = {"app_config": app_config} if app_config is not None else {}
@@ -173,13 +217,23 @@ def get_subagent_names(*, app_config: Any | None = None) -> list[str]:
     return names
 
 
-def get_available_subagent_names(*, app_config: Any | None = None) -> list[str]:
+def get_available_subagent_names(
+    *,
+    user_id: str | None = None,
+    app_config: Any | None = None,
+) -> list[str]:
     """Get subagent names that should be exposed to the active runtime.
+
+    Args:
+        user_id: Optional user id forwarded to :func:`get_subagent_names` so
+            per-user subagent names are included. ``None`` is byte-identical
+            to the legacy behavior.
+        app_config: Optional AppConfig or SubagentsAppConfig to resolve from.
 
     Returns:
         List of subagent names visible to the current sandbox configuration.
     """
-    names = get_subagent_names(app_config=app_config)
+    names = get_subagent_names(user_id=user_id, app_config=app_config)
     try:
         host_bash_allowed = is_host_bash_allowed(app_config) if hasattr(app_config, "sandbox") else is_host_bash_allowed()
     except Exception:
