@@ -218,7 +218,7 @@ def test_get_memory_context_uses_explicit_app_config_without_global_config(monke
         return "remember this"
 
     monkeypatch.setattr("deerflow.config.memory_config.get_memory_config", fail_get_memory_config)
-    monkeypatch.setattr("deerflow.runtime.user_context.get_effective_user_id", lambda: "user-1")
+    monkeypatch.setattr("deerflow.agents.lead_agent.prompt.get_effective_user_id", lambda: "user-1")
     monkeypatch.setattr("deerflow.agents.memory.get_memory_data", fake_get_memory_data)
     monkeypatch.setattr("deerflow.agents.memory.format_memory_for_injection", fake_format_memory_for_injection)
 
