@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from deerflow.config.agents_config import load_agent_soul
+from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.skills.storage import get_or_new_skill_storage
 from deerflow.skills.types import Skill, SkillCategory
 from deerflow.subagents import get_available_subagent_names
@@ -210,7 +211,7 @@ def _build_available_subagents_description(
         if name in builtin_descriptions:
             lines.append(f"- **{name}**: {builtin_descriptions[name]}")
         else:
-            config = get_subagent_config(name, app_config=app_config)
+            config = get_subagent_config(name, app_config=app_config, user_id=get_effective_user_id())
             if config is not None:
                 desc = config.description.split("\n")[0].strip()  # First line only for brevity
                 lines.append(f"- **{name}**: {desc}")
@@ -228,7 +229,7 @@ def _build_subagent_section(max_concurrent: int, *, app_config: AppConfig | None
         Formatted subagent section string.
     """
     n = max_concurrent
-    available_names = get_available_subagent_names(app_config=app_config) if app_config is not None else get_available_subagent_names()
+    available_names = get_available_subagent_names(app_config=app_config, user_id=get_effective_user_id()) if app_config is not None else get_available_subagent_names(user_id=get_effective_user_id())
     bash_available = "bash" in available_names
 
     # Dynamically build subagent type descriptions from registry (aligned with Codex's
@@ -440,7 +441,6 @@ def _get_memory_context(agent_name: str | None = None, *, app_config: AppConfig 
     """
     try:
         from deerflow.agents.memory import format_memory_for_injection, get_memory_data
-        from deerflow.runtime.user_context import get_effective_user_id
 
         if app_config is None:
             from deerflow.config.memory_config import get_memory_config

@@ -266,11 +266,12 @@ async def task_tool(
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
     """
     runtime_app_config = _get_runtime_app_config(runtime)
+    runtime_user_id = resolve_runtime_user_id(runtime)
     cache_token_usage = _token_usage_cache_enabled(runtime_app_config)
-    available_subagent_names = get_available_subagent_names(app_config=runtime_app_config) if runtime_app_config is not None else get_available_subagent_names()
+    available_subagent_names = get_available_subagent_names(app_config=runtime_app_config, user_id=runtime_user_id) if runtime_app_config is not None else get_available_subagent_names(user_id=runtime_user_id)
 
     # Get subagent configuration
-    config = get_subagent_config(subagent_type, app_config=runtime_app_config) if runtime_app_config is not None else get_subagent_config(subagent_type)
+    config = get_subagent_config(subagent_type, app_config=runtime_app_config, user_id=runtime_user_id) if runtime_app_config is not None else get_subagent_config(subagent_type, user_id=runtime_user_id)
     if config is None:
         available = ", ".join(available_subagent_names)
         return f"Error: Unknown subagent type '{subagent_type}'. Available: {available}"
