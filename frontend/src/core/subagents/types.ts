@@ -19,9 +19,9 @@ export interface CreateSubagentRequest {
   name: string;
   description: string;
   system_prompt?: string | null;
-  tools?: string[];
-  skills?: string[];
-  skills_on_demand?: string[];
+  tools?: string[] | null;
+  skills?: string[] | null;
+  skills_on_demand?: string[] | null;
   model?: string;
   max_turns?: number;
   timeout_seconds?: number;

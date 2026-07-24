@@ -360,15 +360,17 @@ export function SubagentDesignerForm({
         description: form.description.trim(),
         system_prompt: form.system_prompt.trim() || null,
         model: form.model,
-        tools: form.tools.length ? form.tools : undefined,
-        skills: form.skills,
-        skills_on_demand: form.skills_on_demand,
+        tools: form.tools.length ? form.tools : null,
+        skills: form.skills.length ? form.skills : null,
+        skills_on_demand: form.skills_on_demand.length
+          ? form.skills_on_demand
+          : null,
         max_turns: form.max_turns,
         timeout_seconds: form.timeout_seconds,
       };
-      await create.mutateAsync(request);
+      const created = await create.mutateAsync(request);
       toast.success(t.subagents.saved);
-      router.push("/workspace/subagents");
+      router.push(`/workspace/subagents/${encodeURIComponent(created.name)}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {
