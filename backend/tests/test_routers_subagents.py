@@ -123,3 +123,55 @@ def test_catalogs(client):
     assert "models" in data and "tools" in data and "skills" in data
     model_names = [m["name"] for m in data["models"]]
     assert "inherit" in model_names
+
+
+# ---------------------------------------------------------------------------
+# Final-review regression tests (F1: cleared fields; F2: preserved fields)
+# ---------------------------------------------------------------------------
+
+
+def test_update_clears_tools_to_inherit_all(client):
+    """PUT {"tools": null} clears tools to inherit-all, not preserve-existing (F1)."""
+    r = client.post("/api/subagents", json={"name": "clr-tools", "description": "d", "tools": ["read_file"]})
+    assert r.status_code == 201, r.text
+    assert r.json()["tools"] == ["read_file"]
+    r = client.put("/api/subagents/clr-tools", json={"tools": None})
+    assert r.status_code == 200, r.text
+    got = client.get("/api/subagents/clr-tools").json()
+    assert got["tools"] is None  # cleared -> inherit-all, NOT the original list
+
+
+def test_update_clears_system_prompt(client):
+    """PUT {"system_prompt": null} clears the prompt to inherit (F1)."""
+    r = client.post("/api/subagents", json={"name": "clr-prompt", "description": "d", "system_prompt": "be terse"})
+    assert r.status_code == 201, r.text
+    assert r.json()["system_prompt"] == "be terse"
+    r = client.put("/api/subagents/clr-prompt", json={"system_prompt": None})
+    assert r.status_code == 200, r.text
+    got = client.get("/api/subagents/clr-prompt").json()
+    assert got["system_prompt"] is None
+
+
+def test_update_preserves_exclusive_tools_and_workflow(client):
+    """Editing any field preserves exclusive_tools/workflow the UI never sends (F2)."""
+    from deerflow.config.subagents_user_config import load_user_subagent, save_user_subagent
+    from deerflow.subagents.config import SubagentConfig
+
+    # Seed a per-user config (as a hand-authored YAML would) carrying fields
+    # the designer form does not expose.
+    save_user_subagent(
+        SubagentConfig(
+            name="wf-agent",
+            description="orig",
+            exclusive_tools=["some_tool"],
+            workflow="mod:obj",
+        ),
+        "default",
+    )
+    r = client.put("/api/subagents/wf-agent", json={"description": "edited"})
+    assert r.status_code == 200, r.text
+    assert r.json()["description"] == "edited"
+    reloaded = load_user_subagent("wf-agent", user_id="default")
+    assert reloaded is not None
+    assert reloaded.exclusive_tools == ["some_tool"]  # preserved, not stripped
+    assert reloaded.workflow == "mod:obj"  # preserved, not stripped

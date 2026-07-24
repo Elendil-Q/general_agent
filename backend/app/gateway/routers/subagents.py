@@ -1,6 +1,7 @@
 """CRUD API for custom subagent types (the ``task``-tool delegation targets)."""
 
 import asyncio
+import dataclasses
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -249,17 +250,29 @@ async def update_subagent_endpoint(name: str, request: SubagentUpdateRequest) ->
             raise HTTPException(status_code=403, detail="Global subagents are read-only; clone to your own name to edit")
         raise HTTPException(status_code=404, detail=f"Subagent '{name}' not found")
     catalogs = await asyncio.to_thread(_build_catalogs)
-    updated = SubagentConfig(
-        name=existing.name,
-        description=request.description if request.description is not None else existing.description,
-        system_prompt=request.system_prompt if request.system_prompt is not None else existing.system_prompt,
-        tools=request.tools if request.tools is not None else existing.tools,
-        skills=request.skills if request.skills is not None else existing.skills,
-        skills_on_demand=request.skills_on_demand if request.skills_on_demand is not None else existing.skills_on_demand,
-        model=request.model if request.model is not None else existing.model,
-        max_turns=request.max_turns if request.max_turns is not None else existing.max_turns,
-        timeout_seconds=request.timeout_seconds if request.timeout_seconds is not None else existing.timeout_seconds,
-    )
+    # Direct assignment for clearable fields: the frontend sends ``null`` to
+    # CLEAR system_prompt/tools/skills/skills_on_demand (e.g. unchecking every
+    # tool means "inherit all"). Treating null as "preserve existing" would
+    # silently drop the clear. description/model/max_turns/timeout_seconds stay
+    # PATCH-style (only applied when provided) since null is never a meaningful
+    # value for them. dataclasses.replace also carries name, disallowed_tools,
+    # exclusive_tools and workflow from ``existing`` (fields the UI does not
+    # expose), so a hand-authored per-user YAML is not stripped on save.
+    updates: dict[str, object] = {
+        "system_prompt": request.system_prompt,
+        "tools": request.tools,
+        "skills": request.skills,
+        "skills_on_demand": request.skills_on_demand,
+    }
+    if request.description is not None:
+        updates["description"] = request.description
+    if request.model is not None:
+        updates["model"] = request.model
+    if request.max_turns is not None:
+        updates["max_turns"] = request.max_turns
+    if request.timeout_seconds is not None:
+        updates["timeout_seconds"] = request.timeout_seconds
+    updated = dataclasses.replace(existing, **updates)
     _validate_fields(existing.name, updated.description, updated.model, updated.max_turns, updated.timeout_seconds, updated.tools, updated.skills, catalogs)
     try:
         await asyncio.to_thread(save_user_subagent, updated, user_id)
