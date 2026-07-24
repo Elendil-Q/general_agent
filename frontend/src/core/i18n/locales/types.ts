@@ -195,6 +195,14 @@ export interface Translations {
     loadMoreToSearch: string;
     loadingMore: string;
     loadOlderChats: string;
+    selectAll: string;
+    selectedCount: (count: number) => string;
+    deleteSelected: string;
+    deleteConfirmTitle: string;
+    deleteConfirmDescription: (count: number) => string;
+    deleteSuccess: (count: number) => string;
+    deletePartialFailure: (failed: number, total: number) => string;
+    cancelSelection: string;
   };
 
   // Channels

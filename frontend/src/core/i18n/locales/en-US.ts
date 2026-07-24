@@ -266,6 +266,16 @@ export const enUS: Translations = {
     loadMoreToSearch: "Load more to search older conversations",
     loadingMore: "Loading more...",
     loadOlderChats: "Load older chats",
+    selectAll: "Select all",
+    selectedCount: (count) => `${count} selected`,
+    deleteSelected: "Delete selected",
+    deleteConfirmTitle: "Delete conversations",
+    deleteConfirmDescription: (count) =>
+      `Are you sure you want to delete ${count} conversation(s)? This action cannot be undone.`,
+    deleteSuccess: (count) => `${count} conversation(s) deleted`,
+    deletePartialFailure: (failed, total) =>
+      `${failed} of ${total} conversations failed to delete`,
+    cancelSelection: "Cancel",
   },
 
   // Channels

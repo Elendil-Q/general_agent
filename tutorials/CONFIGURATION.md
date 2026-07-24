@@ -995,6 +995,6 @@ memory:
 - [backend/docs/IM_CHANNEL_CONNECTIONS.md](../backend/docs/IM_CHANNEL_CONNECTIONS.md) — IM 渠道接入
 - [backend/docs/GUARDRAILS.md](../backend/docs/GUARDRAILS.md) — 工具调用 Guardrails
 - [backend/docs/SSO.md](../backend/docs/SSO.md) — OIDC / SSO 认证
-- [docs/offline-setup.md](./offline-setup.md) — 离线/气隙环境部署
+- [offline-docker-setup.md](./offline-docker-setup.md) — 离线/气隙环境部署
 - [SECURITY.md](../SECURITY.md) — 安全策略
 - [README_zh.md](../README_zh.md) — 快速开始与高级配置

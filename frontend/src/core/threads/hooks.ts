@@ -2166,6 +2166,70 @@ export function useDeleteThread() {
   });
 }
 
+export function useBulkDeleteThreads() {
+  const queryClient = useQueryClient();
+  const apiClient = getAPIClient();
+  return useMutation({
+    mutationFn: async ({ threadIds }: { threadIds: string[] }) => {
+      const results = await Promise.allSettled(
+        threadIds.map(async (threadId) => {
+          await apiClient.threads.delete(threadId);
+          const response = await fetch(
+            `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}`,
+            { method: "DELETE" },
+          );
+          if (!response.ok) {
+            const error = await response
+              .json()
+              .catch(() => ({ detail: "Failed to delete local thread data." }));
+            throw new Error(
+              error.detail ?? "Failed to delete local thread data.",
+            );
+          }
+          return threadId;
+        }),
+      );
+
+      const succeeded = results
+        .filter(
+          (r): r is PromiseFulfilledResult<string> => r.status === "fulfilled",
+        )
+        .map((r) => r.value);
+      const failed = results.filter(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      );
+
+      return { succeeded, failed, total: threadIds.length };
+    },
+    onSuccess({ succeeded }) {
+      const deletedSet = new Set(succeeded);
+      queryClient.setQueriesData(
+        { queryKey: ["threads", "search"], exact: false },
+        (oldData: Array<AgentThread> | undefined) => {
+          if (oldData == null) {
+            return oldData;
+          }
+          return oldData.filter((t) => !deletedSet.has(t.thread_id));
+        },
+      );
+      queryClient.setQueriesData(
+        { queryKey: INFINITE_THREADS_QUERY_KEY_PREFIX, exact: false },
+        (oldData: InfiniteData<AgentThread[]> | undefined) =>
+          filterInfiniteThreadsCache(
+            oldData,
+            (t) => !deletedSet.has(t.thread_id),
+          ),
+      );
+    },
+    onSettled() {
+      void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
+      void queryClient.invalidateQueries({
+        queryKey: INFINITE_THREADS_QUERY_KEY_PREFIX,
+      });
+    },
+  });
+}
+
 export function useRenameThread() {
   const queryClient = useQueryClient();
   const apiClient = getAPIClient();

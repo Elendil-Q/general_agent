@@ -1,4 +1,4 @@
-﻿import {
+import {
   CompassIcon,
   GraduationCapIcon,
   ImageIcon,
@@ -254,6 +254,16 @@ export const zhCN: Translations = {
     loadMoreToSearch: "加载更多以搜索更早的对话",
     loadingMore: "正在加载...",
     loadOlderChats: "加载更早的对话",
+    selectAll: "全选",
+    selectedCount: (count) => `已选 ${count} 个`,
+    deleteSelected: "删除所选",
+    deleteConfirmTitle: "删除对话",
+    deleteConfirmDescription: (count) =>
+      `确定要删除 ${count} 个对话吗？此操作不可撤销。`,
+    deleteSuccess: (count) => `已删除 ${count} 个对话`,
+    deletePartialFailure: (failed, total) =>
+      `${total} 个对话中有 ${failed} 个删除失败`,
+    cancelSelection: "取消",
   },
 
   // Channels

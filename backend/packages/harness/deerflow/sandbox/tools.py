@@ -22,7 +22,10 @@ from deerflow.sandbox.file_operation_lock import get_file_operation_lock
 from deerflow.sandbox.sandbox import Sandbox
 from deerflow.sandbox.sandbox_provider import get_sandbox_provider
 from deerflow.sandbox.search import GrepMatch
-from deerflow.sandbox.security import LOCAL_HOST_BASH_DISABLED_MESSAGE, is_host_bash_allowed
+from deerflow.sandbox.security import (
+    LOCAL_HOST_BASH_DISABLED_MESSAGE,
+    is_host_bash_allowed,
+)
 from deerflow.tools.types import Runtime
 
 _ABSOLUTE_PATH_PATTERN = re.compile(r"(?<![:\w])(?<!:/)/(?:[^\s\"'`;&|<>()]+)")
@@ -63,7 +66,21 @@ _WRITE_FILE_CONTENT_MAX_BYTES = 80 * 1024
 _WRITE_FILE_MAX_BYTES_ENV = "DEERFLOW_WRITE_FILE_MAX_BYTES"
 _LOCAL_BASH_CWD_COMMANDS = {"cd", "pushd"}
 _LOCAL_BASH_COMMAND_WRAPPERS = {"command", "builtin"}
-_LOCAL_BASH_COMMAND_PREFIX_KEYWORDS = {"!", "{", "case", "do", "elif", "else", "for", "if", "select", "then", "time", "until", "while"}
+_LOCAL_BASH_COMMAND_PREFIX_KEYWORDS = {
+    "!",
+    "{",
+    "case",
+    "do",
+    "elif",
+    "else",
+    "for",
+    "if",
+    "select",
+    "then",
+    "time",
+    "until",
+    "while",
+}
 _LOCAL_BASH_COMMAND_END_KEYWORDS = {"}", "done", "esac", "fi"}
 _LOCAL_BASH_ROOT_PATH_COMMANDS = {
     "awk",
@@ -227,7 +244,9 @@ def _get_custom_mount_for_path(path: str):
     return best
 
 
-def _extract_thread_id_from_thread_data(thread_data: "ThreadDataState | None") -> str | None:
+def _extract_thread_id_from_thread_data(
+    thread_data: "ThreadDataState | None",
+) -> str | None:
     """Extract thread_id from thread_data by inspecting workspace_path.
 
     The workspace_path has the form
@@ -557,7 +576,9 @@ def _thread_actual_to_virtual_mappings(thread_data: ThreadDataState) -> dict[str
 
 
 @lru_cache(maxsize=512)
-def _compiled_mask_patterns(sources: tuple[tuple[str, str], ...]) -> tuple[tuple[re.Pattern[str], str, str], ...]:
+def _compiled_mask_patterns(
+    sources: tuple[tuple[str, str], ...],
+) -> tuple[tuple[re.Pattern[str], str, str], ...]:
     """Compile the host→virtual masking patterns once per source set.
 
     ``sources`` is an ordered tuple of ``(host_base, virtual_base)`` pairs
@@ -582,7 +603,13 @@ def _compiled_mask_patterns(sources: tuple[tuple[str, str], ...]) -> tuple[tuple
                     continue
                 seen.add(variant)
                 escaped = re.escape(variant).replace(r"\\", r"[/\\]")
-                compiled.append((re.compile(escaped + r"(?:[/\\][^\s\"';&|<>()]*)?"), variant, virtual_base))
+                compiled.append(
+                    (
+                        re.compile(escaped + r"(?:[/\\][^\s\"';&|<>()]*)?"),
+                        variant,
+                        virtual_base,
+                    )
+                )
     return tuple(compiled)
 
 
@@ -1388,8 +1415,6 @@ def _truncate_ls_output(output: str, max_chars: int) -> str:
 @tool("bash", parse_docstring=True)
 def bash_tool(runtime: Runtime, description: str, command: str) -> str:
     """Execute a bash command in a Linux environment.
-
-
     - Use `python` to run Python code.
     - Prefer a thread-local virtual environment in `/mnt/user-data/workspace/.venv`.
     - Use `python -m pip` (inside the virtual environment) to install Python packages.

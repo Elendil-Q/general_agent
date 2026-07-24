@@ -375,7 +375,7 @@ DOCKERFILE
 
 如果修改了 `pyproject.toml` 或 `uv.lock`，`uv sync --frozen --offline` 会因 `.venv`
 与锁文件不匹配而失败。离线环境只能回源机重建镜像并重新传输
-（参见 `docs/offline-setup.md` §1.3）。
+（参见 `./offline-docker-setup.md` §1.3）。
 
 ---
 
@@ -416,7 +416,7 @@ DOCKERFILE
 > 这个镜像比官方的 runtime 镜像多 ~200MB（因为带 `build-essential`），
 > 但功能完全一致。如果要在目标机上做更干净的镜像，可以在构建完成后用
 > `docker export` + `docker import` 或重新走源机交叉构建流程
->（`docs/offline-setup.md` §1.3）。
+>（`./offline-docker-setup.md` §1.3）。
 
 ### 推荐选择
 
