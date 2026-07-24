@@ -223,6 +223,14 @@ class Paths:
         """Per-user per-agent memory: `{base_dir}/users/{user_id}/agents/{name}/memory.json`."""
         return self.user_agent_dir(user_id, agent_name) / "memory.json"
 
+    def user_subagents_dir(self, user_id: str) -> Path:
+        """Per-user root for that user's custom subagent definitions: `{base_dir}/users/{user_id}/subagents/`."""
+        return self.user_dir(user_id) / "subagents"
+
+    def user_subagent_dir(self, user_id: str, name: str) -> Path:
+        """Per-user flat-file subagent definition path: `{base_dir}/users/{user_id}/subagents/{name}.yaml`."""
+        return self.user_subagents_dir(user_id) / f"{name.lower()}.yaml"
+
     def thread_dir(self, thread_id: str, *, user_id: str | None = None) -> Path:
         """
         Host path for a thread's data.
