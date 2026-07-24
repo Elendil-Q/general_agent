@@ -51,6 +51,7 @@ export const enUS: Translations = {
     exportAsJSON: "Export as JSON",
     exportSuccess: "Conversation exported",
     regenerate: "Regenerate",
+    back: "Back",
   },
 
   // Home
@@ -180,6 +181,7 @@ export const enUS: Translations = {
     recentChats: "Recent chats",
     demoChats: "Demo chats",
     agents: "Agents",
+    subagents: "Subagents",
   },
 
   // Agents
@@ -230,6 +232,36 @@ export const enUS: Translations = {
     agentCreated: "Agent created!",
     startChatting: "Start chatting",
     backToGallery: "Back to Gallery",
+  },
+
+  // Subagents
+  subagents: {
+    title: "Subagents",
+    description:
+      "Design and manage custom subagent types the lead agent delegates to via the task tool.",
+    newSubagent: "New Subagent",
+    emptyTitle: "No subagents yet",
+    emptyDescription:
+      "Create a subagent type to specialize how the lead agent delegates work.",
+    deleted: "Subagent deleted",
+    model: "Model",
+    maxTurns: "Max turns",
+    deleteConfirmTitle: "Delete subagent?",
+    deleteConfirmDescription: "This subagent type will no longer be available.",
+    nameInvalid: "Name must match /^[A-Za-z0-9-]+$/ and not be reserved.",
+    fieldName: "Name",
+    fieldDescription: "Description",
+    fieldSystemPrompt: "System Prompt",
+    fieldModel: "Model",
+    fieldMaxTurns: "Max Turns",
+    fieldTimeout: "Timeout (seconds)",
+    fieldSkillsOnDemand: "Skills on demand",
+    advanced: "Advanced",
+    nameTaken: "Name already in use.",
+    saved: "Saved",
+    create: "Create",
+    clone: "Clone",
+    yamlPreview: "YAML preview",
   },
 
   // Breadcrumb

@@ -40,6 +40,7 @@ export interface Translations {
     exportAsJSON: string;
     exportSuccess: string;
     regenerate: string;
+    back: string;
   };
 
   home: {};
@@ -121,6 +122,7 @@ export interface Translations {
     chats: string;
     demoChats: string;
     agents: string;
+    subagents: string;
     channels: string;
   };
 
@@ -159,6 +161,34 @@ export interface Translations {
     agentCreated: string;
     startChatting: string;
     backToGallery: string;
+  };
+
+  // Subagents
+  subagents: {
+    title: string;
+    description: string;
+    newSubagent: string;
+    emptyTitle: string;
+    emptyDescription: string;
+    deleted: string;
+    model: string;
+    maxTurns: string;
+    deleteConfirmTitle: string;
+    deleteConfirmDescription: string;
+    nameInvalid: string;
+    fieldName: string;
+    fieldDescription: string;
+    fieldSystemPrompt: string;
+    fieldModel: string;
+    fieldMaxTurns: string;
+    fieldTimeout: string;
+    fieldSkillsOnDemand: string;
+    advanced: string;
+    nameTaken: string;
+    saved: string;
+    create: string;
+    clone: string;
+    yamlPreview: string;
   };
 
   // Breadcrumb

@@ -51,6 +51,7 @@ export const zhCN: Translations = {
     exportAsJSON: "导出为 JSON",
     exportSuccess: "对话已导出",
     regenerate: "重新生成",
+    back: "返回",
   },
 
   // Home
@@ -174,6 +175,7 @@ export const zhCN: Translations = {
     recentChats: "最近的对话",
     demoChats: "演示对话",
     agents: "智能体",
+    subagents: "子代理",
   },
 
   // Agents
@@ -218,6 +220,34 @@ export const zhCN: Translations = {
     agentCreated: "智能体已创建！",
     startChatting: "开始对话",
     backToGallery: "返回 Gallery",
+  },
+
+  // Subagents
+  subagents: {
+    title: "子代理",
+    description: "设计并管理主智能体通过 task 工具委派任务的自定义子代理类型。",
+    newSubagent: "新建子代理",
+    emptyTitle: "还没有子代理",
+    emptyDescription: "创建一个子代理类型，专门化主智能体的任务委派方式。",
+    deleted: "子代理已删除",
+    model: "模型",
+    maxTurns: "最大轮次",
+    deleteConfirmTitle: "删除子代理？",
+    deleteConfirmDescription: "该子代理类型将不再可用。",
+    nameInvalid: "名称必须匹配 /^[A-Za-z0-9-]+$/ 且不能是保留名称。",
+    fieldName: "名称",
+    fieldDescription: "描述",
+    fieldSystemPrompt: "系统提示词",
+    fieldModel: "模型",
+    fieldMaxTurns: "最大轮次",
+    fieldTimeout: "超时时间（秒）",
+    fieldSkillsOnDemand: "按需技能",
+    advanced: "高级",
+    nameTaken: "名称已被占用。",
+    saved: "已保存",
+    create: "创建",
+    clone: "克隆",
+    yamlPreview: "YAML 预览",
   },
 
   // Breadcrumb
