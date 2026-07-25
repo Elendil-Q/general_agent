@@ -589,7 +589,10 @@ class SubagentExecutor:
         - ``["a", "b"]`` — only the named skills are loaded.
         """
         if self.config.skills is None or len(self.config.skills) == 0:
-            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills=%r — skipping skill loading", self.config.skills)
+            logger.info(
+                f"[trace={self.trace_id}] Subagent {self.config.name} skills=%r — skipping skill loading",
+                self.config.skills,
+            )
             return []
 
         try:
@@ -662,7 +665,10 @@ class SubagentExecutor:
         Returns only metadata - this method never reads SKILL.md contents.
         """
         if self.config.skills_on_demand is None or len(self.config.skills_on_demand) == 0:
-            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} skills_on_demand=%r - skipping on-demand skill loading", self.config.skills_on_demand)
+            logger.info(
+                f"[trace={self.trace_id}] Subagent {self.config.name} skills_on_demand=%r - skipping on-demand skill loading",
+                self.config.skills_on_demand,
+            )
             return []
 
         try:
@@ -1116,7 +1122,7 @@ the same skill directory only when needed during execution.
             return result
 
     def execute_async(self, task: str, task_id: str | None = None) -> str:
-        """Start a task execution in the background.
+        """Start a task execution in the background. Return the subagent ID immediately.
 
         Args:
             task: The task description for the subagent.
