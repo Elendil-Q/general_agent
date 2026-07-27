@@ -10,6 +10,7 @@ Covers:
 
 import asyncio
 import importlib
+from datetime import UTC
 from enum import Enum
 from types import SimpleNamespace
 
@@ -247,3 +248,147 @@ def test_blocking_mode_still_works(monkeypatch):
     )
 
     assert "Task Succeeded" in result
+
+
+def test_wait_for_tasks_collects_detached_results(monkeypatch):
+    """``wait_for_tasks`` collects results of detached subagents as JSON."""
+    import sys
+    from datetime import datetime
+
+    from deerflow.subagents.agent_registry import AgentRef
+    from deerflow.subagents.executor import SubagentResult, SubagentStatus
+    from deerflow.tools.builtins.wait_for_tasks import wait_for_tasks
+
+    # Mock get_stream_writer to return a no-op writer
+    monkeypatch.setattr(
+        sys.modules["deerflow.tools.builtins.wait_for_tasks"],
+        "get_stream_writer",
+        lambda: lambda event: None,
+    )
+
+    # Register two completed AgentRefs
+    tid_1 = "tid-wait-1"
+    tid_2 = "tid-wait-2"
+    for tid in (tid_1, tid_2):
+        ref = AgentRef(
+            task_id=tid,
+            thread_id="thread-wait-test",
+            trace_id=f"trace-{tid}",
+            subagent_type="general-purpose",
+            status=SubagentStatus.COMPLETED,
+            config=_make_subagent_config(),
+            executor=None,
+            result=SubagentResult(
+                task_id=tid,
+                trace_id=f"trace-{tid}",
+                status=SubagentStatus.COMPLETED,
+                result=f"result-{tid}",
+                error=None,
+                started_at=datetime.now(UTC),
+                completed_at=datetime.now(UTC),
+            ),
+            description=f"detached work {tid}",
+            created_at=datetime.now(UTC),
+        )
+        agent_registry.register(ref)
+
+    runtime = _make_runtime()
+
+    result_json = asyncio.run(
+        wait_for_tasks.coroutine(
+            task_ids=[tid_1, tid_2],
+            tool_call_id="tc-wait-test",
+            runtime=runtime,
+        )
+    )
+
+    import json
+
+    parsed = json.loads(result_json)
+    assert tid_1 in parsed
+    assert tid_2 in parsed
+    assert parsed[tid_1]["status"] == "completed"
+    assert parsed[tid_1]["result"] == "result-tid-wait-1"
+    assert parsed[tid_2]["status"] == "completed"
+    assert parsed[tid_2]["result"] == "result-tid-wait-2"
+
+
+def test_wait_for_tasks_times_out(monkeypatch):
+    """``wait_for_tasks`` returns partial results for timed-out subagents."""
+    import sys
+    from datetime import datetime
+
+    from deerflow.subagents.agent_registry import AgentRef
+    from deerflow.subagents.executor import SubagentResult, SubagentStatus
+    from deerflow.tools.builtins.wait_for_tasks import wait_for_tasks
+
+    _module = sys.modules["deerflow.tools.builtins.wait_for_tasks"]
+
+    # Mock get_stream_writer to return a no-op writer
+    monkeypatch.setattr(_module, "get_stream_writer", lambda: lambda event: None)
+    # Make polling fast — 10ms instead of 5s — and timeout after 2 polls
+    monkeypatch.setattr(_module, "DEFAULT_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        _module,
+        "DEFAULT_TIMEOUT_SECONDS",
+        0.02,  # 2 polls before timeout
+    )
+
+    # One completed, one still RUNNING (never finishes)
+    tid_done = "tid-wait-done"
+    tid_pending = "tid-wait-pending"
+
+    ref_done = AgentRef(
+        task_id=tid_done,
+        thread_id="thread-wait-timeout",
+        trace_id="trace-done",
+        subagent_type="general-purpose",
+        status=SubagentStatus.COMPLETED,
+        config=_make_subagent_config(),
+        executor=None,
+        result=SubagentResult(
+            task_id=tid_done,
+            trace_id="trace-done",
+            status=SubagentStatus.COMPLETED,
+            result="done-result",
+            error=None,
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+        ),
+        description="completed work",
+        created_at=datetime.now(UTC),
+    )
+    ref_pending = AgentRef(
+        task_id=tid_pending,
+        thread_id="thread-wait-timeout",
+        trace_id="trace-pending",
+        subagent_type="general-purpose",
+        status=SubagentStatus.RUNNING,
+        config=_make_subagent_config(),
+        executor=None,
+        result=None,
+        description="pending work",
+        created_at=datetime.now(UTC),
+    )
+    agent_registry.register(ref_done)
+    agent_registry.register(ref_pending)
+
+    runtime = _make_runtime()
+
+    result_json = asyncio.run(
+        wait_for_tasks.coroutine(
+            task_ids=[tid_done, tid_pending],
+            tool_call_id="tc-wait-timeout",
+            runtime=runtime,
+        )
+    )
+
+    import json
+
+    parsed = json.loads(result_json)
+    assert tid_done in parsed
+    assert parsed[tid_done]["status"] == "completed"
+    assert parsed[tid_done]["result"] == "done-result"
+    assert tid_pending in parsed
+    assert parsed[tid_pending]["status"] == "pending"
+    assert "timed out" in parsed[tid_pending]["error"]
