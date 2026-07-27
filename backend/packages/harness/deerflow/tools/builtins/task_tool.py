@@ -4,7 +4,6 @@ import asyncio
 import logging
 import uuid
 from dataclasses import replace
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from langchain.tools import InjectedToolCallId, tool
@@ -15,7 +14,7 @@ from deerflow.config import get_app_config
 from deerflow.runtime.user_context import resolve_runtime_user_id
 from deerflow.sandbox.security import LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE, is_host_bash_allowed
 from deerflow.subagents import SubagentExecutor, get_available_subagent_names, get_subagent_config
-from deerflow.subagents.agent_registry import AgentRef, agent_registry
+from deerflow.subagents.agent_registry import agent_registry
 from deerflow.subagents.config import resolve_subagent_model_name
 from deerflow.subagents.event_bus import event_bus
 from deerflow.subagents.executor import (
@@ -390,20 +389,30 @@ async def task_tool(
 
     if detached:
         task_id = executor.execute_async(prompt, task_id=tool_call_id)
-        agent_registry.register(
-            AgentRef(
-                task_id=task_id,
-                thread_id=thread_id or "",
-                trace_id=trace_id or "",
-                subagent_type=subagent_type,
-                status=SubagentStatus.RUNNING,
-                config=config,
-                executor=executor,
-                result=None,
-                description=description,
-                created_at=datetime.now(UTC),
+        # execute_async already registers an AgentRef (PENDING) with the
+        # correct SubagentResult. Bump to RUNNING; do NOT re-register or
+        # we overwrite the SubagentResult reference with None.
+        if agent_registry.update_status(task_id, SubagentStatus.RUNNING) is None:
+            # Fallback: execute_async didn't register (e.g., mocked in tests).
+            # Register a best-effort AgentRef without the SubagentResult.
+            from datetime import UTC, datetime
+
+            from deerflow.subagents.agent_registry import AgentRef
+
+            agent_registry.register(
+                AgentRef(
+                    task_id=task_id,
+                    thread_id=thread_id or "",
+                    trace_id=trace_id or "",
+                    subagent_type=subagent_type,
+                    status=SubagentStatus.RUNNING,
+                    config=config,
+                    executor=executor,
+                    result=None,
+                    description=description,
+                    created_at=datetime.now(UTC),
+                )
             )
-        )
         event_bus.emit(
             "subagent:lifecycle",
             {

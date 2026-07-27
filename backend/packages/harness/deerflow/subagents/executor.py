@@ -1026,6 +1026,9 @@ the same skill directory only when needed during execution.
                 # interrupted until the next chunk is yielded.
                 if result.cancel_event.is_set():
                     logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} cancelled by parent")
+                    from deerflow.subagents.agent_registry import agent_registry
+
+                    agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
                     result.try_set_terminal(
                         SubagentStatus.CANCELLED,
                         error="Cancelled by user",
@@ -1071,6 +1074,9 @@ the same skill directory only when needed during execution.
                             # termination by breaking the astream loop.
                             budget.tick()
                             if budget.at_hard_limit():
+                                from deerflow.subagents.agent_registry import agent_registry
+
+                                agent_registry.update_status(result.task_id or "", SubagentStatus.FAILED)
                                 result.try_set_terminal(
                                     SubagentStatus.FAILED,
                                     error="request budget exceeded",
@@ -1106,6 +1112,9 @@ the same skill directory only when needed during execution.
             # interrupt pauses for human input, otherwise the run completed.
             if result.cancel_event.is_set():
                 logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} cancelled after stream end")
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
                 result.try_set_terminal(
                     SubagentStatus.CANCELLED,
                     error="Cancelled by user",
@@ -1155,6 +1164,9 @@ the same skill directory only when needed during execution.
 
                     lifecycle_manager.adopt(result.task_id or "")
             else:
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(result.task_id or "", SubagentStatus.COMPLETED)
                 result.try_set_terminal(
                     SubagentStatus.COMPLETED,
                     result=final_result,
@@ -1170,6 +1182,9 @@ the same skill directory only when needed during execution.
                     },
                 )
         except Exception as e:
+            from deerflow.subagents.agent_registry import agent_registry
+
+            agent_registry.update_status(result.task_id or "", SubagentStatus.FAILED)
             logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
             result.try_set_terminal(
                 SubagentStatus.FAILED,
@@ -1729,6 +1744,9 @@ the same skill directory only when needed during execution.
 
             async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
                 if result.cancel_event.is_set():
+                    from deerflow.subagents.agent_registry import agent_registry
+
+                    agent_registry.update_status(task_id, SubagentStatus.CANCELLED)
                     result.try_set_terminal(
                         SubagentStatus.CANCELLED,
                         error="Cancelled by user",
@@ -1759,6 +1777,9 @@ the same skill directory only when needed during execution.
                                 seen_message_ids.add(message_id)
                         budget.tick()
                         if budget.at_hard_limit():
+                            from deerflow.subagents.agent_registry import agent_registry
+
+                            agent_registry.update_status(task_id, SubagentStatus.FAILED)
                             result.try_set_terminal(
                                 SubagentStatus.FAILED,
                                 error="request budget exceeded",
@@ -1766,6 +1787,9 @@ the same skill directory only when needed during execution.
                             return result
 
             if result.cancel_event.is_set():
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(task_id, SubagentStatus.CANCELLED)
                 result.try_set_terminal(
                     SubagentStatus.CANCELLED,
                     error="Cancelled by user",
@@ -1811,6 +1835,9 @@ the same skill directory only when needed during execution.
 
                     lifecycle_manager.adopt(task_id)
             else:
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(task_id, SubagentStatus.COMPLETED)
                 result.try_set_terminal(
                     SubagentStatus.COMPLETED,
                     result=final_result,
