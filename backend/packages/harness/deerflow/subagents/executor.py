@@ -1586,10 +1586,260 @@ the same skill directory only when needed during execution.
         logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no messages in final state")
         return "No response generated"
 
+    # ------------------------------------------------------------------
+    # follow_up / continue_with_prompt
+    # ------------------------------------------------------------------
+
+    def continue_with_prompt(self, prompt: str, task_id: str) -> SubagentResult:
+        """Continue an IDLE subagent with a new prompt on the same checkpointer.
+
+        Called by the ``follow_up`` tool.  The caller MUST ensure the
+        subagent is IDLE before calling (the tool checks via ``agent_registry``).
+
+        Args:
+            prompt: The new human prompt to feed to the subagent.
+            task_id: The task_id of the IDLE subagent to revive.
+
+            SubagentResult with the continuation outcome.
+        """
+
+        result_holder = SubagentResult(
+            task_id=task_id,
+            trace_id=self.trace_id,
+            status=SubagentStatus.RUNNING,
+        )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            return self._continue_in_isolated_loop(prompt, task_id, result_holder)
+        return asyncio.run(self._acontinue(prompt, task_id, result_holder))
+
+    def _continue_in_isolated_loop(self, prompt: str, task_id: str, result_holder: SubagentResult) -> SubagentResult:
+        """Run ``_acontinue`` on the persistent isolated event loop."""
+        future: Future[SubagentResult] | None = None
+        parent_context = copy_context()
+        try:
+            future = _submit_to_isolated_loop_in_context(
+                parent_context,
+                lambda: self._acontinue(prompt, task_id, result_holder),
+            )
+            return future.result(timeout=self.config.timeout_seconds)
+        except FuturesTimeoutError:
+            result_holder.cancel_event.set()
+            if future is not None:
+                future.cancel()
+            raise
+
+    async def _acontinue(self, prompt: str, task_id: str, result_holder: SubagentResult) -> SubagentResult:
+        """Async continuation: reuse the compiled agent + checkpointer.
+
+        Mirrors ``_aexecute`` but skips ``_build_initial_state``: the new
+        ``HumanMessage`` is appended to the existing checkpoint via the same
+        ``subagent_thread_id``, so the agent sees the full history.
+        """
+        from deerflow.subagents.budget import BudgetMonitor
+        from deerflow.subagents.yield_protocol import (
+            YieldCollector,
+            _yield_collector_ctx,
+        )
+
+        result = result_holder
+        ai_messages: list[dict[str, Any]] = []
+        seen_message_ids: set[str] = set()
+
+        collector: SubagentTokenCollector | None = None
+        try:
+            agent = self._agent
+            if agent is None:
+                # Build a minimal agent — tools are already compiled into the
+                # checkpointer graph, so an empty tool list is fine.
+                agent = self._create_agent([], deferred_setup=None)
+                self._agent = agent
+
+            collector_caller = f"subagent:{self.config.name}"
+            collector = SubagentTokenCollector(caller=collector_caller)
+
+            run_config: RunnableConfig = {
+                "recursion_limit": self.config.max_turns,
+                "callbacks": [collector],
+                "tags": [collector_caller],
+            }
+
+            tracing_callbacks = build_tracing_callbacks()
+            if tracing_callbacks:
+                existing_callbacks = list(run_config.get("callbacks") or [])
+                run_config["callbacks"] = [*existing_callbacks, *tracing_callbacks]
+
+            if self.config.name:
+                normalized_name = self.config.name.strip().lower().replace("_", "-")
+                assistant_id = f"subagent:{normalized_name}"
+            else:
+                assistant_id = "subagent"
+            inject_langfuse_metadata(
+                run_config,
+                thread_id=self.thread_id,
+                user_id=self.user_id,
+                assistant_id=assistant_id,
+                model_name=self.model_name,
+                environment=os.environ.get("DEER_FLOW_ENV") or os.environ.get("ENVIRONMENT"),
+            )
+
+            context: dict[str, Any] = {}
+            run_config["configurable"] = {"thread_id": self.subagent_thread_id}
+            if self.thread_id:
+                context["thread_id"] = self.thread_id
+            if self.app_config is not None:
+                context["app_config"] = self.app_config
+            context["user_id"] = self.user_id
+            context["user_role"] = self.user_role
+            context["oauth_provider"] = self.oauth_provider
+            context["oauth_id"] = self.oauth_id
+            context["run_id"] = self.run_id
+            context["is_subagent"] = True
+            if self.clarification_interrupt_enabled:
+                context["clarification_interrupt_enabled"] = self.clarification_interrupt_enabled
+
+            collector_yield = YieldCollector(output_schema=self.config.output)
+            _yield_collector_ctx.set(collector_yield)
+
+            budget = BudgetMonitor(
+                task_id=task_id,
+                thread_id=self.thread_id or "",
+                soft=self.config.max_requests,
+            )
+
+            state: dict[str, Any] = {"messages": [HumanMessage(content=prompt)]}
+
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} continuing with follow_up prompt, task_id={task_id}")
+
+            final_state = None
+            interrupts: Any = None
+
+            if result.cancel_event.is_set():
+                result.try_set_terminal(
+                    SubagentStatus.CANCELLED,
+                    error="Cancelled by user",
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+
+            async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
+                if result.cancel_event.is_set():
+                    result.try_set_terminal(
+                        SubagentStatus.CANCELLED,
+                        error="Cancelled by user",
+                        token_usage_records=collector.snapshot_records(),
+                    )
+                    return result
+
+                final_state = chunk
+
+                if isinstance(chunk, dict):
+                    chunk_interrupts = chunk.get("__interrupt__")
+                    if chunk_interrupts:
+                        interrupts = chunk_interrupts
+
+                messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
+                if messages:
+                    last_message = messages[-1]
+                    if isinstance(last_message, AIMessage):
+                        message_dict = last_message.model_dump()
+                        message_id = message_dict.get("id")
+                        if message_id:
+                            is_duplicate = message_id in seen_message_ids
+                        else:
+                            is_duplicate = message_dict in ai_messages
+                        if not is_duplicate:
+                            ai_messages.append(message_dict)
+                            if message_id:
+                                seen_message_ids.add(message_id)
+                        budget.tick()
+                        if budget.at_hard_limit():
+                            result.try_set_terminal(
+                                SubagentStatus.FAILED,
+                                error="request budget exceeded",
+                            )
+                            return result
+
+            if result.cancel_event.is_set():
+                result.try_set_terminal(
+                    SubagentStatus.CANCELLED,
+                    error="Cancelled by user",
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+
+            if interrupts:
+                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} interrupted during follow_up")
+                result.try_set_interrupted(
+                    interrupts=serialize_lc_object(interrupts),
+                    subagent_thread_id=self.subagent_thread_id,
+                    token_usage_records=collector.snapshot_records(),
+                )
+                return result
+
+            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed follow_up")
+            token_usage_records = collector.snapshot_records()
+            final_result = self._extract_final_result(final_state, collector=collector_yield)
+
+            # Emit lifecycle events (mirrors _aexecute)
+
+            event_bus.emit(
+                "subagent:lifecycle",
+                {
+                    "event": "revived",
+                    "task_id": task_id,
+                    "thread_id": self.thread_id or "",
+                },
+            )
+
+            if self.config.keep_alive:
+                result.result = final_result
+                if result.try_set_idle():
+                    from deerflow.subagents.agent_registry import agent_registry
+
+                    agent_registry.update_status(
+                        task_id,
+                        SubagentStatus.IDLE,
+                        idle_since=result.idle_since,
+                    )
+                    from deerflow.subagents.lifecycle import lifecycle_manager
+
+                    lifecycle_manager.adopt(task_id)
+            else:
+                result.try_set_terminal(
+                    SubagentStatus.COMPLETED,
+                    result=final_result,
+                    token_usage_records=token_usage_records,
+                )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "completed",
+                        "task_id": task_id,
+                        "thread_id": self.thread_id or "",
+                        "result": final_result,
+                    },
+                )
+
+        except Exception as e:
+            logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} follow_up failed")
+            result.try_set_terminal(
+                SubagentStatus.FAILED,
+                error=str(e),
+                token_usage_records=(collector.snapshot_records() if collector is not None else None),
+            )
+
+        return result
+
     def resume_async(self, resume_value: Any, task_id: str) -> str:
         """Resume an INTERRUPTED background subagent.
 
-        Mirrors ``execute_async``: transitions the result INTERRUPTED→RUNNING,
+        Mirrors ``execute_async``: transitions the result INTERRUPTED->RUNNING,
         submits ``_aresume`` to the persistent isolated loop, and returns the
         ``task_id`` so the caller can poll the same ``SubagentResult`` for the
         resumed run's progress.

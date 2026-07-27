@@ -8,6 +8,7 @@ from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.tools.builtins import (
     ask_clarification_tool,
+    follow_up,
     present_file_tool,
     task_tool,
     view_image_tool,
@@ -24,6 +25,7 @@ BUILTIN_TOOLS = [
 
 SUBAGENT_TOOLS = [
     task_tool,
+    follow_up,
     # task_status_tool is no longer exposed to LLM (backend handles polling internally)
 ]
 
