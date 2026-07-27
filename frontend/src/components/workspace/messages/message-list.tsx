@@ -21,6 +21,7 @@ import {
   extractContentFromMessage,
   extractPresentFilesFromMessage,
   extractTextFromMessage,
+  findToolCallResult,
   getAssistantTurnCopyData,
   getAssistantTurnUsageMessages,
   getMessageGroups,
@@ -47,6 +48,7 @@ import { StreamingIndicator } from "../streaming-indicator";
 import { Tooltip } from "../tooltip";
 
 import { useThread } from "./context";
+import { FollowUpCard } from "./follow-up-card";
 import { MarkdownContent } from "./markdown-content";
 import { MessageGroup } from "./message-group";
 import { MessageListItem } from "./message-list-item";
@@ -56,6 +58,7 @@ import {
 } from "./message-token-usage";
 import { MessageListSkeleton } from "./skeleton";
 import { SubtaskCard } from "./subtask-card";
+import { WaitForTasksCard } from "./wait-for-tasks-card";
 
 export const MESSAGE_LIST_DEFAULT_PADDING_BOTTOM = 24;
 
@@ -562,6 +565,87 @@ export function MessageList({
                     key={"task-group-" + taskId}
                     taskId={taskId}
                     isLoading={groupIsLoading}
+                  />,
+                );
+              }
+              // Render wait_for_tasks tool calls
+              const waitCalls =
+                message.tool_calls?.filter(
+                  (tc) => tc.name === "wait_for_tasks",
+                ) ?? [];
+              for (const waitCall of waitCalls) {
+                if (!waitCall.id) continue;
+                const toolResult = findToolCallResult(
+                  waitCall.id,
+                  group.messages,
+                );
+                let parsedResult:
+                  | Record<
+                      string,
+                      { status: string; result?: unknown; error?: string }
+                    >
+                  | undefined;
+                if (toolResult) {
+                  try {
+                    parsedResult = JSON.parse(toolResult) as Record<
+                      string,
+                      { status: string; result?: unknown; error?: string }
+                    >;
+                  } catch {
+                    // not JSON, leave undefined
+                  }
+                }
+                results.push(
+                  <WaitForTasksCard
+                    key={"wait-group-" + waitCall.id}
+                    taskIds={
+                      (waitCall.args.task_ids as string[] | undefined) ?? []
+                    }
+                    isLoading={groupIsLoading && !parsedResult}
+                    result={parsedResult}
+                  />,
+                );
+              }
+              // Render follow_up tool calls
+              const followUpCalls =
+                message.tool_calls?.filter((tc) => tc.name === "follow_up") ??
+                [];
+              for (const followUpCall of followUpCalls) {
+                if (!followUpCall.id) continue;
+                const toolResult = findToolCallResult(
+                  followUpCall.id,
+                  group.messages,
+                );
+                let resultStatus: "completed" | "failed" | "in_progress" =
+                  "in_progress";
+                let resultText: string | undefined;
+                if (toolResult) {
+                  if (toolResult.startsWith("Follow-up completed")) {
+                    resultStatus = "completed";
+                    resultText = toolResult;
+                  } else if (
+                    toolResult.startsWith("Follow-up failed") ||
+                    toolResult.startsWith("Error:")
+                  ) {
+                    resultStatus = "failed";
+                    resultText = toolResult;
+                  } else {
+                    resultStatus = "completed";
+                    resultText = toolResult;
+                  }
+                }
+                results.push(
+                  <FollowUpCard
+                    key={"followup-group-" + followUpCall.id}
+                    taskId={
+                      (followUpCall.args.task_id as string | undefined) ?? ""
+                    }
+                    prompt={
+                      (followUpCall.args.prompt as string | undefined) ?? ""
+                    }
+                    isLoading={groupIsLoading && !toolResult}
+                    resultText={resultText}
+                    resultStatus={toolResult ? resultStatus : undefined}
                   />,
                 );
               }

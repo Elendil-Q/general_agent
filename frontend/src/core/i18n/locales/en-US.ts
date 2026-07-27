@@ -392,6 +392,22 @@ export const enUS: Translations = {
     in_progress: "Running subtask",
     completed: "Subtask completed",
     failed: "Subtask failed",
+    idle: "Dormant, awaiting follow-up",
+    expired: "Subtask expired",
+  },
+
+  waitForTasks: {
+    collecting: (count: number) =>
+      `Collecting ${count} task${count === 1 ? "" : "s"}...`,
+    collected: "Tasks collected",
+    waitingFor: "Waiting for tasks:",
+  },
+
+  followUp: {
+    label: (taskId: string, prompt: string) =>
+      `[follow-up] ${prompt.slice(0, 80)}${prompt.length > 80 ? "..." : ""}`,
+    targetTask: "Target task",
+    promptLabel: "Prompt",
   },
 
   clarification: {

@@ -458,7 +458,11 @@ export function extractPresentFilesFromMessage(message: Message) {
 
 export function hasSubagent(message: AIMessage) {
   for (const toolCall of message.tool_calls ?? []) {
-    if (toolCall.name === "task") {
+    if (
+      toolCall.name === "task" ||
+      toolCall.name === "wait_for_tasks" ||
+      toolCall.name === "follow_up"
+    ) {
       return true;
     }
   }

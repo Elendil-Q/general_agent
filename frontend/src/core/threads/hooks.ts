@@ -1,4 +1,4 @@
-import type { AIMessage, Message, Run } from "@langchain/langgraph-sdk";
+import type { Message, Run } from "@langchain/langgraph-sdk";
 import type { ThreadsClient } from "@langchain/langgraph-sdk/client";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import {
@@ -31,6 +31,7 @@ import {
   type ClarificationInterruptRequest,
   isClarificationInterrupt,
 } from "./clarification";
+import { handleCustomEvent } from "./custom-events";
 import { resumeSubagent } from "./subagent-resume";
 import { threadSystemPromptQueryKey } from "./system-prompt";
 import {
@@ -948,18 +949,7 @@ export function useThreadStream({
       }
     },
     onCustomEvent(event: unknown) {
-      if (
-        typeof event === "object" &&
-        event !== null &&
-        "type" in event &&
-        event.type === "task_running"
-      ) {
-        const e = event as {
-          type: "task_running";
-          task_id: string;
-          message: AIMessage;
-        };
-        updateSubtask({ id: e.task_id, latestMessage: e.message });
+      if (handleCustomEvent(event, { updateSubtask, toast })) {
         return;
       }
 
@@ -996,19 +986,6 @@ export function useThreadStream({
           }
         }
         return;
-      }
-
-      if (
-        typeof event === "object" &&
-        event !== null &&
-        "type" in event &&
-        event.type === "llm_retry" &&
-        "message" in event &&
-        typeof event.message === "string" &&
-        event.message.trim()
-      ) {
-        const e = event as { type: "llm_retry"; message: string };
-        toast(e.message);
       }
     },
     onError(error) {

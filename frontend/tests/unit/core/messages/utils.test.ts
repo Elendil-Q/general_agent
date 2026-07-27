@@ -11,6 +11,7 @@ import {
   getStreamingMessageLookup,
   hasContent,
   hasReasoning,
+  hasSubagent,
   isAssistantMessageGroupStreaming,
   stripUploadedFilesTag,
 } from "@/core/messages/utils";
@@ -539,5 +540,56 @@ describe("multi-part content with bare-string continuations", () => {
     expect(extractTextFromMessage(geminiMessage)).toBe(
       "First block carrying the signature.\nContinuation streamed as a bare string.",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasSubagent
+// ---------------------------------------------------------------------------
+describe("hasSubagent", () => {
+  function aiWithTool(name: string): Message {
+    return {
+      id: "ai-tool",
+      type: "ai",
+      content: "",
+      tool_calls: [{ id: "tc-1", name, args: {} }],
+    } as Message;
+  }
+
+  test("returns true for task tool call", () => {
+    expect(
+      hasSubagent(aiWithTool("task") as Parameters<typeof hasSubagent>[0]),
+    ).toBe(true);
+  });
+
+  test("returns true for wait_for_tasks tool call", () => {
+    expect(
+      hasSubagent(
+        aiWithTool("wait_for_tasks") as Parameters<typeof hasSubagent>[0],
+      ),
+    ).toBe(true);
+  });
+
+  test("returns true for follow_up tool call", () => {
+    expect(
+      hasSubagent(aiWithTool("follow_up") as Parameters<typeof hasSubagent>[0]),
+    ).toBe(true);
+  });
+
+  test("returns false for non-subagent tool call", () => {
+    expect(
+      hasSubagent(
+        aiWithTool("web_search") as Parameters<typeof hasSubagent>[0],
+      ),
+    ).toBe(false);
+  });
+
+  test("returns false when no tool calls", () => {
+    const msg: Message = {
+      id: "ai-no-tools",
+      type: "ai",
+      content: "Hello",
+    } as Message;
+    expect(hasSubagent(msg as Parameters<typeof hasSubagent>[0])).toBe(false);
   });
 });

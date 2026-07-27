@@ -2,7 +2,9 @@ import {
   CheckCircleIcon,
   ChevronUp,
   ClipboardListIcon,
+  ClockIcon,
   Loader2Icon,
+  PauseCircleIcon,
   XCircleIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -47,6 +49,10 @@ export function SubtaskCard({
       return <CheckCircleIcon className="size-3" />;
     } else if (task.status === "failed") {
       return <XCircleIcon className="size-3 text-red-500" />;
+    } else if (task.status === "expired") {
+      return <ClockIcon className="size-3 text-red-500" />;
+    } else if (task.status === "idle") {
+      return <PauseCircleIcon className="size-3 text-yellow-500" />;
     } else if (task.status === "in_progress") {
       return <Loader2Icon className="size-3 animate-spin" />;
     }
@@ -104,7 +110,9 @@ export function SubtaskCard({
                   <div
                     className={cn(
                       "text-muted-foreground flex items-center gap-1 text-xs font-normal",
-                      task.status === "failed" ? "text-red-500 opacity-67" : "",
+                      task.status === "failed" || task.status === "expired"
+                        ? "text-red-500 opacity-67"
+                        : "",
                     )}
                   >
                     {icon}

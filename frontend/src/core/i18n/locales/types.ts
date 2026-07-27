@@ -306,6 +306,22 @@ export interface Translations {
     in_progress: string;
     completed: string;
     failed: string;
+    idle: string;
+    expired: string;
+  };
+
+  // Wait for Tasks
+  waitForTasks: {
+    collecting: (count: number) => string;
+    collected: string;
+    waitingFor: string;
+  };
+
+  // Follow-up
+  followUp: {
+    label: (taskId: string, prompt: string) => string;
+    targetTask: string;
+    promptLabel: string;
   };
 
   // Clarification interrupt modal

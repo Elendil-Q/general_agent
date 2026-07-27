@@ -376,6 +376,21 @@ export const zhCN: Translations = {
     in_progress: "子任务运行中",
     completed: "子任务已完成",
     failed: "子任务失败",
+    idle: "休眠中，等待后续指令",
+    expired: "子任务已过期",
+  },
+
+  waitForTasks: {
+    collecting: (count: number) => `正在收集 ${count} 个任务...`,
+    collected: "任务已收集",
+    waitingFor: "等待任务：",
+  },
+
+  followUp: {
+    label: (taskId: string, prompt: string) =>
+      `[后续] ${prompt.slice(0, 80)}${prompt.length > 80 ? "..." : ""}`,
+    targetTask: "目标任务",
+    promptLabel: "提示",
   },
 
   clarification: {

@@ -10,7 +10,7 @@ import {
 import type { Subtask } from "./types";
 
 function isTerminalSubtaskStatus(status: Subtask["status"] | undefined) {
-  return status === "completed" || status === "failed";
+  return status === "completed" || status === "failed" || status === "expired";
 }
 
 export interface SubtaskContextValue {
