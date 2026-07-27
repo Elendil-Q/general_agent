@@ -18,6 +18,7 @@ flagged ``schemaValid: False`` with the error list.
 
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
@@ -93,3 +94,6 @@ def assembleYieldResult(yields: list[YieldEntry], output_schema: dict | None) ->
         if hasattr(exc, "message"):
             errors = [str(getattr(exc, "message", exc))]
         return {"data": data, "schemaValid": False, "schemaErrors": errors}
+
+
+_yield_collector_ctx: contextvars.ContextVar[YieldCollector | None] = contextvars.ContextVar("deerflow_yield_collector", default=None)
