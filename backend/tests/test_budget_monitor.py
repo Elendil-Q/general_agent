@@ -46,6 +46,14 @@ def test_soft_only_fires_once():
             m.tick()
         warnings = [e for e in events if e.get("event") == "warning"]
         assert len(warnings) == 1  # only the first crossing
+        # The frontend's budget_warning/exceeded handler requires a human-readable
+        # ``message`` field; without it the event is silently dropped from SSE.
+        assert "message" in warnings[0], "budget warning event must include a message field"
+        assert isinstance(warnings[0]["message"], str)
+        exceeded = [e for e in events if e.get("event") == "exceeded"]
+        assert exceeded, "expected an exceeded event at 15 > hard(15)"
+        assert "message" in exceeded[0], "budget exceeded event must include a message field"
+        assert isinstance(exceeded[0]["message"], str)
     finally:
         unsub()
 

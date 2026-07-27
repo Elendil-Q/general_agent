@@ -217,7 +217,7 @@ class SubagentResult:
             return True
 
     def try_set_idle(self, *, idle_since: datetime | None = None) -> bool:
-        """Transition a RUNNING/COMPLETED subagent to IDLE.
+        """Transition a RUNNING subagent to IDLE.
 
         Used when ``keep_alive=True``: the subagent finished its run but stays
         resident for a later ``follow_up``. Refused if already stopped (terminal
@@ -1141,6 +1141,12 @@ the same skill directory only when needed during execution.
             # resume against the same checkpointer. The lifecycle manager
             # owns the TTL; the registry mirror keeps observers in sync.
             if self.config.keep_alive:
+                # Persist the final result on the result object before parking
+                # as IDLE: the lead's blocking ``task`` poll loop and
+                # ``wait_for_tasks`` both read ``result.result`` to surface the
+                # outcome on turn 1. Without this the IDLE subagent reports a
+                # null result (mirrors ``_acontinue``).
+                result.result = final_result
                 if result.try_set_idle():
                     # Lazy import: ``agent_registry`` re-imports this module
                     # for ``SubagentExecutor`` typing, so an eager top-level
@@ -1668,6 +1674,18 @@ the same skill directory only when needed during execution.
 
         collector: SubagentTokenCollector | None = None
         try:
+            # Emit ``revived`` at the start of continuation (IDLE -> RUNNING).
+            # Canonical emit point: the ``follow_up`` tool and direct
+            # ``continue_with_prompt`` callers both flow through here, so the
+            # event fires exactly once at the right time (not at completion).
+            event_bus.emit(
+                "subagent:lifecycle",
+                {
+                    "event": "revived",
+                    "task_id": task_id,
+                    "thread_id": self.thread_id or "",
+                },
+            )
             agent = self._agent
             if agent is None:
                 # Build a minimal agent — tools are already compiled into the
@@ -1810,16 +1828,9 @@ the same skill directory only when needed during execution.
             token_usage_records = collector.snapshot_records()
             final_result = self._extract_final_result(final_state, collector=collector_yield)
 
-            # Emit lifecycle events (mirrors _aexecute)
-
-            event_bus.emit(
-                "subagent:lifecycle",
-                {
-                    "event": "revived",
-                    "task_id": task_id,
-                    "thread_id": self.thread_id or "",
-                },
-            )
+            # The ``revived`` lifecycle event is emitted at the start of
+            # continuation (see below). Do not re-emit it here at completion -
+            # that would duplicate the event and fire it at the wrong time.
 
             if self.config.keep_alive:
                 result.result = final_result
@@ -1830,6 +1841,14 @@ the same skill directory only when needed during execution.
                         task_id,
                         SubagentStatus.IDLE,
                         idle_since=result.idle_since,
+                    )
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {
+                            "event": "idle",
+                            "task_id": task_id,
+                            "thread_id": self.thread_id or "",
+                        },
                     )
                     from deerflow.subagents.lifecycle import lifecycle_manager
 

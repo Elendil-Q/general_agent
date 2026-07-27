@@ -7,11 +7,6 @@ from typing import Annotated
 from langchain.tools import InjectedToolCallId, tool
 from langgraph.config import get_stream_writer
 
-from deerflow.subagents.agent_registry import agent_registry
-from deerflow.subagents.event_bus import event_bus
-from deerflow.subagents.executor import SubagentStatus
-from deerflow.subagents.lifecycle import lifecycle_manager
-from deerflow.subagents.sse_bridge import sse_bridge
 from deerflow.tools.types import Runtime
 
 logger = logging.getLogger(__name__)
@@ -38,6 +33,11 @@ async def follow_up(
         A summary of the follow-up result: the subagent's response, or
         an error message if the subagent is not idle or has expired.
     """
+    from deerflow.subagents.agent_registry import agent_registry
+    from deerflow.subagents.executor import SubagentStatus
+    from deerflow.subagents.lifecycle import lifecycle_manager
+    from deerflow.subagents.sse_bridge import sse_bridge
+
     # Look up the agent in the registry
     ref = agent_registry.get(task_id)
     if ref is None or ref.status != SubagentStatus.IDLE:
@@ -50,13 +50,11 @@ async def follow_up(
     # Cancel the IDLE TTL — we're reviving this subagent
     lifecycle_manager.cancel_ttl(task_id)
 
-    # Emit the revived event so observers (SSE bridge, etc.) know
-    event_bus.emit(
-        "subagent:lifecycle",
-        {"event": "revived", "task_id": task_id},
-    )
-
-    # Register SSE writer so progress events reach the parent run
+    # Register SSE writer so progress events reach the parent run.
+    # The ``revived`` lifecycle event is emitted inside
+    # ``SubagentExecutor._acontinue`` (the canonical point, fires for
+    # both the tool and direct callers). Do not re-emit here; the writer
+    # registered below routes that event to this lead run's SSE stream.
     thread_id = runtime.context.get("thread_id") if runtime.context else None
     writer = get_stream_writer()
     if thread_id:

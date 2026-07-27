@@ -23,6 +23,7 @@ class FakeSubagentStatus(Enum):
     CANCELLED = "cancelled"
     TIMED_OUT = "timed_out"
     INTERRUPTED = "interrupted"
+    IDLE = "idle"
 
     @property
     def is_terminal(self) -> bool:
@@ -35,7 +36,10 @@ class FakeSubagentStatus(Enum):
 
     @property
     def is_stopped(self) -> bool:
-        return self.is_terminal or self is type(self).INTERRUPTED
+        return self.is_terminal or self in {
+            type(self).INTERRUPTED,
+            type(self).IDLE,
+        }
 
 
 def _make_runtime(*, app_config=None) -> SimpleNamespace:
@@ -257,7 +261,7 @@ def test_task_tool_emits_running_and_completed_events(monkeypatch):
     get_available_tools.assert_called_once_with(model_name="ark-model", groups=None, subagent_enabled=False)
 
     event_types = [e["type"] for e in events]
-    assert event_types == ["task_started", "task_running", "task_running", "task_completed"]
+    assert event_types == ["task_started", "task_progress", "task_progress", "task_completed"]
     assert events[-1]["result"] == "all done"
 
 
@@ -337,8 +341,8 @@ def test_task_tool_keeps_polling_through_interrupted_until_completed(monkeypatch
     assert ev["task_id"] == "tc-int"
     assert ev["subagent_thread_id"] == "subagent::thread-1::tc-int"
     assert ev["interrupts"] == [{"value": "Approve plan?", "id": "int-1"}]
-    # Event sequence: started, running(m1), interrupted, running(m2 after resume), completed.
-    assert [e["type"] for e in events] == ["task_started", "task_running", "task_interrupted", "task_running", "task_completed"]
+    # Event sequence: started, progress(m1), interrupted, progress(m2 after resume), completed.
+    assert [e["type"] for e in events] == ["task_started", "task_progress", "task_interrupted", "task_progress", "task_completed"]
     assert events[-1]["result"] == "plan approved and executed"
     # Cleaned up at completion (stayed resident while paused, now removed).
     assert cleanup_calls == ["tc-int"]

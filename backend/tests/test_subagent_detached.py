@@ -262,7 +262,7 @@ def test_blocking_mode_still_works(monkeypatch):
     assert "Task Succeeded" in result
 
 
-def test_wait_for_tasks_collects_detached_results(monkeypatch):
+def test_wait_for_tasks_collects_detached_results(monkeypatch, _setup_executor_classes):
     """``wait_for_tasks`` collects results of detached subagents as JSON."""
     import sys
     from datetime import datetime
@@ -325,7 +325,7 @@ def test_wait_for_tasks_collects_detached_results(monkeypatch):
     assert parsed[tid_2]["result"] == "result-tid-wait-2"
 
 
-def test_wait_for_tasks_times_out(monkeypatch):
+def test_wait_for_tasks_times_out(monkeypatch, _setup_executor_classes):
     """``wait_for_tasks`` returns partial results for timed-out subagents."""
     import sys
 

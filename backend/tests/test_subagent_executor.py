@@ -56,7 +56,7 @@ def _clear_stale_executor_package_attr() -> None:
         delattr(subagents_pkg, "executor")
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def _setup_executor_classes():
     """Set up mocked modules and import real executor classes.
 

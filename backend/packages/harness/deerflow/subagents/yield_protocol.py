@@ -75,8 +75,9 @@ def assembleYieldResult(yields: list[YieldEntry], output_schema: dict | None) ->
     if has_terminal:
         data = terminal
         # a non-empty terminal payload overrides incremental sections;
-        # an empty/None terminal falls back to the accumulated sections
-        if not data and accumulated:
+        # only None or an empty dict/list falls back to the accumulated sections
+        # (preserves falsy scalars like 0/False/"" as valid terminal payloads)
+        if (data is None or data == {} or data == []) and accumulated:
             data = dict(accumulated)
     else:
         data = dict(accumulated) if accumulated else None

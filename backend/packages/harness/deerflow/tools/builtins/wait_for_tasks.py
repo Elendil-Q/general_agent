@@ -10,9 +10,6 @@ from typing import Annotated
 from langchain.tools import InjectedToolCallId, tool
 from langgraph.config import get_stream_writer
 
-from deerflow.subagents.agent_registry import agent_registry
-from deerflow.subagents.sse_bridge import sse_bridge
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SECONDS = 5
@@ -34,6 +31,9 @@ async def wait_for_tasks(
     Args:
         task_ids: List of task IDs to wait for (returned by task(detached=True)).
     """
+    from deerflow.subagents.agent_registry import agent_registry
+    from deerflow.subagents.sse_bridge import sse_bridge
+
     thread_id = runtime.context.get("thread_id") if runtime.context else None
     writer = get_stream_writer()
     if thread_id:

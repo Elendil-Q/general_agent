@@ -268,6 +268,8 @@ async def task_tool(
         description: A short (3-5 word) description of the task for logging/display. ALWAYS PROVIDE THIS PARAMETER FIRST.
         prompt: The task description for the subagent. Be specific and clear about what needs to be done. ALWAYS PROVIDE THIS PARAMETER SECOND.
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
+        detached: If True, start the subagent in the background and return immediately
+            with a task ID. The result can be collected later with ``wait_for_tasks``.
     """
     runtime_app_config = _get_runtime_app_config(runtime)
     runtime_user_id = resolve_runtime_user_id(runtime)
@@ -523,6 +525,25 @@ async def task_tool(
                 )
                 logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
                 cleanup_background_task(task_id)
+                return f"Task Succeeded. Result: {result.result}"
+            elif result.status == SubagentStatus.IDLE:
+                # keep_alive=True: the subagent finished cleanly and parked
+                # as IDLE for a later ``follow_up``. Surface the result on
+                # turn 1 (mirrors the COMPLETED branch) but do NOT clean up
+                # - the lifecycle manager owns the IDLE entry's TTL.
+                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
+                _report_subagent_usage(runtime, result)
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "idle",
+                        "task_id": task_id,
+                        "thread_id": thread_id,
+                        "result": result.result,
+                        "usage": usage,
+                    },
+                )
+                logger.info(f"[trace={trace_id}] Task {task_id} parked as IDLE (keep_alive) after {poll_count} polls")
                 return f"Task Succeeded. Result: {result.result}"
             elif result.status == SubagentStatus.FAILED:
                 _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)

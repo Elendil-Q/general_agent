@@ -52,6 +52,7 @@ class BudgetMonitor:
                     "thread_id": self._thread_id,
                     "requests": requests,
                     "limit": soft,
+                    "message": f"Subagent request budget warning: {requests}/{soft} requests",
                 },
             )
         if hard is not None and requests >= hard:
@@ -63,6 +64,7 @@ class BudgetMonitor:
                     "thread_id": self._thread_id,
                     "requests": requests,
                     "limit": hard,
+                    "message": f"Subagent request budget exceeded: {requests}/{hard} requests",
                 },
             )
 

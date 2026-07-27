@@ -104,6 +104,25 @@ def test_keep_alive_transitions_to_idle(_setup_executor_classes):
         unsub()
 
 
+def test_keep_alive_idle_preserves_result(_setup_executor_classes):
+    """keep_alive=True + clean run -> the IDLE result carries the final
+    payload in ``result.result`` (not None). This is the turn-1 outcome the
+    lead's blocking ``task`` poll loop and ``wait_for_tasks`` both surface;
+    a null result here is the P1 data-loss regression."""
+    classes = _setup_executor_classes
+    SubagentStatus = classes["SubagentStatus"]
+
+    executor = _make_executor(classes, keep_alive=True)
+    fake_agent = _FakeStreamWithMessages(["the answer"])
+    executor._build_initial_state = _noop_build_initial_state.__get__(executor)
+    executor._create_agent = lambda *a, **kw: fake_agent  # type: ignore[assignment]
+
+    result = executor.execute("test task")
+
+    assert result.status is SubagentStatus.IDLE
+    assert result.result == "the answer", f"IDLE result.result must hold the final payload, got {result.result!r}"
+
+
 def test_keep_alive_false_transitions_to_completed(_setup_executor_classes):
     """keep_alive=False + clean run -> result.status is COMPLETED and a
     'completed' lifecycle event is emitted."""

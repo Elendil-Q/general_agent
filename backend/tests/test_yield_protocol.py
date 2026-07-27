@@ -71,3 +71,13 @@ def test_has_terminal_reflects_records():
     assert c.has_terminal() is False
     c.record({"done": True}, None)
     assert c.has_terminal() is True
+
+
+def test_falsy_scalar_terminal_preserved():
+    """Falsy scalars (0, False, '') must NOT be replaced by accumulated sections."""
+    for falsy_value in (0, False, ""):
+        c = YieldCollector(output_schema=None)
+        c.record({"item": "accumulated"}, ["section"])
+        c.record(falsy_value, None)  # terminal with a falsy scalar
+        assembled = assembleYieldResult(c.yields, None)
+        assert assembled["data"] == falsy_value, f"falsy scalar {falsy_value!r} was overwritten"
