@@ -61,6 +61,10 @@ class SubagentStatus(Enum):
     # Paused on ``interrupt()`` awaiting a ``Command(resume=...)``. Not terminal:
     # the task is still resumable and must not be cleaned up.
     INTERRUPTED = "interrupted"
+    # Completed but kept alive (``keep_alive=True``) for a later ``follow_up``.
+    # Not terminal: the session stays resident for revival; cleaned up only on
+    # TTL expiry or explicit dismiss.
+    IDLE = "idle"
 
     @property
     def is_terminal(self) -> bool:
@@ -73,13 +77,15 @@ class SubagentStatus(Enum):
 
     @property
     def is_stopped(self) -> bool:
-        """Terminal or paused — the poll loop should stop waiting on this status.
+        """Terminal or paused - the poll loop should stop waiting on this status.
 
-        ``INTERRUPTED`` is stopped-but-not-terminal: ``task_tool`` returns a
-        pause message to the lead agent, but the result/executor stay resident
-        for a later ``resume``.
+        ``INTERRUPTED`` and ``IDLE`` are stopped-but-not-terminal: the result/
+        executor stay resident for a later resume/follow_up.
         """
-        return self.is_terminal or self is type(self).INTERRUPTED
+        return self.is_terminal or self in {
+            type(self).INTERRUPTED,
+            type(self).IDLE,
+        }
 
 
 @dataclass
@@ -116,6 +122,7 @@ class SubagentResult:
     interrupts: list[dict[str, Any]] | None = None
     subagent_thread_id: str | None = None
     interrupted_at: datetime | None = None
+    idle_since: datetime | None = None
     _state_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self):
@@ -201,6 +208,20 @@ class SubagentResult:
             self.interrupts = None
             self.status = SubagentStatus.RUNNING
             self.cancel_event.clear()
+            return True
+
+    def try_set_idle(self, *, idle_since: "datetime | None" = None) -> bool:
+        """Transition a RUNNING/COMPLETED subagent to IDLE.
+
+        Used when ``keep_alive=True``: the subagent finished its run but stays
+        resident for a later ``follow_up``. Refused if already stopped (terminal
+        or INTERRUPTED/IDLE) - the first terminal or paused state wins.
+        """
+        with self._state_lock:
+            if self.status.is_stopped:
+                return False
+            self.idle_since = idle_since or datetime.now()
+            self.status = SubagentStatus.IDLE
             return True
 
 
