@@ -150,6 +150,35 @@ class TestTruncateTaskCalls:
         )
         assert mw._truncate_task_calls({"messages": [msg]}) is None
 
+    def test_detached_calls_counted_against_limit(self):
+        """Detached task calls share the `_scheduler_pool` with blocking calls, so both
+        must be truncated against MAX_CONCURRENT_SUBAGENTS. The matcher keys on tool
+        name only (`tc["name"] == "task"`); this test guards that detached args do
+        NOT somehow bypass the limit."""
+        mw = SubagentLimitMiddleware()  # defaults to MAX_CONCURRENT_SUBAGENTS == 3
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "task", "id": "block_1", "args": {"prompt": "blocking 1", "detached": False}},
+                {"name": "task", "id": "block_2", "args": {"prompt": "blocking 2", "detached": False}},
+                {"name": "task", "id": "detach_1", "args": {"prompt": "detached 1", "detached": True}},
+                {"name": "task", "id": "detach_2", "args": {"prompt": "detached 2", "detached": True}},
+            ],
+        )
+
+        result = mw._truncate_task_calls({"messages": [msg]})
+
+        assert result is not None
+        updated_msg = result["messages"][0]
+        task_calls = [tc for tc in updated_msg.tool_calls if tc["name"] == "task"]
+        # Total task calls (blocking + detached) must be truncated to MAX_CONCURRENT_SUBAGENTS (3).
+        assert len(task_calls) == MAX_CONCURRENT_SUBAGENTS
+        # First three ids are kept in order; the fourth is dropped.
+        assert [tc["id"] for tc in task_calls] == ["block_1", "block_2", "detach_1"]
+        # Both kept detached call retains its `detached=True` arg (the middleware must
+        # not strip or rewrite args).
+        assert task_calls[2]["args"] == {"prompt": "detached 1", "detached": True}
+
 
 class TestAfterModel:
     def test_delegates_to_truncate(self):
