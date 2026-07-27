@@ -1,5 +1,7 @@
 """Subagent execution engine."""
 
+from __future__ import annotations
+
 import asyncio
 import atexit
 import logging
@@ -30,14 +32,18 @@ from deerflow.runtime.serialization import serialize_lc_object
 from deerflow.skills.tool_policy import filter_tools_by_skill_allowed_tools
 from deerflow.skills.types import Skill
 from deerflow.subagents.config import SubagentConfig, resolve_subagent_model_name
+from deerflow.subagents.event_bus import event_bus
 from deerflow.subagents.token_collector import SubagentTokenCollector
 from deerflow.tracing import build_tracing_callbacks, inject_langfuse_metadata
 
 if TYPE_CHECKING:
-    # Imported lazily at runtime inside _build_initial_state: importing
-    # tool_search eagerly would run tools/builtins/__init__ -> task_tool ->
-    # `from deerflow.subagents import SubagentExecutor`, which re-enters this
-    # still-initializing package. Type-only here keeps the annotation precise.
+    # ``agent_registry`` is a process-level singleton that imports this
+    # module back (for ``SubagentExecutor`` typing). Importing it eagerly
+    # would re-enter this still-initializing module, so it is type-checked
+    # here and accessed via function-local ``from ... import`` at the two
+    # functions below).
+    from deerflow.subagents.agent_registry import agent_registry  # noqa: F401
+    from deerflow.subagents.yield_protocol import YieldCollector
     from deerflow.tools.builtins.tool_search import DeferredToolSetup
 
 logger = logging.getLogger(__name__)
@@ -210,7 +216,7 @@ class SubagentResult:
             self.cancel_event.clear()
             return True
 
-    def try_set_idle(self, *, idle_since: "datetime | None" = None) -> bool:
+    def try_set_idle(self, *, idle_since: datetime | None = None) -> bool:
         """Transition a RUNNING/COMPLETED subagent to IDLE.
 
         Used when ``keep_alive=True``: the subagent finished its run but stays
@@ -233,7 +239,7 @@ _background_tasks_lock = threading.Lock()
 # resumed later via ``resume_background_subagent``. Removed only when the task
 # reaches a truly terminal state (see ``cleanup_background_task``). Guarded by
 # ``_background_tasks_lock`` to stay in sync with the result registry.
-_subagent_executors: dict[str, "SubagentExecutor"] = {}
+_subagent_executors: dict[str, SubagentExecutor] = {}
 
 # Thread pool for background task scheduling and orchestration
 _scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-scheduler-")
@@ -510,7 +516,7 @@ class SubagentExecutor:
         self,
         tools: list[BaseTool] | None = None,
         *,
-        deferred_setup: "DeferredToolSetup | None" = None,
+        deferred_setup: DeferredToolSetup | None = None,
     ):
         """Create the agent instance.
 
@@ -743,7 +749,7 @@ the same skill directory only when needed during execution.
 {skill_items}
 </available_skills>"""
 
-    async def _build_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], "DeferredToolSetup | None"]:
+    async def _build_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], DeferredToolSetup | None]:
         """Build the initial state for agent execution.
 
         Args:
@@ -789,6 +795,20 @@ the same skill directory only when needed during execution.
         # surface a tool the policy denied. This matches the lead agent.
         enabled = (self.app_config or get_app_config()).tool_search.enabled
         final_tools, deferred_setup = assemble_deferred_tools(filtered_tools, enabled=enabled)
+        # Every subagent gets the ``yield`` tool so it can submit structured
+        # results. The collector is bound on the executor's ContextVar at the
+        # start of ``_aexecute``; the tool itself is a thin wrapper that
+        # delegates to that collector. Import is lazy to avoid the circular
+        # ``task_tool -> subagent_executor`` import on cold start.
+        try:
+            from deerflow.tools.builtins.yield_tool import yield_tool
+
+            final_tools.append(yield_tool)
+        except ImportError:
+            logger.debug(
+                "[trace=%s] yield_tool not importable; subagent runs without structured-yield capability",
+                self.trace_id,
+            )
         skill_messages = await self._load_skill_messages(default_skills)
         on_demand_section = self._render_on_demand_skills_section(on_demand_skills)
 
@@ -827,7 +847,7 @@ the same skill directory only when needed during execution.
 
         return state, final_tools, deferred_setup
 
-    async def _build_workflow_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], "DeferredToolSetup | None"]:
+    async def _build_workflow_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], DeferredToolSetup | None]:
         """Build a minimal initial state for a workflow subagent.
 
         Workflow subagents own their system prompt, skills, and tool-routing
@@ -959,6 +979,31 @@ the same skill directory only when needed during execution.
             # Use stream instead of invoke to get real-time updates
             # This allows us to collect AI messages as they are generated
             final_state = None
+            # Set up the yield collector so the ``yield`` tool can deposit
+            # terminal/incremental payloads into a context-local collector.
+            # ``assembleYieldResult`` (called from ``_extract_final_result``)
+            # folds these into the final result when the subagent finished
+            # cleanly. We bind it here rather than on every chunk so tool
+            # calls deep in the graph pick it up off the same ContextVar.
+            from deerflow.subagents.yield_protocol import (
+                YieldCollector,
+                _yield_collector_ctx,
+            )
+
+            collector_yield = YieldCollector(output_schema=self.config.output)
+            _yield_collector_ctx.set(collector_yield)
+
+            # Set up the request budget: soft (warning at max_requests) and
+            # hard (terminate at 1.5x). ``None`` disables both. Ticking
+            # happens once per LLM request (one tick per AI message) inside
+            # the astream loop.
+            from deerflow.subagents.budget import BudgetMonitor
+
+            budget = BudgetMonitor(
+                task_id=result.task_id or "",
+                thread_id=self.thread_id or "",
+                soft=self.config.max_requests,
+            )
             # Captured ``__interrupt__`` payload (if the subagent called
             # ``interrupt()``). With ``stream_mode="values"`` LangGraph yields a
             # final chunk carrying ``__interrupt__`` then ends the stream.
@@ -1020,6 +1065,41 @@ the same skill directory only when needed during execution.
                             if message_id:
                                 seen_message_ids.add(message_id)
                             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(ai_messages)}")
+                            # One tick per fresh LLM response. ``BudgetMonitor.tick``
+                            # emits the soft/hard ``subagent:budget`` events
+                            # itself; we only need to honor the hard-limit
+                            # termination by breaking the astream loop.
+                            budget.tick()
+                            if budget.at_hard_limit():
+                                result.try_set_terminal(
+                                    SubagentStatus.FAILED,
+                                    error="request budget exceeded",
+                                )
+                                # Surface a progress event so observers see the
+                                # terminal status at least once before the run
+                                # ends. Tokens/model are omitted; per-LLM usage
+                                # arrives via the token-collector.
+                                event_bus.emit(
+                                    "subagent:progress",
+                                    {
+                                        "task_id": result.task_id or "",
+                                        "thread_id": self.thread_id or "",
+                                        "status": result.status.value,
+                                    },
+                                )
+                                break
+                            # Per-message progress: the SSE bridge coalesces
+                            # these into ~10fps; a 150ms throttle is
+                            # unnecessary here because one tick == one LLM
+                            # response.
+                            event_bus.emit(
+                                "subagent:progress",
+                                {
+                                    "task_id": result.task_id or "",
+                                    "thread_id": self.thread_id or "",
+                                    "status": result.status.value,
+                                },
+                            )
 
             # Stream ended. Determine why: cancel takes precedence over an
             # interrupt (an explicit user stop wins over a pause), then an
@@ -1044,14 +1124,51 @@ the same skill directory only when needed during execution.
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed async execution")
             token_usage_records = collector.snapshot_records()
-            final_result = self._extract_final_result(final_state)
+            final_result = self._extract_final_result(final_state, collector=collector_yield)
 
-            result.try_set_terminal(
-                SubagentStatus.COMPLETED,
-                result=final_result,
-                token_usage_records=token_usage_records,
-            )
+            # ``keep_alive`` is the post-completion affordance: instead of
+            # leaving the subagent as COMPLETED (which the cleanup path
+            # would unregister), park it as IDLE so a later ``follow_up`` can
+            # resume against the same checkpointer. The lifecycle manager
+            # owns the TTL; the registry mirror keeps observers in sync.
+            if self.config.keep_alive:
+                if result.try_set_idle():
+                    # Lazy import: ``agent_registry`` re-imports this module
+                    # for ``SubagentExecutor`` typing, so an eager top-level
+                    # import would deadlock module initialization.
+                    from deerflow.subagents.agent_registry import agent_registry
 
+                    agent_registry.update_status(
+                        result.task_id or "",
+                        SubagentStatus.IDLE,
+                        idle_since=result.idle_since,
+                    )
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {
+                            "event": "idle",
+                            "task_id": result.task_id or "",
+                            "thread_id": self.thread_id or "",
+                        },
+                    )
+                    from deerflow.subagents.lifecycle import lifecycle_manager
+
+                    lifecycle_manager.adopt(result.task_id or "")
+            else:
+                result.try_set_terminal(
+                    SubagentStatus.COMPLETED,
+                    result=final_result,
+                    token_usage_records=token_usage_records,
+                )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "completed",
+                        "task_id": result.task_id or "",
+                        "thread_id": self.thread_id or "",
+                        "result": result.result,
+                    },
+                )
         except Exception as e:
             logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
             result.try_set_terminal(
@@ -1199,6 +1316,20 @@ the same skill directory only when needed during execution.
                 _background_tasks[task_id].status = SubagentStatus.RUNNING
                 _background_tasks[task_id].started_at = datetime.now()
                 result_holder = _background_tasks[task_id]
+            # Propagate the RUNNING transition to the registry and announce it
+            # on the EventBus so the SSE bridge / observers can react in
+            # real time. The dict write above remains for backward
+            # compatibility with legacy callers (resume_async, etc.).
+            # Lazy import: ``agent_registry`` imports this module for
+            # ``SubagentExecutor`` typing, so an eager top-level import
+            # would re-enter this still-initializing module.
+            from deerflow.subagents.agent_registry import agent_registry
+
+            agent_registry.update_status(task_id, SubagentStatus.RUNNING)
+            event_bus.emit(
+                "subagent:lifecycle",
+                {"event": "started", "task_id": task_id, "thread_id": self.thread_id or ""},
+            )
 
             try:
                 # Submit execution directly to the persistent isolated loop so the
@@ -1371,11 +1502,28 @@ the same skill directory only when needed during execution.
 
         return result
 
-    def _extract_final_result(self, final_state: Any) -> str:
+    def _extract_final_result(self, final_state: Any, collector: YieldCollector | None = None) -> str:
         """Extract the final result string from the subagent's final state.
 
         Pulled out of ``_aexecute`` so the resume path reuses the same logic.
+
+        When a ``YieldCollector`` is supplied and the subagent submitted a
+        terminal ``yield()`` (no incremental type, or a string type), the
+        assembled payload wins over the last-AIMessage fallback. Assembled
+        data is returned as a string (raw text) when possible and JSON-encoded
+        otherwise - the SubagentResult field is a string and we keep that
+        contract for callers that render the result directly.
         """
+        if collector is not None and collector.has_terminal():
+            from deerflow.subagents.yield_protocol import assembleYieldResult
+
+            assembled = assembleYieldResult(collector.yields, self.config.output)
+            data = assembled["data"]
+            if isinstance(data, str):
+                return data
+            import json
+
+            return json.dumps(data, ensure_ascii=False)
         if final_state is None:
             logger.warning(f"[trace={self.trace_id}] Subagent {self.config.name} no final state")
             return "No response generated"

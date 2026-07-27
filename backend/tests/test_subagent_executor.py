@@ -994,7 +994,7 @@ class TestSkillAllowedTools:
             await executor._aexecute("Task")
 
         create_agent_mock.assert_called_once()
-        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash", "read_file"]
+        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash", "read_file", "yield"]
         assert [tool.name for tool in executor.tools] == ["bash", "read_file", "web_search"]
 
     @pytest.mark.anyio
@@ -1012,7 +1012,7 @@ class TestSkillAllowedTools:
         with patch.object(executor, "_load_skills", load_skills), patch.object(executor, "_create_agent", return_value=mock_agent) as create_agent_mock:
             await executor._aexecute("Task")
 
-        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash", "read_file", "web_search"]
+        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash", "read_file", "web_search", "yield"]
         assert [tool.name for tool in executor.tools] == ["bash", "read_file", "web_search"]
 
     @pytest.mark.anyio
@@ -1030,7 +1030,7 @@ class TestSkillAllowedTools:
         with patch.object(executor, "_load_skills", load_skills), patch.object(executor, "_create_agent", return_value=mock_agent) as create_agent_mock:
             await executor._aexecute("Task")
 
-        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash"]
+        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash", "yield"]
         assert [tool.name for tool in executor.tools] == ["bash", "read_file", "web_search"]
 
     @pytest.mark.anyio
@@ -1048,7 +1048,7 @@ class TestSkillAllowedTools:
         with patch.object(executor, "_load_skills", load_skills), patch.object(executor, "_create_agent", return_value=mock_agent) as create_agent_mock:
             await executor._aexecute("Task")
 
-        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash"]
+        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["bash", "yield"]
         assert [tool.name for tool in executor.tools] == ["bash", "read_file", "web_search"]
 
     @pytest.mark.anyio
@@ -1066,7 +1066,7 @@ class TestSkillAllowedTools:
         with patch.object(executor, "_load_skills", load_skills), patch.object(executor, "_create_agent", return_value=mock_agent) as create_agent_mock, caplog.at_level("INFO"):
             await executor._aexecute("Task")
 
-        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["read_file"]
+        assert [tool.name for tool in create_agent_mock.call_args.args[0]] == ["read_file", "yield"]
         assert [tool.name for tool in executor.tools] == ["bash", "read_file", "web_search"]
         assert "declared empty allowed-tools" in caplog.text
 
@@ -1281,7 +1281,7 @@ class TestBuildInitialStateOnDemandSplit:
         state, final_tools, _deferred_setup = await executor._build_initial_state("Task")
 
         # Only the on-demand skill's allowed tool survives policy filtering.
-        assert [t.name for t in final_tools] == ["bash"]
+        assert [t.name for t in final_tools] == ["bash", "yield"]
 
 
 # -----------------------------------------------------------------------------
