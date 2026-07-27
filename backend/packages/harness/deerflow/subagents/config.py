@@ -59,6 +59,21 @@ class SubagentConfig:
     max_turns: int = 50
     timeout_seconds: int = 900
     workflow: str | None = None
+    keep_alive: bool = False
+    """When True, a COMPLETED subagent transitions to IDLE instead of being
+    cleaned up, so a later ``follow_up(task_id, prompt)`` can revive it with
+    full context (same subagent_thread_id + checkpointer). In-memory only:
+    a gateway restart loses all IDLE subagents."""
+    max_requests: "int | None" = None
+    """Soft LLM-request budget. When reached, a wrap-up SystemMessage is
+    injected next round; at 1.5x the subagent is force-terminated. ``None``
+    disables the budget path (today's behavior). Coexists with ``max_turns``;
+    whichever triggers first wins."""
+    output: "dict | None" = None
+    """Optional JSON Schema constraining the terminal ``yield`` payload. When
+    set, the yield tool's terminal payload is validated; on mismatch the
+    payload is kept but flagged ``schemaValid: False`` (graceful degradation).
+    Also enables ``YieldReminderMiddleware`` for that subagent."""
 
 
 def _default_model_name(app_config: "AppConfig") -> str:
