@@ -10,7 +10,7 @@ Covers:
 
 import asyncio
 import importlib
-from datetime import UTC
+from datetime import UTC, datetime
 from enum import Enum
 from types import SimpleNamespace
 
@@ -80,6 +80,18 @@ def _make_subagent_config(name="general-purpose"):
         system_prompt="You are a test subagent.",
         max_turns=10,
         timeout_seconds=60,
+    )
+
+
+def _make_subagent_config_with_timeout(timeout_seconds: int):
+    from deerflow.subagents.config import SubagentConfig
+
+    return SubagentConfig(
+        name="general-purpose",
+        description="Test subagent",
+        system_prompt="You are a test subagent.",
+        max_turns=10,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -316,7 +328,6 @@ def test_wait_for_tasks_collects_detached_results(monkeypatch):
 def test_wait_for_tasks_times_out(monkeypatch):
     """``wait_for_tasks`` returns partial results for timed-out subagents."""
     import sys
-    from datetime import datetime
 
     from deerflow.subagents.agent_registry import AgentRef
     from deerflow.subagents.executor import SubagentResult, SubagentStatus
@@ -326,13 +337,10 @@ def test_wait_for_tasks_times_out(monkeypatch):
 
     # Mock get_stream_writer to return a no-op writer
     monkeypatch.setattr(_module, "get_stream_writer", lambda: lambda event: None)
-    # Make polling fast — 10ms instead of 5s — and timeout after 2 polls
+    # Make polling fast: 10ms polls, 0s timeout = 1 poll before timeout
     monkeypatch.setattr(_module, "DEFAULT_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(
-        _module,
-        "DEFAULT_TIMEOUT_SECONDS",
-        0.02,  # 2 polls before timeout
-    )
+    monkeypatch.setattr(_module, "DEFAULT_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(_module, "_TIMEOUT_BUFFER_SECONDS", 0)
 
     # One completed, one still RUNNING (never finishes)
     tid_done = "tid-wait-done"
@@ -344,7 +352,7 @@ def test_wait_for_tasks_times_out(monkeypatch):
         trace_id="trace-done",
         subagent_type="general-purpose",
         status=SubagentStatus.COMPLETED,
-        config=_make_subagent_config(),
+        config=_make_subagent_config_with_timeout(0),
         executor=None,
         result=SubagentResult(
             task_id=tid_done,
@@ -364,9 +372,9 @@ def test_wait_for_tasks_times_out(monkeypatch):
         trace_id="trace-pending",
         subagent_type="general-purpose",
         status=SubagentStatus.RUNNING,
-        config=_make_subagent_config(),
-        executor=None,
+        config=_make_subagent_config_with_timeout(0),
         result=None,
+        executor=None,
         description="pending work",
         created_at=datetime.now(UTC),
     )

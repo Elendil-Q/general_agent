@@ -16,7 +16,8 @@ from deerflow.subagents.sse_bridge import sse_bridge
 logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_SECONDS = 5
-DEFAULT_TIMEOUT_SECONDS = 300  # 5 minutes
+DEFAULT_TIMEOUT_SECONDS = 300  # fallback when no config available
+_TIMEOUT_BUFFER_SECONDS = 60
 
 
 @tool("wait_for_tasks", parse_docstring=True)
@@ -42,7 +43,14 @@ async def wait_for_tasks(
         results: dict[str, dict] = {}
         pending = set(task_ids)
         poll_count = 0
-        max_polls = max(DEFAULT_TIMEOUT_SECONDS // DEFAULT_POLL_SECONDS, 1)
+        # Dynamic timeout: max(timeout_seconds of awaited) + buffer
+        max_timeout = DEFAULT_TIMEOUT_SECONDS
+        for tid in task_ids:
+            ref = agent_registry.get(tid)
+            if ref is not None:
+                max_timeout = max(max_timeout, ref.config.timeout_seconds)
+        effective_timeout = max_timeout + _TIMEOUT_BUFFER_SECONDS
+        max_polls = max(effective_timeout // DEFAULT_POLL_SECONDS, 1)
 
         while pending and poll_count < max_polls:
             done: set[str] = set()
