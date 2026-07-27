@@ -57,6 +57,10 @@ class AgentRegistry:
         with self._lock:
             return [r for r in self._refs.values() if r.status is SubagentStatus.IDLE and (thread_id is None or r.thread_id == thread_id)]
 
+    def list_all(self) -> list[AgentRef]:
+        with self._lock:
+            return list(self._refs.values())
+
     def update_status(self, task_id: str, status: SubagentStatus, **fields) -> AgentRef | None:
         with self._lock:
             ref = self._refs.get(task_id)
