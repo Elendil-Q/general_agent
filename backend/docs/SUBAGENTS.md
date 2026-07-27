@@ -129,7 +129,7 @@ async def task_tool(
 tools = get_available_tools(
     model_name=effective_model,
     groups=parent_tool_groups,  # 继承父 agent 的工具组限制
-    subagent_enabled=False,      # 关键：禁止递归嵌套
+    subagent_enabled=False,  # 关键：禁止递归嵌套
     app_config=resolved_app_config,
 )
 ```
@@ -276,7 +276,7 @@ seen_message_ids: set[str] = {mid for msg in ai_messages if (mid := msg.get("id"
 async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):
     if result.cancel_event.is_set():  # 协作取消
         ...
-    if chunk.get("__interrupt__"):    # 中断检测
+    if chunk.get("__interrupt__"):  # 中断检测
         interrupts = chunk["__interrupt__"]
     last_msg = chunk["messages"][-1]
     if isinstance(last_msg, AIMessage):
@@ -301,14 +301,14 @@ async for chunk in agent.astream(state, config=run_config, context=context, stre
 ### SubagentStatus 枚举
 
 ```python
-class SubagentStatus(Enum):           # executor.py:52
-    PENDING       = "pending"         # 初始（execute_async 刚创建 result）
-    RUNNING       = "running"         # 执行中（astream 循环活跃）
-    COMPLETED     = "completed"       # 成功结束（AIMessage 结果已提取）
-    FAILED        = "failed"          # 异常退出（Exception caught）
-    CANCELLED     = "cancelled"       # 用户取消（cancel_event 触发）
-    TIMED_OUT     = "timed_out"       # 超时（Future.result(timeout=...) 触发）
-    INTERRUPTED   = "interrupted"     # 中断暂停（等待 Command(resume=...)）
+class SubagentStatus(Enum):  # executor.py:52
+    PENDING = "pending"  # 初始（execute_async 刚创建 result）
+    RUNNING = "running"  # 执行中（astream 循环活跃）
+    COMPLETED = "completed"  # 成功结束（AIMessage 结果已提取）
+    FAILED = "failed"  # 异常退出（Exception caught）
+    CANCELLED = "cancelled"  # 用户取消（cancel_event 触发）
+    TIMED_OUT = "timed_out"  # 超时（Future.result(timeout=...) 触发）
+    INTERRUPTED = "interrupted"  # 中断暂停（等待 Command(resume=...)）
 ```
 
 状态属性：
@@ -317,6 +317,7 @@ class SubagentStatus(Enum):           # executor.py:52
 @property
 def is_terminal(self) -> bool:
     return self in {COMPLETED, FAILED, CANCELLED, TIMED_OUT}
+
 
 @property
 def is_stopped(self) -> bool:
@@ -564,10 +565,10 @@ if last_status is SubagentStatus.INTERRUPTED:
 
 **取消优先**（`executor.py:1000-1007`）：
 ```python
-if result.cancel_event.is_set():      # 先检查 cancel
+if result.cancel_event.is_set():  # 先检查 cancel
     result.try_set_terminal(CANCELLED)
     return result
-if interrupts:                        # 再检查 interrupt
+if interrupts:  # 再检查 interrupt
     result.try_set_interrupted(...)
     return result
 ```
@@ -685,7 +686,7 @@ def _truncate_task_calls(self, state):
     if len(task_indices) <= self.max_concurrent:
         return None  # 无需截断
     # 保留前 max_concurrent 个 task 调用，丢弃剩余
-    indices_to_drop = set(task_indices[self.max_concurrent:])
+    indices_to_drop = set(task_indices[self.max_concurrent :])
     truncated = [tc for i, tc in enumerate(tool_calls) if i not in indices_to_drop]
     return {"messages": [clone_ai_message_with_tool_calls(last_msg, truncated)]}
 ```
