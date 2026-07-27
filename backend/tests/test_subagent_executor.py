@@ -322,6 +322,7 @@ class TestAgentConstruction:
             "model_name": "parent-model",
             "lazy_init": True,
             "deferred_setup": None,
+            "config": base_config,
         }
         assert captured["agent"]["model"] is model
         assert captured["agent"]["middleware"] is middlewares

@@ -244,6 +244,42 @@ def test_build_subagent_runtime_middlewares_appends_clarification_last():
     assert clarification_indices[0] == len(middlewares) - 1, f"ClarificationMiddleware must be last in the subagent chain (got idx {clarification_indices[0]} of {len(middlewares) - 1}); full chain: {[type(m).__name__ for m in middlewares]}"
 
 
+def test_yield_reminder_appended_before_clarification_when_output_set():
+    """When a subagent declares a structured ``output`` schema,
+    YieldReminderMiddleware is appended before ClarificationMiddleware so the
+    clarification wrapper stays last in the subagent chain (mirrors the lead
+    agent's tail ordering). Without ``output`` the middleware is absent: it is
+    opt-in via the schema (see SubagentConfig.output)."""
+    from deerflow.agents.middlewares.clarification_middleware import ClarificationMiddleware
+    from deerflow.agents.middlewares.yield_reminder_middleware import YieldReminderMiddleware
+    from deerflow.subagents.config import SubagentConfig
+
+    app_config = _make_app_config()
+    config = SubagentConfig(name="struct", description="structured output subagent", output={"type": "object", "properties": {}})
+    middlewares = build_subagent_runtime_middlewares(app_config=app_config, config=config)
+
+    yield_indices = [i for i, m in enumerate(middlewares) if isinstance(m, YieldReminderMiddleware)]
+    clarification_indices = [i for i, m in enumerate(middlewares) if isinstance(m, ClarificationMiddleware)]
+
+    assert yield_indices, "YieldReminderMiddleware missing despite config.output being set"
+    assert len(yield_indices) == 1, f"expected exactly one YieldReminderMiddleware, got {yield_indices}"
+    assert clarification_indices, "ClarificationMiddleware missing from subagent chain"
+    assert yield_indices[0] < clarification_indices[0], f"YieldReminderMiddleware (idx {yield_indices[0]}) must come before ClarificationMiddleware (idx {clarification_indices[0]}); full chain: {[type(m).__name__ for m in middlewares]}"
+    assert clarification_indices[0] == len(middlewares) - 1, f"ClarificationMiddleware must be last in the subagent chain (got idx {clarification_indices[0]} of {len(middlewares) - 1}); full chain: {[type(m).__name__ for m in middlewares]}"
+
+
+def test_yield_reminder_absent_when_no_output_schema():
+    """Without a structured ``output`` schema, YieldReminderMiddleware is not
+    attached - the guard is opt-in via SubagentConfig.output."""
+    from deerflow.agents.middlewares.yield_reminder_middleware import YieldReminderMiddleware
+
+    app_config = _make_app_config()
+    middlewares = build_subagent_runtime_middlewares(app_config=app_config)
+
+    yield_indices = [i for i, m in enumerate(middlewares) if isinstance(m, YieldReminderMiddleware)]
+    assert not yield_indices, f"YieldReminderMiddleware should be absent without config.output; full chain: {[type(m).__name__ for m in middlewares]}"
+
+
 def test_wrap_tool_call_passthrough_on_success():
     middleware = ToolErrorHandlingMiddleware()
     req = _request()

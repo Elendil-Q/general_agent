@@ -18,6 +18,7 @@ from deerflow.subagents.status_contract import (
 )
 
 if TYPE_CHECKING:
+    from deerflow.subagents.config import SubagentConfig
     from deerflow.tools.builtins.tool_search import DeferredToolSetup
 
 logger = logging.getLogger(__name__)
@@ -213,6 +214,7 @@ def build_subagent_runtime_middlewares(
     model_name: str | None = None,
     lazy_init: bool = True,
     deferred_setup: "DeferredToolSetup | None" = None,
+    config: "SubagentConfig | None" = None,
 ) -> list[AgentMiddleware]:
     """Middlewares shared by subagent runtime before subagent-only middlewares."""
     if app_config is None:
@@ -255,6 +257,16 @@ def build_subagent_runtime_middlewares(
         from deerflow.agents.middlewares.safety_finish_reason_middleware import SafetyFinishReasonMiddleware
 
         middlewares.append(SafetyFinishReasonMiddleware.from_config(safety_config))
+
+    # When the subagent declares a structured ``output`` schema, attach the
+    # yield-reminder guard so the model is nudged (and on the 3rd miss forced)
+    # to call ``yield`` rather than ending its turn empty-handed. Placed before
+    # ClarificationMiddleware so the clarification wrapper stays last in the
+    # chain (mirrors the lead agent's tail ordering).
+    if config is not None and config.output is not None:
+        from deerflow.agents.middlewares.yield_reminder_middleware import YieldReminderMiddleware
+
+        middlewares.append(YieldReminderMiddleware())
 
     # ClarificationMiddleware must be last (mirrors the lead agent's chain in
     # ``lead_agent/agent.py``). With ``ask_clarification`` now permitted on

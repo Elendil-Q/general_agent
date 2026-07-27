@@ -65,6 +65,7 @@ def build_subagent_agent(
         model_name=model_name,
         lazy_init=True,
         deferred_setup=deferred_setup,
+        config=config,
     )
     # system_prompt is injected via initial-state messages by callers, to
     # avoid multiple SystemMessages which some LLM APIs don't support.
