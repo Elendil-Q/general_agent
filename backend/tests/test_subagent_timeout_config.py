@@ -12,6 +12,7 @@ Covers:
 import pytest
 
 from deerflow.config.subagents_config import (
+    CustomSubagentConfig,
     SubagentOverrideConfig,
     SubagentsAppConfig,
     get_subagents_app_config,
@@ -597,3 +598,265 @@ class TestPollingTimeoutCalculation:
             max_poll_count = (dummy_config.timeout_seconds + 60) // 5
             polling_window_seconds = max_poll_count * 5
             assert polling_window_seconds > timeout_seconds
+
+
+# ---------------------------------------------------------------------------
+# keep_alive configuration
+# ---------------------------------------------------------------------------
+
+
+class TestKeepAliveModelFields:
+    """Pydantic model-level tests for keep_alive on override and custom configs."""
+
+    def test_override_default_is_none(self):
+        override = SubagentOverrideConfig()
+        assert override.keep_alive is None
+
+    def test_override_accepts_true(self):
+        override = SubagentOverrideConfig(keep_alive=True)
+        assert override.keep_alive is True
+
+    def test_override_accepts_false(self):
+        override = SubagentOverrideConfig(keep_alive=False)
+        assert override.keep_alive is False
+
+    def test_override_rejects_non_bool(self):
+        with pytest.raises(ValueError):
+            SubagentOverrideConfig(keep_alive=[1])
+
+    def test_custom_default_is_false(self):
+        custom = CustomSubagentConfig(description="test")
+        assert custom.keep_alive is False
+
+    def test_custom_accepts_true(self):
+        custom = CustomSubagentConfig(description="test", keep_alive=True)
+        assert custom.keep_alive is True
+
+    def test_custom_rejects_non_bool(self):
+        with pytest.raises(ValueError):
+            CustomSubagentConfig(description="test", keep_alive=[1])
+
+
+class TestGetKeepAliveFor:
+    """SubagentsAppConfig.get_keep_alive_for() resolution helper."""
+
+    def test_returns_none_when_no_override(self):
+        config = SubagentsAppConfig(timeout_seconds=900)
+        assert config.get_keep_alive_for("general-purpose") is None
+        assert config.get_keep_alive_for("bash") is None
+        assert config.get_keep_alive_for("unknown-agent") is None
+
+    def test_returns_override_when_set(self):
+        config = SubagentsAppConfig(
+            timeout_seconds=900,
+            agents={
+                "general-purpose": SubagentOverrideConfig(keep_alive=True),
+                "bash": SubagentOverrideConfig(keep_alive=False),
+            },
+        )
+        assert config.get_keep_alive_for("general-purpose") is True
+        assert config.get_keep_alive_for("bash") is False
+
+    def test_explicit_none_treated_as_no_override(self):
+        config = SubagentsAppConfig(
+            timeout_seconds=900,
+            agents={"bash": SubagentOverrideConfig(keep_alive=None, timeout_seconds=300)},
+        )
+        assert config.get_keep_alive_for("bash") is None
+        # Other override fields still work.
+        assert config.get_timeout_for("bash") == 300
+
+    def test_unlisted_agent_returns_none(self):
+        config = SubagentsAppConfig(
+            timeout_seconds=900,
+            agents={"bash": SubagentOverrideConfig(keep_alive=True)},
+        )
+        assert config.get_keep_alive_for("general-purpose") is None
+
+
+class TestKeepAliveRegistryOverrides:
+    """registry.get_subagent_config() applies keep_alive overrides."""
+
+    def teardown_method(self):
+        _reset_subagents_config()
+
+    def test_builtin_default_keep_alive_is_false(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        _reset_subagents_config(timeout_seconds=900)
+        config = get_subagent_config("general-purpose")
+        assert config.keep_alive is False
+
+    def test_keep_alive_override_applied_to_builtin(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {"general-purpose": {"keep_alive": True}},
+            }
+        )
+        config = get_subagent_config("general-purpose")
+        assert config.keep_alive is True
+
+    def test_keep_alive_override_does_not_mutate_builtin(self):
+        from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
+        from deerflow.subagents.registry import get_subagent_config
+
+        original_keep_alive = BUILTIN_SUBAGENTS["general-purpose"].keep_alive
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {"general-purpose": {"keep_alive": True}},
+            }
+        )
+        _ = get_subagent_config("general-purpose")
+        assert BUILTIN_SUBAGENTS["general-purpose"].keep_alive == original_keep_alive
+
+    def test_keep_alive_override_preserves_other_fields(self):
+        from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
+        from deerflow.subagents.registry import get_subagent_config
+
+        original = BUILTIN_SUBAGENTS["general-purpose"]
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {"general-purpose": {"keep_alive": True}},
+            }
+        )
+        overridden = get_subagent_config("general-purpose")
+        assert overridden.keep_alive is True
+        assert overridden.name == original.name
+        assert overridden.description == original.description
+        assert overridden.model == original.model
+        assert overridden.tools == original.tools
+        assert overridden.max_turns == original.max_turns
+
+    def test_keep_alive_override_applied_to_bash(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {"bash": {"keep_alive": True}},
+            }
+        )
+        config = get_subagent_config("bash")
+        assert config.keep_alive is True
+
+    def test_keep_alive_not_set_keeps_default_for_other_agent(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {"bash": {"keep_alive": True}},
+            }
+        )
+        gp_config = get_subagent_config("general-purpose")
+        assert gp_config.keep_alive is False
+
+    def test_keep_alive_false_override_on_builtin_is_noop(self):
+        """Setting keep_alive: false on an agent whose default is already false is a no-op."""
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {"general-purpose": {"keep_alive": False}},
+            }
+        )
+        config = get_subagent_config("general-purpose")
+        assert config.keep_alive is False
+
+    def test_keep_alive_for_custom_agent_from_config_yaml(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "custom_agents": {
+                    "my-analyst": {
+                        "description": "Data analyst",
+                        "system_prompt": "You analyze data.",
+                        "keep_alive": True,
+                    },
+                },
+            }
+        )
+        config = get_subagent_config("my-analyst")
+        assert config is not None
+        assert config.keep_alive is True
+
+    def test_keep_alive_default_for_custom_agent_from_config_yaml(self):
+        from deerflow.subagents.registry import get_subagent_config
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "custom_agents": {
+                    "my-analyst": {
+                        "description": "Data analyst",
+                        "system_prompt": "You analyze data.",
+                    },
+                },
+            }
+        )
+        config = get_subagent_config("my-analyst")
+        assert config is not None
+        assert config.keep_alive is False
+
+    def test_keep_alive_override_via_agents_section_for_custom(self, monkeypatch):
+        """A custom agent defined via config.yaml custom_agents can have its keep_alive
+        overridden via the agents section (field-level merge)."""
+        from types import SimpleNamespace
+
+        from deerflow.subagents import registry as registry_module
+        from deerflow.subagents.registry import get_subagent_config
+
+        monkeypatch.setattr(
+            registry_module,
+            "get_or_new_subagent_storage",
+            lambda *a, **kw: SimpleNamespace(list_names=lambda: [], load_subagent=lambda name: None),
+        )
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "custom_agents": {
+                    "my-analyst": {
+                        "description": "Data analyst",
+                        "system_prompt": "You analyze data.",
+                        "keep_alive": False,
+                    },
+                },
+                "agents": {
+                    "my-analyst": {"keep_alive": True},
+                },
+            }
+        )
+        config = get_subagent_config("my-analyst")
+        assert config is not None
+        assert config.keep_alive is True
+
+    def test_keep_alive_override_appears_in_list_subagents(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from deerflow.subagents import registry as registry_module
+        from deerflow.subagents.registry import list_subagents
+
+        monkeypatch.setattr(
+            registry_module,
+            "get_or_new_subagent_storage",
+            lambda *a, **kw: SimpleNamespace(list_names=lambda: [], load_subagent=lambda name: None),
+        )
+
+        load_subagents_config_from_dict(
+            {
+                "timeout_seconds": 900,
+                "agents": {"general-purpose": {"keep_alive": True}},
+            }
+        )
+        by_name = {cfg.name: cfg for cfg in list_subagents()}
+        assert by_name["general-purpose"].keep_alive is True
+        assert by_name["bash"].keep_alive is False

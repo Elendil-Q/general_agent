@@ -80,7 +80,7 @@ describe("handleCustomEvent", () => {
   });
 
   describe("task_expired", () => {
-    it("sets subtask status to expired", () => {
+    it("sets subtask status to completed with ttlExpired flag", () => {
       const ctx = makeCtx();
       const result = handleCustomEvent(
         { type: "task_expired", task_id: "task-3" },
@@ -88,7 +88,7 @@ describe("handleCustomEvent", () => {
       );
       expect(result).toBe(true);
       expect(ctx.updateSubtaskCalls).toEqual([
-        { id: "task-3", status: "expired" },
+        { id: "task-3", status: "completed", ttlExpired: true },
       ]);
     });
   });

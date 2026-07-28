@@ -52,9 +52,13 @@ class SubagentLifecycleManager:
     def _expire(self, task_id: str) -> None:
         with self._lock:
             self._timers.pop(task_id, None)
+        from deerflow.subagents.agent_registry import agent_registry
+
+        ref = agent_registry.get(task_id)
+        thread_id = ref.thread_id if ref is not None else ""
         event_bus.emit(
             "subagent:lifecycle",
-            {"event": "expired", "task_id": task_id},
+            {"event": "expired", "task_id": task_id, "thread_id": thread_id},
         )
         self._do_cleanup(task_id)
 
@@ -68,6 +72,7 @@ class SubagentLifecycleManager:
         from deerflow.subagents.executor import SubagentStatus, cleanup_background_task
 
         ref = agent_registry.update_status(task_id, SubagentStatus.COMPLETED)
+        thread_id = ref.thread_id if ref is not None else ""
         # cleanup_background_task only removes entries whose *result* is in a
         # terminal state; update_status mutates the AgentRef.status but not the
         # nested SubagentResult.status, so transition the result too. This is
@@ -75,6 +80,15 @@ class SubagentLifecycleManager:
         if ref is not None and ref.result is not None and not ref.result.status.is_terminal:
             ref.result.try_set_terminal(SubagentStatus.COMPLETED)
         cleanup_background_task(task_id)
+
+        # Release the SSE writer now that this subagent is COMPLETED. The
+        # writer was kept alive (see sse_bridge.unregister_writer) so the
+        # expired event could reach the frontend. If no other IDLE subagents
+        # remain for this thread, the writer is finally released.
+        if thread_id:
+            from deerflow.subagents.sse_bridge import sse_bridge
+
+            sse_bridge.unregister_writer(thread_id)
 
 
 # Process-level singleton.

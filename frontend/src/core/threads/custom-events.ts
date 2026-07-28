@@ -56,7 +56,7 @@ export function handleCustomEvent(
     typeof (event as { task_id: unknown }).task_id === "string"
   ) {
     const e = event as { type: "task_expired"; task_id: string };
-    ctx.updateSubtask({ id: e.task_id, status: "expired" });
+    ctx.updateSubtask({ id: e.task_id, status: "completed", ttlExpired: true });
     return true;
   }
 

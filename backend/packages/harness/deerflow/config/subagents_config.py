@@ -37,6 +37,10 @@ class SubagentOverrideConfig(BaseModel):
         default=None,
         description="Skill names to expose as on-demand for this subagent (catalog only; the subagent reads SKILL.md via read_file when needed). None = no on-demand skills, [] = no on-demand skills.",
     )
+    keep_alive: bool | None = Field(
+        default=None,
+        description="When True, a completed subagent transitions to IDLE instead of COMPLETED, so a later follow_up(task_id, prompt) can revive it. None = keep the agent's own value.",
+    )
 
 
 class CustomSubagentConfig(BaseModel):
@@ -82,6 +86,10 @@ class CustomSubagentConfig(BaseModel):
         default=900,
         ge=1,
         description="Maximum execution time in seconds",
+    )
+    keep_alive: bool = Field(
+        default=False,
+        description="When True, a COMPLETED subagent transitions to IDLE instead of being cleaned up, so a later follow_up(task_id, prompt) can revive it with full context.",
     )
     workflow: str | None = Field(
         default=None,
@@ -192,6 +200,20 @@ class SubagentsAppConfig(BaseModel):
             return override.skills_on_demand
         return None
 
+    def get_keep_alive_for(self, agent_name: str) -> bool | None:
+        """Get the keep_alive override for a specific agent.
+
+        Args:
+            agent_name: The name of the subagent.
+
+        Returns:
+            True/False if overridden, None otherwise (subagent will use its own value).
+        """
+        override = self.agents.get(agent_name)
+        if override is not None and override.keep_alive is not None:
+            return override.keep_alive
+        return None
+
     def get_subagents_path(self) -> Path:
         """Resolve the subagents directory path for YAML file discovery.
 
@@ -246,6 +268,8 @@ def load_subagents_config_from_dict(config_dict: dict) -> None:
             parts.append(f"skills={override.skills}")
         if override.skills_on_demand is not None:
             parts.append(f"skills_on_demand={override.skills_on_demand}")
+        if override.keep_alive is not None:
+            parts.append(f"keep_alive={override.keep_alive}")
         if parts:
             overrides_summary[name] = ", ".join(parts)
 

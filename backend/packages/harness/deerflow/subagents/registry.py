@@ -55,6 +55,7 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
             model=custom.model,
             max_turns=custom.max_turns,
             timeout_seconds=custom.timeout_seconds,
+            keep_alive=custom.keep_alive,
             workflow=custom.workflow,
         )
 
@@ -77,7 +78,7 @@ def get_subagent_config(
     2. Per-user subagent files (shadows the global custom layer) - only when
        ``user_id`` is provided
     3. Custom subagents from config.yaml custom_agents section / shared YAML files
-    4. Per-agent overrides from config.yaml agents section (timeout, max_turns, model, skills)
+    4. Per-agent overrides from config.yaml agents section (timeout, max_turns, model, skills, keep_alive)
 
     Args:
         name: The name of the subagent.
@@ -147,6 +148,12 @@ def get_subagent_config(
     if effective_skills_on_demand is not None and effective_skills_on_demand != config.skills_on_demand:
         logger.debug("Subagent '%s': skills_on_demand overridden (%s -> %s)", name, config.skills_on_demand, effective_skills_on_demand)
         overrides["skills_on_demand"] = effective_skills_on_demand
+
+    # Keep alive: per-agent override only (no global default)
+    effective_keep_alive = subagents_config.get_keep_alive_for(name)
+    if effective_keep_alive is not None and effective_keep_alive != config.keep_alive:
+        logger.debug("Subagent '%s': keep_alive overridden (%s -> %s)", name, config.keep_alive, effective_keep_alive)
+        overrides["keep_alive"] = effective_keep_alive
 
     if overrides:
         config = replace(config, **overrides)

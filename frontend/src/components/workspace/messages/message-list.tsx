@@ -37,6 +37,7 @@ import type { Subtask } from "@/core/tasks";
 import { useUpdateSubtask } from "@/core/tasks/context";
 import {
   derivePendingSubtaskStatus,
+  mapWaitForTasksStatus,
   parseSubtaskResult,
 } from "@/core/tasks/subtask-result";
 import type { AgentThreadState } from "@/core/threads";
@@ -546,22 +547,18 @@ export function MessageList({
                         parsedJson,
                       )) {
                         if (allTaskToolCallIds.has(origTaskId)) {
-                          const mappedStatus: Subtask["status"] =
-                            info.status === "completed"
-                              ? "completed"
-                              : info.status === "idle" ||
-                                  info.status === "interrupted"
-                                ? "idle"
-                                : info.status === "pending" ||
-                                    info.status === "running"
-                                  ? "in_progress"
-                                  : "failed";
-                          updateSubtask({
-                            id: origTaskId,
-                            status: mappedStatus,
-                            ...(info.result ? { result: info.result } : {}),
-                            ...(info.error ? { error: info.error } : {}),
-                          });
+                          const update = mapWaitForTasksStatus(
+                            info.status,
+                            groupIsLoading,
+                            info.result,
+                            info.error,
+                          );
+                          if (update) {
+                            updateSubtask({
+                              id: origTaskId,
+                              ...update,
+                            });
+                          }
                         }
                       }
                     } catch {

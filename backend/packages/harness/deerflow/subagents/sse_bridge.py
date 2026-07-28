@@ -49,6 +49,13 @@ class SSEBridge:
             self._writers[thread_id] = writer
 
     def unregister_writer(self, thread_id: str) -> None:
+        # Check for IDLE subagents outside the SSE lock to avoid nested
+        # locks. If any IDLE subagents remain, keep the writer alive so
+        # the lifecycle manager's TTL-expiry event can reach the frontend.
+        from deerflow.subagents.agent_registry import agent_registry
+
+        if agent_registry.list_idle(thread_id):
+            return
         with self._lock:
             self._writers.pop(thread_id, None)
 

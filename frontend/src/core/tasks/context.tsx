@@ -68,13 +68,18 @@ export function useUpdateSubtask() {
       // MessageList writes the pending task tool-call state before parsing the
       // matching ToolMessage in the same render. Keep terminal results stable
       // across the next render so the refresh notification does not loop.
+      // Also guard against stale wait_for_tasks JSON overriding a status that
+      // was set by a backend TTL-expiry SSE event (ttlExpired flag).
+      const isNonTerminal =
+        task.status === "in_progress" || task.status === "idle";
+      const keepPreviousStatus =
+        (task.status === "in_progress" &&
+          isTerminalSubtaskStatus(previousStatus)) ||
+        (isNonTerminal && previous?.ttlExpired === true);
       const next = {
         ...previous,
         ...task,
-        ...(task.status === "in_progress" &&
-        isTerminalSubtaskStatus(previousStatus)
-          ? { status: previousStatus }
-          : {}),
+        ...(keepPreviousStatus ? { status: previousStatus } : {}),
       } as Subtask;
 
       const becameTerminal =

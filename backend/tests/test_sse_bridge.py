@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from deerflow.subagents.event_bus import event_bus
 from deerflow.subagents.sse_bridge import sse_bridge
 
@@ -59,3 +61,42 @@ def test_budget_event_mapped():
     )
     assert sent and sent[0]["type"] == "budget_warning"
     sse_bridge.unregister_writer("T1")
+
+
+def test_unregister_skips_when_idle_subagents_exist():
+    """Writer must stay alive while IDLE subagents remain for the thread."""
+    sent: list[dict] = []
+    sse_bridge.register_writer("T1", sent.append)
+    with patch(
+        "deerflow.subagents.agent_registry.agent_registry.list_idle",
+        return_value=[object()],  # non-empty = IDLE subagent exists
+    ):
+        sse_bridge.unregister_writer("T1")
+    # Writer should still be registered
+    event_bus.emit(
+        "subagent:lifecycle",
+        {"event": "expired", "task_id": "t1", "thread_id": "T1"},
+    )
+    assert sent and sent[0]["type"] == "task_expired"
+    # Clean up
+    with patch(
+        "deerflow.subagents.agent_registry.agent_registry.list_idle",
+        return_value=[],
+    ):
+        sse_bridge.unregister_writer("T1")
+
+
+def test_unregister_releases_when_no_idle_subagents():
+    """Writer is released once no IDLE subagents remain."""
+    sent: list[dict] = []
+    sse_bridge.register_writer("T1", sent.append)
+    with patch(
+        "deerflow.subagents.agent_registry.agent_registry.list_idle",
+        return_value=[],
+    ):
+        sse_bridge.unregister_writer("T1")
+    event_bus.emit(
+        "subagent:lifecycle",
+        {"event": "started", "task_id": "t1", "thread_id": "T1"},
+    )
+    assert sent == []

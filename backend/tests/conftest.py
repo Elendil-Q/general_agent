@@ -33,7 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 _executor_mock = MagicMock()
 _executor_mock.SubagentExecutor = MagicMock
 _executor_mock.SubagentResult = MagicMock
-_executor_mock.SubagentStatus = MagicMock
+_status_mock = MagicMock()
+_status_mock.IDLE = object()
+_executor_mock.SubagentStatus = _status_mock
 _executor_mock.MAX_CONCURRENT_SUBAGENTS = 3
 _executor_mock.get_background_task_result = MagicMock()
 

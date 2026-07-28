@@ -9,6 +9,8 @@ import {
   SUBAGENT_STATUS_KEY,
   derivePendingSubtaskStatus,
   hasSubtaskToolResult,
+  isTransientWaitForTasksStatus,
+  mapWaitForTasksStatus,
   parseSubtaskResult,
 } from "@/core/tasks/subtask-result";
 
@@ -187,6 +189,122 @@ describe("derivePendingSubtaskStatus", () => {
     expect(derivePendingSubtaskStatus("call_task_1", messages, false)).toBe(
       "in_progress",
     );
+  });
+});
+
+describe("isTransientWaitForTasksStatus", () => {
+  it("returns true for idle, interrupted, pending, running", () => {
+    expect(isTransientWaitForTasksStatus("idle")).toBe(true);
+    expect(isTransientWaitForTasksStatus("interrupted")).toBe(true);
+    expect(isTransientWaitForTasksStatus("pending")).toBe(true);
+    expect(isTransientWaitForTasksStatus("running")).toBe(true);
+  });
+
+  it("returns false for terminal statuses", () => {
+    expect(isTransientWaitForTasksStatus("completed")).toBe(false);
+    expect(isTransientWaitForTasksStatus("failed")).toBe(false);
+    expect(isTransientWaitForTasksStatus("cancelled")).toBe(false);
+    expect(isTransientWaitForTasksStatus("timed_out")).toBe(false);
+  });
+
+  it("returns false for unknown statuses", () => {
+    expect(isTransientWaitForTasksStatus("unknown")).toBe(false);
+    expect(isTransientWaitForTasksStatus("")).toBe(false);
+  });
+});
+
+describe("mapWaitForTasksStatus", () => {
+  describe("when turn is not loading (restart, turn ended)", () => {
+    it("maps idle to completed", () => {
+      const result = mapWaitForTasksStatus("idle", false, "task output");
+      expect(result).toEqual({ status: "completed", result: "task output" });
+    });
+
+    it("maps interrupted to completed", () => {
+      const result = mapWaitForTasksStatus(
+        "interrupted",
+        false,
+        undefined,
+        "paused",
+      );
+      expect(result).toEqual({ status: "completed", error: "paused" });
+    });
+
+    it("skips running (returns null)", () => {
+      const result = mapWaitForTasksStatus("running", false);
+      expect(result).toBeNull();
+    });
+
+    it("skips pending (returns null)", () => {
+      const result = mapWaitForTasksStatus("pending", false);
+      expect(result).toBeNull();
+    });
+
+    it("still applies completed as completed", () => {
+      const result = mapWaitForTasksStatus("completed", false, "done");
+      expect(result).toEqual({ status: "completed", result: "done" });
+    });
+
+    it("still applies failed as failed", () => {
+      const result = mapWaitForTasksStatus("failed", false, undefined, "oops");
+      expect(result).toEqual({ status: "failed", error: "oops" });
+    });
+
+    it("maps cancelled to failed", () => {
+      const result = mapWaitForTasksStatus("cancelled", false);
+      expect(result).toEqual({ status: "failed" });
+    });
+
+    it("maps timed_out to failed", () => {
+      const result = mapWaitForTasksStatus("timed_out", false);
+      expect(result).toEqual({ status: "failed" });
+    });
+
+    it("maps unknown status to failed", () => {
+      const result = mapWaitForTasksStatus("unknown_status", false);
+      expect(result).toEqual({ status: "failed" });
+    });
+  });
+
+  describe("when turn is loading (active streaming)", () => {
+    it("applies idle as idle", () => {
+      const result = mapWaitForTasksStatus("idle", true);
+      expect(result).toEqual({ status: "idle" });
+    });
+
+    it("applies interrupted as idle", () => {
+      const result = mapWaitForTasksStatus("interrupted", true);
+      expect(result).toEqual({ status: "idle" });
+    });
+
+    it("applies running as in_progress", () => {
+      const result = mapWaitForTasksStatus("running", true);
+      expect(result).toEqual({ status: "in_progress" });
+    });
+
+    it("applies pending as in_progress", () => {
+      const result = mapWaitForTasksStatus("pending", true);
+      expect(result).toEqual({ status: "in_progress" });
+    });
+
+    it("applies completed as completed", () => {
+      const result = mapWaitForTasksStatus("completed", true, "done");
+      expect(result).toEqual({ status: "completed", result: "done" });
+    });
+
+    it("applies failed as failed", () => {
+      const result = mapWaitForTasksStatus("failed", true, undefined, "err");
+      expect(result).toEqual({ status: "failed", error: "err" });
+    });
+  });
+
+  it("preserves result and error fields when mapping idle to completed", () => {
+    const result = mapWaitForTasksStatus("idle", false, "output", "warning");
+    expect(result).toEqual({
+      status: "completed",
+      result: "output",
+      error: "warning",
+    });
   });
 });
 

@@ -426,8 +426,70 @@ Effort 是前端概念：用户在输入框选择 effort 后，前端派生出�
 |------|--------|------|
 | `timeout_seconds` | `1800`（30 分钟） | 内置 subagent 默认超时 |
 | `max_turns` | `null` | 全局最大轮数覆盖；内置默认值 general-purpose=150，bash=60 |
-| `agents` | `{}` | 按 agent 覆盖 timeout、max_turns、model、skills |
-| `custom_agents` | `{}` | 自定义 subagent 类型，可配置 system_prompt、tools、skills、model、workflow 等 |
+| `agents` | `{}` | 按 agent 覆盖 timeout、max_turns、model、skills、keep_alive |
+| `custom_agents` | `{}` | 自定义 subagent 类型，可配置 system_prompt、tools、skills、model、workflow、keep_alive 等 |
+
+#### Subagent 生命周期与 `keep_alive` / `follow_up`
+
+##### 默认行为：COMPLETED（终止）
+
+Subagent 执行完毕后默认进入 `COMPLETED` 终止状态，executor 和 checkpointer 随即被清理。此时 subagent 已彻底结束，无法再与之交互。
+
+##### IDLE 模式：`keep_alive: true`
+
+在 subagent 配置中添加 `keep_alive: true`，subagent 完成后将进入 `IDLE` 非终止状态，保留其 executor 和 checkpointer 内存会话，等待父 agent 通过 `follow_up` 工具来追加指令继续对话。此状态仅在内存中保留，Gateway 重启后所有 IDLE subagent 将丢失。
+
+`keep_alive` 可通过两种方式配置：
+
+**方式一：`subagents.custom_agents.*`（自定义 subagent 内联定义）**
+
+```yaml
+subagents:
+  custom_agents:
+    my-analyst:
+      description: "Data analysis specialist"
+      system_prompt: "You are a data analyst."
+      keep_alive: true       # 完成后进入 IDLE 等待 follow_up
+      max_turns: 100
+```
+
+**方式二：`subagents.agents.*`（对内置或自定义 subagent 进行字段级覆盖）**
+
+```yaml
+subagents:
+  agents:
+    general-purpose:         # 内置 subagent 也可启用 keep_alive
+      keep_alive: true
+    my-analyst:              # 或覆盖自定义 subagent 的 keep_alive 设置
+      keep_alive: false
+```
+
+> `subagents.agents.*` 的覆盖是字段级合并：只覆盖指定字段，其余字段保持 subagent 自身的值。
+
+##### TTL 自动清理
+
+IDLE 状态的 subagent 有一个 420 秒（7 分钟）的 TTL。如果在 TTL 内没有被 `follow_up` 唤醒，subagent 将被自动清理（从注册表中移除，释放资源）。每次 `follow_up` 后再次进入 IDLE 状态时，TTL 会重新计时。
+
+##### `follow_up` 工具
+
+当 subagent 处于 IDLE 状态时，父 agent 可以使用内置的 `follow_up` 工具继续对话：
+
+```
+follow_up(task_id="<task_id>", prompt="你的追加指令")
+```
+
+`follow_up` 会在同一 subagent 会话（相同的 `subagent_thread_id` + checkpointer）上继续执行，subagent 保留之前的全部对话上下文。
+
+##### 状态一览
+
+| 状态 | `is_terminal` | `is_stopped` | 说明 |
+|------|:---:|:---:|------|
+| `COMPLETED` | ✓ | ✓ | 正常完成，已清理 |
+| `FAILED` | ✓ | ✓ | 执行失败 |
+| `CANCELLED` | ✓ | ✓ | 被取消 |
+| `TIMED_OUT` | ✓ | ✓ | 超时 |
+| `INTERRUPTED` | ✗ | ✓ | 被 `interrupt()` 暂停，等待 resume |
+| `IDLE` | ✗ | ✓ | 完成但保持存活，等待 `follow_up` |
 
 ### `acp_agents`
 

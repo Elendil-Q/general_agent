@@ -138,6 +138,76 @@ export function hasSubtaskToolResult(
   );
 }
 
+/**
+ * Determine whether a status from a ``wait_for_tasks`` JSON result is
+ * transient (i.e. the subagent is still running or parked as IDLE).
+ *
+ * When the turn is not loading, transient statuses from stale
+ * ``wait_for_tasks`` JSON should be skipped so they don't override the
+ * terminal status already parsed from the ``task`` tool result.
+ */
+export function isTransientWaitForTasksStatus(status: string): boolean {
+  return (
+    status === "idle" ||
+    status === "interrupted" ||
+    status === "pending" ||
+    status === "running"
+  );
+}
+
+/**
+ * Map a ``wait_for_tasks`` JSON status to a {@link SubtaskResultUpdate}.
+ *
+ * Returns ``null`` when the entry should be skipped entirely.
+ *
+ * When the turn is **not loading** (restart, turn ended, conversation
+ * switch to a completed thread):
+ * - ``idle`` / ``interrupted`` → mapped to ``completed``. The subagent
+ *   finished its work and is parked for a potential ``follow_up``,
+ *   which is effectively completed from the user's perspective. This
+ *   prevents detached tasks (whose ``task`` tool result is
+ *   ``"Task spawned."`` → ``in_progress``) from showing as a spinning
+ *   loader after the turn ends.
+ * - ``running`` / ``pending`` → **skipped** (``null``). A detached task
+ *   may genuinely still be running, and we have no way to confirm
+ *   completion from stale JSON alone.
+ *
+ * When the turn **is loading** (active streaming), statuses are applied
+ * as-is so the UI reflects the subagent's real-time state.
+ */
+export function mapWaitForTasksStatus(
+  status: string,
+  isCurrentTurnLoading: boolean,
+  result?: string,
+  error?: string,
+): SubtaskResultUpdate | null {
+  if (!isCurrentTurnLoading) {
+    if (status === "idle" || status === "interrupted") {
+      return {
+        status: "completed",
+        ...(result ? { result } : {}),
+        ...(error ? { error } : {}),
+      };
+    }
+    if (isTransientWaitForTasksStatus(status)) {
+      return null;
+    }
+  }
+  const mappedStatus: SubtaskStatus =
+    status === "completed"
+      ? "completed"
+      : status === "idle" || status === "interrupted"
+        ? "idle"
+        : status === "pending" || status === "running"
+          ? "in_progress"
+          : "failed";
+  return {
+    status: mappedStatus,
+    ...(result ? { result } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
 export function derivePendingSubtaskStatus(
   toolCallId: string | undefined,
   messages: Message[],

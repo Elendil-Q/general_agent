@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 import pytest
 
+from deerflow.subagents.event_bus import event_bus
+
 # Static placeholders for the symbols the autouse fixture imports fresh and
 # reassigns at runtime. Declared so static analyzers (ruff F821) can resolve
 # the bare names used in the verbatim test bodies.
@@ -167,3 +169,31 @@ def test_dismiss_cleans_up_immediately():
     mgr.adopt("t1", ttl_seconds=60)
     mgr.dismiss("t1")
     assert agent_registry.get("t1") is None
+
+
+def test_expire_emits_thread_id_in_event():
+    """The expired event must carry thread_id so the SSE bridge can route it."""
+    mgr = SubagentLifecycleManager()
+    _seed_idle("t1")  # registers with thread_id="T1"
+    captured: list[dict] = []
+    unsub = event_bus.on("subagent:lifecycle", lambda payload: captured.append(payload))
+    try:
+        mgr.adopt("t1", ttl_seconds=0.05)
+        time.sleep(0.15)
+    finally:
+        unsub()
+    assert captured, "expected at least one lifecycle event"
+    expired_events = [e for e in captured if e.get("event") == "expired"]
+    assert expired_events, "expected an 'expired' event"
+    assert expired_events[0]["thread_id"] == "T1"
+
+
+def test_do_cleanup_unregisters_sse_writer():
+    """After cleanup, the SSE writer for the thread should be released."""
+    from unittest.mock import patch
+
+    mgr = SubagentLifecycleManager()
+    _seed_idle("t1")  # thread_id="T1"
+    with patch("deerflow.subagents.sse_bridge.sse_bridge.unregister_writer") as mock_unreg:
+        mgr.dismiss("t1")
+    mock_unreg.assert_called_once_with("T1")

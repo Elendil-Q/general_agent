@@ -10,4 +10,5 @@ export interface Subtask {
   result?: string;
   error?: string;
   detached?: boolean;
+  ttlExpired?: boolean;
 }

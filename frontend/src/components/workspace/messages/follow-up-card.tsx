@@ -12,9 +12,7 @@ import {
   ChainOfThoughtContent,
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
-import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
-import { ShineBorder } from "@/components/ui/shine-border";
 import { useI18n } from "@/core/i18n/hooks";
 import { cn } from "@/lib/utils";
 
@@ -57,20 +55,11 @@ export function FollowUpCard({
     return t.subtasks.in_progress;
   }, [resultStatus, t]);
 
-  const isRunning = isLoading && !resultStatus;
-
   return (
     <ChainOfThought
       className={cn("relative w-full gap-2 rounded-lg border py-0", className)}
       open={!collapsed}
     >
-      <div className={cn("ambilight z-[-1]", isRunning ? "enabled" : "")}></div>
-      {isRunning && (
-        <ShineBorder
-          borderWidth={1.5}
-          shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
-        />
-      )}
       <div className="bg-background/95 flex w-full flex-col rounded-lg">
         <div className="flex w-full items-center justify-between p-0.5">
           <Button
@@ -80,15 +69,11 @@ export function FollowUpCard({
           >
             <div className="flex w-full items-center justify-between">
               <ChainOfThoughtStep
-                className="font-normal"
+                className="min-w-0 flex-1 font-normal"
                 label={
-                  isRunning ? (
-                    <Shimmer as="span" duration={3} spread={3}>
-                      {t.followUp.label(taskId, prompt)}
-                    </Shimmer>
-                  ) : (
-                    t.followUp.label(taskId, prompt)
-                  )
+                  <span className="block truncate">
+                    {t.followUp.label(taskId, prompt)}
+                  </span>
                 }
                 icon={<ClipboardListIcon />}
               />

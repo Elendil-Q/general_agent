@@ -1060,13 +1060,14 @@ sandbox:
 #
 #   # Optional per-agent overrides (applies to both built-in and custom agents)
 #   agents:
-#     general-purpose:
-#       timeout_seconds: 2700  # 45 minutes for very long deep-research tasks
-#       max_turns: 250         # raise above the 150 default for very deep tasks
-#       # model: qwen3:32b     # Use a specific model (default: inherit from lead agent)
-#       # skills:               # Skill whitelist (default: inherit all enabled skills)
-#       #   - web-search
-#       #   - data-analysis
+  #     general-purpose:
+  #       timeout_seconds: 2700  # 45 minutes for very long deep-research tasks
+  #       max_turns: 250         # raise above the 150 default for very deep tasks
+  #       # model: qwen3:32b     # Use a specific model (default: inherit from lead agent)
+  #       # skills:               # Skill whitelist (default: inherit all enabled skills)
+  #       #   - web-search
+  #       #   - data-analysis
+  #       # keep_alive: true     # Keep subagent IDLE after completion so follow_up can revive it
 #     bash:
 #       timeout_seconds: 300   # 5 minutes for quick command execution
 #       max_turns: 80
@@ -1095,9 +1096,10 @@ sandbox:
 #   #     skills:                 # Skill whitelist (null = inherit all, [] = none)
 #   #       - data-analysis
 #   #       - visualization
-#   #     model: inherit          # 'inherit' uses parent's model
-#   #     max_turns: 80
-#   #     timeout_seconds: 600
+  #   #     model: inherit          # 'inherit' uses parent's model
+  #   #     max_turns: 80
+  #   #     timeout_seconds: 600
+  #   #     # keep_alive: false      # Set true to keep subagent IDLE after completion for follow_up
 #
 #   # Model override: by default, subagents inherit the lead agent's model.
 #   # Set `model` to use a different model (e.g., a local Ollama model for cost savings).
