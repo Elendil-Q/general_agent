@@ -12,6 +12,7 @@ from deerflow.tools.builtins import (
     present_file_tool,
     task_tool,
     view_image_tool,
+    wait_for_tasks,
 )
 from deerflow.tools.mcp_metadata import tag_mcp_tool
 from deerflow.tools.sync import make_sync_tool_wrapper
@@ -26,6 +27,7 @@ BUILTIN_TOOLS = [
 SUBAGENT_TOOLS = [
     task_tool,
     follow_up,
+    wait_for_tasks,
     # task_status_tool is no longer exposed to LLM (backend handles polling internally)
 ]
 

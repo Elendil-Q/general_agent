@@ -430,6 +430,12 @@ def build_middlewares(
         max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
         middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents))
 
+        from deerflow.agents.middlewares.pending_task_guard_middleware import (
+            PendingTaskGuardMiddleware,
+        )
+
+        middlewares.append(PendingTaskGuardMiddleware())
+
     # LoopDetectionMiddleware — detect and break repetitive tool call loops
     loop_detection_config = resolved_app_config.loop_detection
     if loop_detection_config.enabled:
