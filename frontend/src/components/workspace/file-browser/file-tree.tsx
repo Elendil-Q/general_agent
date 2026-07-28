@@ -72,7 +72,7 @@ function FileTreeNode({
   depth?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { data, isLoading } = useDirectoryListing(
+  const { data, isLoading, isError } = useDirectoryListing(
     threadId,
     entry.path,
     expanded, // Only fetch when expanded
@@ -126,9 +126,16 @@ function FileTreeNode({
       {entry.is_directory && expanded && (
         <div>
           {isLoading ? (
-            <div className="text-muted-foreground flex items-center gap-2 px-2 py-1 pl-[calc(8px_+_var(--depth)_*_16px)] text-xs">
+            <div className="text-muted-foreground flex items-center gap-2 px-2 py-1 text-xs">
               <LoaderIcon className="size-3 animate-spin" />
               Loading...
+            </div>
+          ) : isError ? (
+            <div
+              className="text-muted-foreground px-2 py-1 text-xs"
+              style={{ paddingLeft: `${8 + (depth + 1) * 16 + 20}px` }}
+            >
+              Failed to load directory
             </div>
           ) : data?.entries && data.entries.length > 0 ? (
             <FileTree

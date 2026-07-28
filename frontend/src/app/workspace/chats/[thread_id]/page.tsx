@@ -12,8 +12,11 @@ import {
   useThreadChat,
 } from "@/components/workspace/chats";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
-import { FileBrowserTrigger } from "@/components/workspace/file-browser/file-browser-trigger";
 import { InputBox } from "@/components/workspace/input-box";
+import {
+  LeftPanelProvider,
+  LeftPanelTrigger,
+} from "@/components/workspace/left-panel";
 import {
   MessageList,
   MESSAGE_LIST_DEFAULT_PADDING_BOTTOM,
@@ -21,7 +24,6 @@ import {
 import { ThreadContext } from "@/components/workspace/messages/context";
 import { SystemPromptTrigger } from "@/components/workspace/system-prompt-trigger";
 import { ThreadTitle } from "@/components/workspace/thread-title";
-import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
 import { Welcome } from "@/components/workspace/welcome";
 import { useI18n } from "@/core/i18n/hooks";
@@ -190,7 +192,6 @@ export default function ChatPage() {
   const maxContextTokens =
     models.find((m) => m.name === settings.context.model_name)
       ?.context_window ?? null;
-  const hasTodos = (thread.values.todos?.length ?? 0) > 0;
 
   return (
     <ThreadContext.Provider
@@ -205,151 +206,134 @@ export default function ChatPage() {
         dismissSubagentClarification,
       }}
     >
-      <ChatBox threadId={threadId}>
-        <div className="relative flex size-full min-h-0 justify-between">
-          <header
-            className={cn(
-              "absolute top-0 right-0 left-0 z-30 flex h-12 shrink-0 items-center gap-2 px-2 sm:px-4",
-              isWelcomeMode
-                ? "bg-background/0 backdrop-blur-none"
-                : "bg-background/80 shadow-xs backdrop-blur",
-            )}
-          >
-            <SidebarTrigger className="md:hidden" />
-            <FileBrowserTrigger />
-            <div className="flex min-w-0 flex-1 items-center text-sm font-medium">
-              <ThreadTitle threadId={threadId} thread={thread} />
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <TokenUsageIndicator
-                threadId={isNewThread ? undefined : threadId}
-                backendUsage={backendTokenUsage}
-                maxContextTokens={maxContextTokens}
-                enabled={tokenUsageEnabled}
-                messages={thread.messages}
-                pendingMessages={pendingUsageMessages}
-                preferences={localSettings.tokenUsage}
-                onPreferencesChange={(preferences) =>
-                  setLocalSettings("tokenUsage", preferences)
-                }
-              />
-              <SystemPromptTrigger
-                threadId={isNewThread ? undefined : threadId}
-              />
-              <ExportTrigger threadId={threadId} />
-              <ArtifactTrigger />
-            </div>
-          </header>
-          <main
-            className={cn(
-              "min-h-0 max-w-full grow flex-col",
-              isWelcomeMode ? "flex overflow-y-auto" : "flex",
-            )}
-          >
-            <div
+      <LeftPanelProvider>
+        <ChatBox threadId={threadId}>
+          <div className="relative flex size-full min-h-0 justify-between">
+            <header
               className={cn(
-                "flex min-h-0 flex-1 justify-center",
-                isWelcomeMode && "hidden",
+                "absolute top-0 right-0 left-0 z-30 flex h-12 shrink-0 items-center gap-2 px-2 sm:px-4",
+                isWelcomeMode
+                  ? "bg-background/0 backdrop-blur-none"
+                  : "bg-background/80 shadow-xs backdrop-blur",
               )}
             >
-              <MessageList
-                className={cn("size-full", !isWelcomeMode && "pt-10")}
-                threadId={threadId}
-                thread={thread}
-                paddingBottom={MESSAGE_LIST_DEFAULT_PADDING_BOTTOM}
-                hasMoreHistory={hasMoreHistory}
-                loadMoreHistory={loadMoreHistory}
-                isHistoryLoading={isHistoryLoading}
-                tokenUsageInlineMode={tokenUsageInlineMode}
-                canRegenerate={
-                  !isNewThread &&
-                  !isMock &&
-                  env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" &&
-                  !isUploading &&
-                  !thread.isLoading
-                }
-                onRegenerateMessage={handleRegenerate}
-              />
-            </div>
-            <div
+              <SidebarTrigger className="md:hidden" />
+              <LeftPanelTrigger />
+              <div className="flex min-w-0 flex-1 items-center text-sm font-medium">
+                <ThreadTitle threadId={threadId} thread={thread} />
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <TokenUsageIndicator
+                  threadId={isNewThread ? undefined : threadId}
+                  backendUsage={backendTokenUsage}
+                  maxContextTokens={maxContextTokens}
+                  enabled={tokenUsageEnabled}
+                  messages={thread.messages}
+                  pendingMessages={pendingUsageMessages}
+                  preferences={localSettings.tokenUsage}
+                  onPreferencesChange={(preferences) =>
+                    setLocalSettings("tokenUsage", preferences)
+                  }
+                />
+                <SystemPromptTrigger
+                  threadId={isNewThread ? undefined : threadId}
+                />
+                <ExportTrigger threadId={threadId} />
+                <ArtifactTrigger />
+              </div>
+            </header>
+            <main
               className={cn(
-                "right-0 bottom-0 left-0 z-30 flex justify-center px-3 sm:px-4",
-                isWelcomeMode
-                  ? "my-auto flex-col items-center py-10"
-                  : "relative shrink-0 pb-4",
+                "min-h-0 max-w-full grow flex-col",
+                isWelcomeMode ? "flex overflow-y-auto" : "flex",
               )}
             >
               <div
                 className={cn(
-                  "relative w-full",
-                  isWelcomeMode
-                    ? "max-w-(--container-width-sm)"
-                    : "max-w-(--container-width-md)",
+                  "flex min-h-0 flex-1 justify-center",
+                  isWelcomeMode && "hidden",
                 )}
               >
-                {isWelcomeMode && <Welcome effort={settings.context.effort} />}
-                {hasTodos && (
-                  <div
-                    className={cn(
-                      "right-0 left-0 z-0",
-                      isWelcomeMode ? "absolute -top-4" : "relative",
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "right-0 bottom-0 left-0",
-                        isWelcomeMode ? "absolute" : "relative",
-                      )}
-                    >
-                      <TodoList
-                        className="bg-background/5"
-                        todos={thread.values.todos ?? []}
-                        hidden={false}
-                      />
-                    </div>
-                  </div>
-                )}
-                {mountedRef.current ? (
-                  <InputBox
-                    className="bg-background/5 w-full"
-                    isWelcomeMode={isWelcomeMode}
-                    threadId={threadId}
-                    autoFocus={isWelcomeMode}
-                    status={
-                      thread.error
-                        ? "error"
-                        : thread.isLoading
-                          ? "streaming"
-                          : "ready"
-                    }
-                    context={settings.context}
-                    disabled={
-                      isMock ||
-                      env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
-                      isUploading
-                    }
-                    onContextChange={(context) =>
-                      setSettings("context", context)
-                    }
-                    onSubmit={handleSubmit}
-                    onStop={handleStop}
-                  />
-                ) : (
-                  <div
-                    aria-hidden="true"
-                    className="bg-background/5 h-32 w-full rounded-2xl"
-                  />
-                )}
-                {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
-                  <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
-                    {t.common.notAvailableInDemoMode}
-                  </div>
-                )}
+                <MessageList
+                  className={cn("size-full", !isWelcomeMode && "pt-10")}
+                  threadId={threadId}
+                  thread={thread}
+                  paddingBottom={MESSAGE_LIST_DEFAULT_PADDING_BOTTOM}
+                  hasMoreHistory={hasMoreHistory}
+                  loadMoreHistory={loadMoreHistory}
+                  isHistoryLoading={isHistoryLoading}
+                  tokenUsageInlineMode={tokenUsageInlineMode}
+                  canRegenerate={
+                    !isNewThread &&
+                    !isMock &&
+                    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" &&
+                    !isUploading &&
+                    !thread.isLoading
+                  }
+                  onRegenerateMessage={handleRegenerate}
+                />
               </div>
-            </div>
-          </main>
-        </div>
-      </ChatBox>
+              <div
+                className={cn(
+                  "right-0 bottom-0 left-0 z-30 flex justify-center px-3 sm:px-4",
+                  isWelcomeMode
+                    ? "my-auto flex-col items-center py-10"
+                    : "relative shrink-0 pb-4",
+                )}
+              >
+                <div
+                  className={cn(
+                    "relative w-full",
+                    isWelcomeMode
+                      ? "max-w-(--container-width-sm)"
+                      : "max-w-(--container-width-md)",
+                  )}
+                >
+                  {isWelcomeMode && (
+                    <Welcome effort={settings.context.effort} />
+                  )}
+                  {mountedRef.current ? (
+                    <InputBox
+                      className="bg-background/5 w-full"
+                      isWelcomeMode={isWelcomeMode}
+                      threadId={threadId}
+                      autoFocus={isWelcomeMode}
+                      status={
+                        thread.error
+                          ? "error"
+                          : thread.isLoading
+                            ? "streaming"
+                            : "ready"
+                      }
+                      context={settings.context}
+                      disabled={
+                        isMock ||
+                        env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
+                        isUploading
+                      }
+                      onContextChange={(context) =>
+                        setSettings("context", context)
+                      }
+                      onSubmit={handleSubmit}
+                      onStop={handleStop}
+                    />
+                  ) : (
+                    <div
+                      aria-hidden="true"
+                      className="bg-background/5 h-32 w-full rounded-2xl"
+                    />
+                  )}
+                  {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
+                    <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
+                      {t.common.notAvailableInDemoMode}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </main>
+          </div>
+        </ChatBox>
+      </LeftPanelProvider>
     </ThreadContext.Provider>
   );
 }

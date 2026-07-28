@@ -18,6 +18,7 @@ import {
   type TokenUsageInlineMode,
 } from "@/core/messages/usage-model";
 import {
+  collectTaskToolCallIds,
   extractContentFromMessage,
   extractPresentFilesFromMessage,
   extractTextFromMessage,
@@ -233,6 +234,10 @@ export function MessageList({
   }, [groupedMessages]);
   const rehypePlugins = useRehypeSplitWordsIntoSpans(thread.isLoading);
   const updateSubtask = useUpdateSubtask();
+  const allTaskToolCallIds = useMemo(
+    () => collectTaskToolCallIds(messages),
+    [messages],
+  );
   const lastGroupIndex = groupedMessages.length - 1;
   const turnUsageMessagesByGroupIndex =
     getAssistantTurnUsageMessages(groupedMessages);
@@ -485,6 +490,7 @@ export function MessageList({
             );
           } else if (group.type === "assistant:subagent") {
             const tasks = new Set<Subtask>();
+            const taskToolCallIds = new Set<string>();
             for (const message of group.messages) {
               if (message.type === "ai") {
                 for (const toolCall of message.tool_calls ?? []) {
@@ -493,6 +499,7 @@ export function MessageList({
                     if (!taskId) {
                       continue;
                     }
+                    taskToolCallIds.add(taskId);
                     const status = derivePendingSubtaskStatus(
                       taskId,
                       group.messages,
@@ -504,6 +511,7 @@ export function MessageList({
                       description: toolCall.args.description,
                       prompt: toolCall.args.prompt,
                       status,
+                      detached: toolCall.args.detached === true,
                       ...(status === "failed"
                         ? { error: t.subtasks.failed }
                         : {}),
@@ -514,12 +522,52 @@ export function MessageList({
                 }
               } else if (message.type === "tool") {
                 const taskId = message.tool_call_id;
-                if (taskId) {
+                if (taskId && taskToolCallIds.has(taskId)) {
                   const parsed = parseSubtaskResult(
                     extractTextFromMessage(message),
                     message.additional_kwargs,
                   );
                   updateSubtask({ id: taskId, ...parsed });
+                } else if (taskId) {
+                  // Check if this is a wait_for_tasks result and update
+                  // the original task IDs from its JSON payload
+                  const toolText = extractTextFromMessage(message);
+                  if (toolText) {
+                    try {
+                      const parsedJson = JSON.parse(toolText) as Record<
+                        string,
+                        {
+                          status: string;
+                          result?: string;
+                          error?: string;
+                        }
+                      >;
+                      for (const [origTaskId, info] of Object.entries(
+                        parsedJson,
+                      )) {
+                        if (allTaskToolCallIds.has(origTaskId)) {
+                          const mappedStatus: Subtask["status"] =
+                            info.status === "completed"
+                              ? "completed"
+                              : info.status === "idle" ||
+                                  info.status === "interrupted"
+                                ? "idle"
+                                : info.status === "pending" ||
+                                    info.status === "running"
+                                  ? "in_progress"
+                                  : "failed";
+                          updateSubtask({
+                            id: origTaskId,
+                            status: mappedStatus,
+                            ...(info.result ? { result: info.result } : {}),
+                            ...(info.error ? { error: info.error } : {}),
+                          });
+                        }
+                      }
+                    } catch {
+                      // not JSON or not a wait_for_tasks result, skip
+                    }
+                  }
                 }
               }
             }

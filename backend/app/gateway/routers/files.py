@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/threads/{thread_id}/files", tags=["files"])
 
+# The three standard user-data subdirectories advertised by the root listing.
+# They are created lazily (only on first agent run / upload via
+# ``ensure_thread_dirs``), so they may not exist on disk for a fresh thread.
+STANDARD_USER_DATA_DIRS = ("workspace", "uploads", "outputs")
+
 
 class FileEntry(BaseModel):
     """A single file or directory entry in a directory listing."""
@@ -57,7 +62,7 @@ async def list_directory_tree(
     if not path:
         base = get_paths().sandbox_user_data_dir(thread_id, user_id=user_id)
         entries: list[FileEntry] = []
-        for dir_name in ["workspace", "uploads", "outputs"]:
+        for dir_name in STANDARD_USER_DATA_DIRS:
             dir_path = base / dir_name
             entry = FileEntry(
                 name=dir_name,
@@ -79,6 +84,17 @@ async def list_directory_tree(
     actual_path = resolve_thread_virtual_path(thread_id, path)
 
     if not actual_path.exists():
+        # The three standard user-data subdirectories are advertised by the root
+        # listing but created lazily (only on first agent run / upload). Treat a
+        # not-yet-materialized standard subdir as an empty directory so the file
+        # browser shows "Empty directory" instead of erroring with 404.
+        if path.rstrip("/") in {f"{VIRTUAL_PATH_PREFIX}/{d}" for d in STANDARD_USER_DATA_DIRS}:
+            parent = str(Path(path).parent) if path != VIRTUAL_PATH_PREFIX else None
+            return DirectoryListing(
+                current_path=path,
+                parent_path=parent if parent else None,
+                entries=[],
+            )
         raise HTTPException(status_code=404, detail="Directory not found")
 
     if not actual_path.is_dir():

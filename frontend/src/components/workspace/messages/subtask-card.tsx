@@ -14,9 +14,7 @@ import {
   ChainOfThoughtContent,
   ChainOfThoughtStep,
 } from "@/components/ai-elements/chain-of-thought";
-import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
-import { ShineBorder } from "@/components/ui/shine-border";
 import { useI18n } from "@/core/i18n/hooks";
 import { hasToolCalls } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
@@ -54,31 +52,22 @@ export function SubtaskCard({
     } else if (task.status === "idle") {
       return <PauseCircleIcon className="size-3 text-yellow-500" />;
     } else if (task.status === "in_progress") {
-      return <Loader2Icon className="size-3 animate-spin" />;
+      return task.detached ? (
+        <ClockIcon className="size-3" />
+      ) : (
+        <Loader2Icon className="size-3 animate-spin" />
+      );
     }
-  }, [task.status]);
+  }, [task.status, task.detached]);
   // Prefix the description with the delegated subagent type (bolded) so the user
   // can perceive which kind of subagent is running at a glance.
   const typeTag = <span className="font-bold">[{task.subagent_type}]</span>;
   return (
     <ChainOfThought
+      data-task-id={taskId}
       className={cn("relative w-full gap-2 rounded-lg border py-0", className)}
       open={!collapsed}
     >
-      <div
-        className={cn(
-          "ambilight z-[-1]",
-          task.status === "in_progress" ? "enabled" : "",
-        )}
-      ></div>
-      {task.status === "in_progress" && (
-        <>
-          <ShineBorder
-            borderWidth={1.5}
-            shineColor={["#A07CFE", "#FE8FB5", "#FFBE7B"]}
-          />
-        </>
-      )}
       <div className="bg-background/95 flex w-full flex-col rounded-lg">
         <div className="flex w-full items-center justify-between p-0.5">
           <Button
@@ -90,12 +79,12 @@ export function SubtaskCard({
               <ChainOfThoughtStep
                 className="font-normal"
                 label={
-                  task.status === "in_progress" ? (
+                  task.status === "in_progress" && task.detached ? (
                     <>
-                      {typeTag}{" "}
-                      <Shimmer as="span" duration={3} spread={3}>
-                        {task.description}
-                      </Shimmer>
+                      {typeTag} {task.description}{" "}
+                      <span className="text-muted-foreground">
+                        ({t.subtasks.background})
+                      </span>
                     </>
                   ) : (
                     <>
@@ -124,7 +113,9 @@ export function SubtaskCard({
                       task.latestMessage &&
                       hasToolCalls(task.latestMessage)
                         ? explainLastToolCall(task.latestMessage, t)
-                        : t.subtasks[task.status]}
+                        : task.status === "in_progress" && task.detached
+                          ? t.subtasks.background
+                          : t.subtasks[task.status]}
                     </FlipDisplay>
                   </div>
                 )}

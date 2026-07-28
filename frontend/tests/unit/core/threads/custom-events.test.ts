@@ -182,6 +182,146 @@ describe("handleCustomEvent", () => {
     });
   });
 
+  describe("task_completed", () => {
+    it("sets subtask status to completed with result", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        {
+          type: "task_completed",
+          task_id: "task-7",
+          result: "Task output here",
+        },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-7", status: "completed", result: "Task output here" },
+      ]);
+    });
+
+    it("sets subtask status to completed without result", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_completed", task_id: "task-7" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-7", status: "completed" },
+      ]);
+    });
+
+    it("ignores event without task_id", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent({ type: "task_completed" }, ctx);
+      expect(result).toBe(false);
+      expect(ctx.updateSubtaskCalls).toHaveLength(0);
+    });
+  });
+
+  describe("task_failed", () => {
+    it("sets subtask status to failed with error", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_failed", task_id: "task-8", error: "Something broke" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-8", status: "failed", error: "Something broke" },
+      ]);
+    });
+
+    it("sets subtask status to failed without error", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_failed", task_id: "task-8" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-8", status: "failed" },
+      ]);
+    });
+
+    it("ignores event without task_id", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent({ type: "task_failed" }, ctx);
+      expect(result).toBe(false);
+      expect(ctx.updateSubtaskCalls).toHaveLength(0);
+    });
+  });
+
+  describe("task_cancelled", () => {
+    it("sets subtask status to failed with error message", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_cancelled", task_id: "task-9", error: "User cancelled" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-9", status: "failed", error: "User cancelled" },
+      ]);
+    });
+
+    it("uses default error when none provided", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_cancelled", task_id: "task-9" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-9", status: "failed", error: "cancelled" },
+      ]);
+    });
+
+    it("ignores event without task_id", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent({ type: "task_cancelled" }, ctx);
+      expect(result).toBe(false);
+      expect(ctx.updateSubtaskCalls).toHaveLength(0);
+    });
+  });
+
+  describe("task_timed_out", () => {
+    it("sets subtask status to failed with error message", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        {
+          type: "task_timed_out",
+          task_id: "task-10",
+          error: "Timed out after 300s",
+        },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-10", status: "failed", error: "Timed out after 300s" },
+      ]);
+    });
+
+    it("uses default error when none provided", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_timed_out", task_id: "task-10" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-10", status: "failed", error: "timed out" },
+      ]);
+    });
+
+    it("ignores event without task_id", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent({ type: "task_timed_out" }, ctx);
+      expect(result).toBe(false);
+      expect(ctx.updateSubtaskCalls).toHaveLength(0);
+    });
+  });
+
   describe("llm_retry", () => {
     it("toasts the retry message when non-empty", () => {
       const ctx = makeCtx();

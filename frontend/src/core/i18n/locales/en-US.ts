@@ -394,6 +394,7 @@ export const enUS: Translations = {
     failed: "Subtask failed",
     idle: "Dormant, awaiting follow-up",
     expired: "Subtask expired",
+    background: "Running in background",
   },
 
   waitForTasks: {
@@ -662,6 +663,7 @@ export const enUS: Translations = {
       emptyDescription: "Credits and acknowledgements will show here.",
     },
   },
+  // Login / Auth
   login: {
     signInTitle: "Sign in to your account",
     createAccountTitle: "Create a new account",
@@ -700,5 +702,20 @@ export const enUS: Translations = {
       sso_not_allowed:
         "SSO login is not allowed for your account. Contact your administrator.",
     },
+  },
+
+  // Activity panel
+  activity: {
+    title: "Activity",
+    show: "Show activity",
+    hide: "Hide activity",
+    todos: "To-dos",
+    subagents: "Subagents",
+  },
+
+  // Left panel toggle (activity + files)
+  leftPanel: {
+    show: "Show activity & files",
+    hide: "Hide activity & files",
   },
 };

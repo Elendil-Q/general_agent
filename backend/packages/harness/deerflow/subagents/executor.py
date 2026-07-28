@@ -1197,6 +1197,15 @@ the same skill directory only when needed during execution.
                 error=str(e),
                 token_usage_records=(collector.snapshot_records() if collector is not None else None),
             )
+            event_bus.emit(
+                "subagent:lifecycle",
+                {
+                    "event": "failed",
+                    "task_id": result.task_id or "",
+                    "thread_id": self.thread_id or "",
+                    "error": str(e),
+                },
+            )
 
         return result
 
@@ -1370,12 +1379,30 @@ the same skill directory only when needed during execution.
                         SubagentStatus.TIMED_OUT,
                         error=f"Execution timed out after {self.config.timeout_seconds} seconds",
                     )
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {
+                            "event": "timed_out",
+                            "task_id": task_id,
+                            "thread_id": self.thread_id or "",
+                            "error": f"Execution timed out after {self.config.timeout_seconds} seconds",
+                        },
+                    )
                     execution_future.cancel()
             except Exception as e:
                 logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
                 with _background_tasks_lock:
                     task_result = _background_tasks[task_id]
                 task_result.try_set_terminal(SubagentStatus.FAILED, error=str(e))
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "failed",
+                        "task_id": task_id,
+                        "thread_id": self.thread_id or "",
+                        "error": str(e),
+                    },
+                )
 
         _scheduler_pool.submit(run_task)
         return task_id

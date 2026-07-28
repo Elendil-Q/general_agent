@@ -400,3 +400,91 @@ def test_wait_for_tasks_times_out(monkeypatch, _setup_executor_classes):
     assert tid_pending in parsed
     assert parsed[tid_pending]["status"] == "pending"
     assert "timed out" in parsed[tid_pending]["error"]
+
+
+def test_wait_for_tasks_emits_lifecycle_events(monkeypatch, _setup_executor_classes):
+    """``wait_for_tasks`` emits lifecycle events for completed/failed tasks."""
+    import sys
+    from datetime import datetime
+
+    from deerflow.subagents.agent_registry import AgentRef
+    from deerflow.subagents.event_bus import event_bus
+    from deerflow.subagents.executor import SubagentResult, SubagentStatus
+    from deerflow.tools.builtins.wait_for_tasks import wait_for_tasks
+
+    _module = sys.modules["deerflow.tools.builtins.wait_for_tasks"]
+    monkeypatch.setattr(_module, "get_stream_writer", lambda: lambda event: None)
+
+    tid_completed = "tid-emit-completed"
+    tid_failed = "tid-emit-failed"
+
+    ref_completed = AgentRef(
+        task_id=tid_completed,
+        thread_id="thread-emit-test",
+        trace_id="trace-completed",
+        subagent_type="general-purpose",
+        status=SubagentStatus.COMPLETED,
+        config=_make_subagent_config(),
+        executor=None,
+        result=SubagentResult(
+            task_id=tid_completed,
+            trace_id="trace-completed",
+            status=SubagentStatus.COMPLETED,
+            result="completed-result",
+            error=None,
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+        ),
+        description="completed work",
+        created_at=datetime.now(UTC),
+    )
+    ref_failed = AgentRef(
+        task_id=tid_failed,
+        thread_id="thread-emit-test",
+        trace_id="trace-failed",
+        subagent_type="general-purpose",
+        status=SubagentStatus.FAILED,
+        config=_make_subagent_config(),
+        executor=None,
+        result=SubagentResult(
+            task_id=tid_failed,
+            trace_id="trace-failed",
+            status=SubagentStatus.FAILED,
+            result=None,
+            error="task crashed",
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+        ),
+        description="failed work",
+        created_at=datetime.now(UTC),
+    )
+    agent_registry.register(ref_completed)
+    agent_registry.register(ref_failed)
+
+    events: list[dict] = []
+
+    def capture(payload: dict) -> None:
+        events.append(payload)
+
+    unsub = event_bus.on("subagent:lifecycle", capture)
+    try:
+        asyncio.run(
+            wait_for_tasks.coroutine(
+                task_ids=[tid_completed, tid_failed],
+                tool_call_id="tc-emit-test",
+                runtime=_make_runtime(),
+            )
+        )
+    finally:
+        unsub()
+
+    completed_events = [e for e in events if e.get("event") == "completed"]
+    failed_events = [e for e in events if e.get("event") == "failed"]
+
+    assert len(completed_events) == 1
+    assert completed_events[0]["task_id"] == tid_completed
+    assert completed_events[0]["result"] == "completed-result"
+
+    assert len(failed_events) == 1
+    assert failed_events[0]["task_id"] == tid_failed
+    assert failed_events[0]["error"] == "task crashed"

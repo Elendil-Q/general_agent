@@ -13,12 +13,15 @@ import { ChatBox, useThreadChat } from "@/components/workspace/chats";
 import { ExportTrigger } from "@/components/workspace/export-trigger";
 import { InputBox } from "@/components/workspace/input-box";
 import {
+  LeftPanelProvider,
+  LeftPanelTrigger,
+} from "@/components/workspace/left-panel";
+import {
   MessageList,
   MESSAGE_LIST_DEFAULT_PADDING_BOTTOM,
 } from "@/components/workspace/messages";
 import { ThreadContext } from "@/components/workspace/messages/context";
 import { ThreadTitle } from "@/components/workspace/thread-title";
-import { TodoList } from "@/components/workspace/todo-list";
 import { TokenUsageIndicator } from "@/components/workspace/token-usage-indicator";
 import { Tooltip } from "@/components/workspace/tooltip";
 import { useAgent } from "@/core/agents";
@@ -170,7 +173,6 @@ export default function AgentChatPage() {
   const maxContextTokens =
     models.find((m) => m.name === settings.context.model_name)
       ?.context_window ?? null;
-  const hasTodos = (thread.values.todos?.length ?? 0) > 0;
 
   return (
     <ThreadContext.Provider
@@ -184,154 +186,138 @@ export default function AgentChatPage() {
         dismissSubagentClarification,
       }}
     >
-      <ChatBox threadId={threadId}>
-        <div className="relative flex size-full min-h-0 justify-between">
-          <header
-            className={cn(
-              "absolute top-0 right-0 left-0 z-30 flex h-12 shrink-0 items-center gap-2 px-2 sm:px-4",
-              isWelcomeMode
-                ? "bg-background/0 backdrop-blur-none"
-                : "bg-background/80 shadow-xs backdrop-blur",
-            )}
-          >
-            <SidebarTrigger className="md:hidden" />
-            {/* Agent badge */}
-            <div className="flex min-w-0 shrink-0 items-center gap-1.5 rounded-md border px-2 py-1">
-              <BotIcon className="text-primary h-3.5 w-3.5" />
-              <span className="hidden max-w-24 truncate text-xs font-medium sm:inline sm:max-w-none">
-                {agent?.name ?? agent_name}
-              </span>
-            </div>
-
-            <div className="flex min-w-0 flex-1 items-center text-sm font-medium">
-              <ThreadTitle threadId={threadId} thread={thread} />
-            </div>
-            <div className="flex shrink-0 items-center sm:mr-4">
-              <Tooltip content={t.agents.newChat}>
-                <Button
-                  className="px-2 sm:px-3"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => {
-                    router.push(`/workspace/agents/${agent_name}/chats/new`);
-                  }}
-                >
-                  <PlusSquare />
-                  <span className="hidden sm:inline">{t.agents.newChat}</span>
-                </Button>
-              </Tooltip>
-              <TokenUsageIndicator
-                threadId={isNewThread ? undefined : threadId}
-                backendUsage={backendTokenUsage}
-                maxContextTokens={maxContextTokens}
-                enabled={tokenUsageEnabled}
-                messages={thread.messages}
-                pendingMessages={pendingUsageMessages}
-                preferences={localSettings.tokenUsage}
-                onPreferencesChange={(preferences) =>
-                  setLocalSettings("tokenUsage", preferences)
-                }
-              />
-              <ExportTrigger threadId={threadId} />
-              <ArtifactTrigger />
-            </div>
-          </header>
-
-          <main
-            className={cn(
-              "min-h-0 max-w-full grow flex-col",
-              isWelcomeMode ? "flex overflow-y-auto" : "flex",
-            )}
-          >
-            <div
+      <LeftPanelProvider>
+        <ChatBox threadId={threadId}>
+          <div className="relative flex size-full min-h-0 justify-between">
+            <header
               className={cn(
-                "flex min-h-0 flex-1 justify-center",
-                isWelcomeMode && "hidden",
+                "absolute top-0 right-0 left-0 z-30 flex h-12 shrink-0 items-center gap-2 px-2 sm:px-4",
+                isWelcomeMode
+                  ? "bg-background/0 backdrop-blur-none"
+                  : "bg-background/80 shadow-xs backdrop-blur",
               )}
             >
-              <MessageList
-                className={cn("size-full", !isWelcomeMode && "pt-10")}
-                threadId={threadId}
-                thread={thread}
-                paddingBottom={MESSAGE_LIST_DEFAULT_PADDING_BOTTOM}
-                hasMoreHistory={hasMoreHistory}
-                loadMoreHistory={loadMoreHistory}
-                isHistoryLoading={isHistoryLoading}
-                tokenUsageInlineMode={tokenUsageInlineMode}
-              />
-            </div>
+              <SidebarTrigger className="md:hidden" />
+              {/* Agent badge */}
+              <div className="flex min-w-0 shrink-0 items-center gap-1.5 rounded-md border px-2 py-1">
+                <BotIcon className="text-primary h-3.5 w-3.5" />
+                <span className="hidden max-w-24 truncate text-xs font-medium sm:inline sm:max-w-none">
+                  {agent?.name ?? agent_name}
+                </span>
+              </div>
 
-            <div
+              <div className="flex min-w-0 flex-1 items-center text-sm font-medium">
+                <ThreadTitle threadId={threadId} thread={thread} />
+              </div>
+              <div className="flex shrink-0 items-center sm:mr-4">
+                <Tooltip content={t.agents.newChat}>
+                  <Button
+                    className="px-2 sm:px-3"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      router.push(`/workspace/agents/${agent_name}/chats/new`);
+                    }}
+                  >
+                    <PlusSquare />
+                    <span className="hidden sm:inline">{t.agents.newChat}</span>
+                  </Button>
+                </Tooltip>
+                <TokenUsageIndicator
+                  threadId={isNewThread ? undefined : threadId}
+                  backendUsage={backendTokenUsage}
+                  maxContextTokens={maxContextTokens}
+                  enabled={tokenUsageEnabled}
+                  messages={thread.messages}
+                  pendingMessages={pendingUsageMessages}
+                  preferences={localSettings.tokenUsage}
+                  onPreferencesChange={(preferences) =>
+                    setLocalSettings("tokenUsage", preferences)
+                  }
+                />
+                <ExportTrigger threadId={threadId} />
+                <ArtifactTrigger />
+                <LeftPanelTrigger />
+              </div>
+            </header>
+
+            <main
               className={cn(
-                "right-0 bottom-0 left-0 z-30 flex justify-center px-3 sm:px-4",
-                isWelcomeMode
-                  ? "my-auto flex-col items-center py-10"
-                  : "relative shrink-0 pb-4",
+                "min-h-0 max-w-full grow flex-col",
+                isWelcomeMode ? "flex overflow-y-auto" : "flex",
               )}
             >
               <div
                 className={cn(
-                  "relative w-full",
-                  isWelcomeMode
-                    ? "max-w-(--container-width-sm)"
-                    : "max-w-(--container-width-md)",
+                  "flex min-h-0 flex-1 justify-center",
+                  isWelcomeMode && "hidden",
                 )}
               >
-                {isWelcomeMode && (
-                  <AgentWelcome agent={agent} agentName={agent_name} />
-                )}
-                {hasTodos && (
-                  <div
-                    className={cn(
-                      "right-0 left-0 z-0",
-                      isWelcomeMode ? "absolute -top-4" : "relative",
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "right-0 bottom-0 left-0",
-                        isWelcomeMode ? "absolute" : "relative",
-                      )}
-                    >
-                      <TodoList
-                        className="bg-background/5"
-                        todos={thread.values.todos ?? []}
-                        hidden={false}
-                      />
-                    </div>
-                  </div>
-                )}
-                <InputBox
-                  className="bg-background/5 w-full"
-                  isWelcomeMode={isWelcomeMode}
+                <MessageList
+                  className={cn("size-full", !isWelcomeMode && "pt-10")}
                   threadId={threadId}
-                  autoFocus={isWelcomeMode}
-                  status={
-                    thread.error
-                      ? "error"
-                      : thread.isLoading
-                        ? "streaming"
-                        : "ready"
-                  }
-                  context={settings.context}
-                  disabled={
-                    env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
-                    isUploading
-                  }
-                  onContextChange={(context) => setSettings("context", context)}
-                  onSubmit={handleSubmit}
-                  onStop={handleStop}
+                  thread={thread}
+                  paddingBottom={MESSAGE_LIST_DEFAULT_PADDING_BOTTOM}
+                  hasMoreHistory={hasMoreHistory}
+                  loadMoreHistory={loadMoreHistory}
+                  isHistoryLoading={isHistoryLoading}
+                  tokenUsageInlineMode={tokenUsageInlineMode}
                 />
-                {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
-                  <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
-                    {t.common.notAvailableInDemoMode}
-                  </div>
-                )}
               </div>
-            </div>
-          </main>
-        </div>
-      </ChatBox>
+
+              <div
+                className={cn(
+                  "right-0 bottom-0 left-0 z-30 flex justify-center px-3 sm:px-4",
+                  isWelcomeMode
+                    ? "my-auto flex-col items-center py-10"
+                    : "relative shrink-0 pb-4",
+                )}
+              >
+                <div
+                  className={cn(
+                    "relative w-full",
+                    isWelcomeMode
+                      ? "max-w-(--container-width-sm)"
+                      : "max-w-(--container-width-md)",
+                  )}
+                >
+                  {isWelcomeMode && (
+                    <AgentWelcome agent={agent} agentName={agent_name} />
+                  )}
+                  <InputBox
+                    className="bg-background/5 w-full"
+                    isWelcomeMode={isWelcomeMode}
+                    threadId={threadId}
+                    autoFocus={isWelcomeMode}
+                    status={
+                      thread.error
+                        ? "error"
+                        : thread.isLoading
+                          ? "streaming"
+                          : "ready"
+                    }
+                    context={settings.context}
+                    disabled={
+                      env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" ||
+                      isUploading
+                    }
+                    onContextChange={(context) =>
+                      setSettings("context", context)
+                    }
+                    onSubmit={handleSubmit}
+                    onStop={handleStop}
+                  />
+                  {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true" && (
+                    <div className="text-muted-foreground/67 w-full translate-y-12 text-center text-xs">
+                      {t.common.notAvailableInDemoMode}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </main>
+          </div>
+        </ChatBox>
+      </LeftPanelProvider>
     </ThreadContext.Provider>
   );
 }

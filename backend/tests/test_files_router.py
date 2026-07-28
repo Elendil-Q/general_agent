@@ -165,3 +165,24 @@ class TestListDirectoryTree:
         assert response.status_code == 200
         data = response.json()
         assert data["entries"] == []
+
+    def test_standard_subdir_not_yet_created_returns_empty(self, authed_client, thread_id, tmp_path):
+        """A standard user-data subdir that doesn't exist yet (lazy-created on
+        first agent run / upload) returns an empty listing, not 404, so the
+        file browser shows 'Empty directory' instead of 'Failed to load directory'."""
+        virtual_path = f"{VIRTUAL_PATH_PREFIX}/workspace"
+
+        with (
+            patch("app.gateway.routers.files.get_effective_user_id", return_value="test-user"),
+            patch(
+                "app.gateway.routers.files.resolve_thread_virtual_path",
+                return_value=tmp_path / "workspace",  # does NOT exist on disk
+            ),
+        ):
+            response = authed_client.get(f"/api/threads/{thread_id}/files/tree?path={virtual_path}")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["current_path"] == virtual_path
+        assert data["parent_path"] == VIRTUAL_PATH_PREFIX
+        assert data["entries"] == []

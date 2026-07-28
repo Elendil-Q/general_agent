@@ -2,6 +2,7 @@ import type { Message } from "@langchain/langgraph-sdk";
 import { describe, expect, test } from "@rstest/core";
 
 import {
+  collectTaskToolCallIds,
   extractContentFromMessage,
   extractTextFromMessage,
   extractReasoningContentFromMessage,
@@ -591,5 +592,163 @@ describe("hasSubagent", () => {
       content: "Hello",
     } as Message;
     expect(hasSubagent(msg as Parameters<typeof hasSubagent>[0])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// collectTaskToolCallIds
+// ---------------------------------------------------------------------------
+describe("collectTaskToolCallIds", () => {
+  test("collects task tool call IDs from all messages", () => {
+    const messages = [
+      {
+        id: "human-1",
+        type: "human",
+        content: "Run two tasks",
+      },
+      {
+        id: "ai-1",
+        type: "ai",
+        content: "",
+        tool_calls: [
+          { id: "task-1", name: "task", args: { subagent_type: "researcher" } },
+          { id: "task-2", name: "task", args: { subagent_type: "coder" } },
+        ],
+      },
+      {
+        id: "tool-1-result",
+        type: "tool",
+        tool_call_id: "task-1",
+        content: "Task spawned. task_id=task-1",
+      },
+      {
+        id: "tool-2-result",
+        type: "tool",
+        tool_call_id: "task-2",
+        content: "Task spawned. task_id=task-2",
+      },
+    ] as Message[];
+
+    const ids = collectTaskToolCallIds(messages);
+    expect(ids.size).toBe(2);
+    expect(ids.has("task-1")).toBe(true);
+    expect(ids.has("task-2")).toBe(true);
+  });
+
+  test("ignores non-task tool calls", () => {
+    const messages = [
+      {
+        id: "ai-1",
+        type: "ai",
+        content: "",
+        tool_calls: [
+          { id: "task-1", name: "task", args: {} },
+          {
+            id: "wait-1",
+            name: "wait_for_tasks",
+            args: { task_ids: ["task-1"] },
+          },
+          { id: "bash-1", name: "bash", args: { command: "ls" } },
+        ],
+      },
+    ] as Message[];
+
+    const ids = collectTaskToolCallIds(messages);
+    expect(ids.size).toBe(1);
+    expect(ids.has("task-1")).toBe(true);
+    expect(ids.has("wait-1")).toBe(false);
+    expect(ids.has("bash-1")).toBe(false);
+  });
+
+  test("returns empty set when no task tool calls exist", () => {
+    const messages = [
+      {
+        id: "ai-1",
+        type: "ai",
+        content: "Hello",
+        tool_calls: [{ id: "bash-1", name: "bash", args: {} }],
+      },
+    ] as Message[];
+
+    const ids = collectTaskToolCallIds(messages);
+    expect(ids.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getMessageGroups: task + wait_for_tasks separation (root cause of
+// cross-group status restoration bug)
+// ---------------------------------------------------------------------------
+describe("getMessageGroups separates task and wait_for_tasks into different groups", () => {
+  test("task AI message and wait_for_tasks AI message form separate assistant:subagent groups", () => {
+    const messages = [
+      {
+        id: "human-1",
+        type: "human",
+        content: "Run a background task",
+      },
+      {
+        id: "ai-1",
+        type: "ai",
+        content: "",
+        tool_calls: [
+          {
+            id: "task-1",
+            name: "task",
+            args: { subagent_type: "researcher", detached: true },
+          },
+        ],
+      },
+      {
+        id: "tool-1-result",
+        type: "tool",
+        tool_call_id: "task-1",
+        content: "Task spawned. task_id=task-1.",
+      },
+      {
+        id: "ai-2",
+        type: "ai",
+        content: "",
+        tool_calls: [
+          {
+            id: "wait-1",
+            name: "wait_for_tasks",
+            args: { task_ids: ["task-1"] },
+          },
+        ],
+      },
+      {
+        id: "tool-wait-result",
+        type: "tool",
+        tool_call_id: "wait-1",
+        content: JSON.stringify({
+          "task-1": { status: "completed", result: "Done" },
+        }),
+      },
+    ] as Message[];
+
+    const groups = getMessageGroups(messages);
+    const subagentGroups = groups.filter(
+      (g) => g.type === "assistant:subagent",
+    );
+
+    // Root cause: each AI message with hasSubagent() creates a NEW group
+    expect(subagentGroups).toHaveLength(2);
+
+    // Group A: task tool call + its ToolMessage
+    expect(subagentGroups[0]?.messages.map((m) => m.id)).toEqual([
+      "ai-1",
+      "tool-1-result",
+    ]);
+
+    // Group B: wait_for_tasks tool call + its ToolMessage (JSON result)
+    expect(subagentGroups[1]?.messages.map((m) => m.id)).toEqual([
+      "ai-2",
+      "tool-wait-result",
+    ]);
+
+    // The thread-level set must include task-1 even though it's only in group A
+    const allTaskIds = collectTaskToolCallIds(messages);
+    expect(allTaskIds.has("task-1")).toBe(true);
   });
 });

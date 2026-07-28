@@ -308,6 +308,7 @@ export interface Translations {
     failed: string;
     idle: string;
     expired: string;
+    background: string;
   };
 
   // Wait for Tasks
@@ -595,5 +596,20 @@ export interface Translations {
       sso_account_exists: string;
       sso_not_allowed: string;
     };
+  };
+
+  // Activity panel
+  activity: {
+    title: string;
+    show: string;
+    hide: string;
+    todos: string;
+    subagents: string;
+  };
+
+  // Left panel toggle (activity + files)
+  leftPanel: {
+    show: string;
+    hide: string;
   };
 }

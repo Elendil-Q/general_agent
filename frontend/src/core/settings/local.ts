@@ -14,6 +14,7 @@ export const DEFAULT_LOCAL_SETTINGS: LocalSettings = {
     effort: undefined,
     reasoning_effort: undefined,
   },
+  leftPanel: {},
 };
 
 export const LOCAL_SETTINGS_KEY = "deerflow.local-settings";
@@ -44,6 +45,9 @@ export interface LocalSettings {
     effort: "flash" | "thinking" | "pro" | "ultra" | undefined;
     reasoning_effort?: "minimal" | "low" | "medium" | "high";
   };
+  leftPanel: {
+    open?: boolean;
+  };
 }
 
 function mergeLocalSettings(settings?: Partial<LocalSettings>): LocalSettings {
@@ -60,6 +64,10 @@ function mergeLocalSettings(settings?: Partial<LocalSettings>): LocalSettings {
     notification: {
       ...DEFAULT_LOCAL_SETTINGS.notification,
       ...settings?.notification,
+    },
+    leftPanel: {
+      ...DEFAULT_LOCAL_SETTINGS.leftPanel,
+      ...settings?.leftPanel,
     },
   };
 }

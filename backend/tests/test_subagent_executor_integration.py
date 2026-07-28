@@ -236,3 +236,48 @@ def test_lifecycle_events_on_execute_async(_setup_executor_classes):
         assert started_events, f"expected a 'started' lifecycle event for {task_id}, got {lifecycle_events!r}"
     finally:
         unsub()
+
+
+class _FakeStreamThatRaises:
+    """Streams one chunk then raises an exception, simulating a crashed subagent."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.captured_config: dict | None = None
+        self.captured_context: dict | None = None
+
+    async def astream(self, state, *, config, context, stream_mode):  # noqa: ARG002 - signature parity
+        self.captured_config = config
+        self.captured_context = context
+        yield {
+            "messages": [
+                HumanMessage(content="human-prompt"),
+                AIMessage(content="partial", id="m1"),
+            ],
+        }
+        raise self._error
+
+
+def test_failed_lifecycle_event_on_exception(_setup_executor_classes):
+    """_aexecute exception handler emits a 'failed' lifecycle event."""
+    classes = _setup_executor_classes
+    SubagentStatus = classes["SubagentStatus"]
+
+    from deerflow.subagents.event_bus import event_bus
+
+    lifecycle_events: list[dict] = []
+    unsub = event_bus.on("subagent:lifecycle", lifecycle_events.append)
+    try:
+        executor = _make_executor(classes, name="fail-emit")
+        fake_agent = _FakeStreamThatRaises(RuntimeError("subagent crashed"))
+        executor._build_initial_state = _noop_build_initial_state.__get__(executor)
+        executor._create_agent = lambda *a, **kw: fake_agent  # type: ignore[assignment]
+
+        result = executor.execute("test task that will fail")
+
+        assert result.status is SubagentStatus.FAILED, f"expected FAILED, got {result.status!r}"
+        failed_events = [e for e in lifecycle_events if e.get("event") == "failed"]
+        assert len(failed_events) >= 1, f"expected a 'failed' lifecycle event, got {lifecycle_events!r}"
+        assert "subagent crashed" in str(failed_events[0].get("error", ""))
+    finally:
+        unsub()

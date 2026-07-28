@@ -32,6 +32,7 @@ async def wait_for_tasks(
         task_ids: List of task IDs to wait for (returned by task(detached=True)).
     """
     from deerflow.subagents.agent_registry import agent_registry
+    from deerflow.subagents.event_bus import event_bus
     from deerflow.subagents.sse_bridge import sse_bridge
 
     thread_id = runtime.context.get("thread_id") if runtime.context else None
@@ -71,6 +72,16 @@ async def wait_for_tasks(
                         "error": error_val,
                     }
                     done.add(tid)
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {
+                            "event": status.value,
+                            "task_id": tid,
+                            "thread_id": thread_id or "",
+                            "result": result_val,
+                            "error": error_val,
+                        },
+                    )
 
             pending -= done
             if pending:

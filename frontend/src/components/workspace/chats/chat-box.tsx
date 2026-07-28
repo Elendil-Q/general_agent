@@ -10,6 +10,7 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { ActivityPanel } from "@/components/workspace/activity";
 import { env } from "@/env";
 import { cn } from "@/lib/utils";
 
@@ -18,15 +19,18 @@ import {
   ArtifactFileList,
   useArtifacts,
 } from "../artifacts";
-import { useFileBrowser } from "../file-browser/context";
 import { FileBrowserPanel } from "../file-browser/file-browser-panel";
+import { useLeftPanel } from "../left-panel";
 import { useThread } from "../messages/context";
 
-// Three-panel layouts: { "file-browser", chat, artifacts } percentages
-const LAYOUT_BOTH_CLOSED = { "file-browser": 0, chat: 100, artifacts: 0 };
-const LAYOUT_FILE_BROWSER_ONLY = { "file-browser": 20, chat: 80, artifacts: 0 };
-const LAYOUT_ARTIFACTS_ONLY = { "file-browser": 0, chat: 60, artifacts: 40 };
-const LAYOUT_BOTH_OPEN = { "file-browser": 18, chat: 47, artifacts: 35 };
+// Three-panel layouts: { "left-column", chat, artifacts } percentages
+const LAYOUT_BOTH_CLOSED = { "left-column": 0, chat: 100, artifacts: 0 };
+const LAYOUT_LEFT_ONLY = { "left-column": 20, chat: 80, artifacts: 0 };
+const LAYOUT_ARTIFACTS_ONLY = { "left-column": 0, chat: 60, artifacts: 40 };
+const LAYOUT_BOTH_OPEN = { "left-column": 18, chat: 47, artifacts: 35 };
+
+// Vertical layout inside the left column: { activity, files } (fixed 35/65)
+const VERTICAL_LAYOUT = { activity: 35, files: 65 };
 
 const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
   children,
@@ -47,8 +51,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     selectedArtifact,
   } = useArtifacts();
 
-  const { open: fileBrowserOpen, setOpen: setFileBrowserOpen } =
-    useFileBrowser();
+  const { open: leftPanelOpen } = useLeftPanel();
 
   const [autoSelectFirstArtifact, setAutoSelectFirstArtifact] = useState(true);
   useEffect(() => {
@@ -99,14 +102,14 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
 
   // Compute three-panel layout based on which panels are open
   const layout = useMemo(() => {
-    const hasFileBrowser = fileBrowserOpen;
+    const hasLeft = leftPanelOpen;
     const hasArtifacts = artifactPanelOpen;
 
-    if (hasFileBrowser && hasArtifacts) return LAYOUT_BOTH_OPEN;
-    if (hasFileBrowser) return LAYOUT_FILE_BROWSER_ONLY;
+    if (hasLeft && hasArtifacts) return LAYOUT_BOTH_OPEN;
+    if (hasLeft) return LAYOUT_LEFT_ONLY;
     if (hasArtifacts) return LAYOUT_ARTIFACTS_ONLY;
     return LAYOUT_BOTH_CLOSED;
-  }, [fileBrowserOpen, artifactPanelOpen]);
+  }, [leftPanelOpen, artifactPanelOpen]);
 
   useEffect(() => {
     if (layoutRef.current) {
@@ -118,36 +121,54 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
     <ResizablePanelGroup
       id={`${resizableIdBase}-panels`}
       orientation="horizontal"
-      defaultLayout={{ "file-browser": 0, chat: 100, artifacts: 0 }}
+      defaultLayout={{ "left-column": 0, chat: 100, artifacts: 0 }}
       resizeTargetMinimumSize={{ coarse: 0, fine: 0 }}
       groupRef={layoutRef}
     >
-      {/* ── File Browser Panel (left) ── */}
+      {/* ── Left column: Activity (top) + Files (bottom) ── */}
       <ResizablePanel
         className={cn(
           "transition-all duration-300 ease-in-out",
-          !fileBrowserOpen && "opacity-0",
+          !leftPanelOpen && "opacity-0",
         )}
         defaultSize={0}
-        id="file-browser"
+        id="left-column"
       >
         <div
           className={cn(
             "h-full transition-transform duration-300 ease-in-out",
-            fileBrowserOpen ? "translate-x-0" : "-translate-x-full",
+            leftPanelOpen ? "translate-x-0" : "-translate-x-full",
           )}
         >
-          <FileBrowserPanel
-            threadId={threadId}
-            onClose={() => setFileBrowserOpen(false)}
-          />
+          <ResizablePanelGroup
+            id={`${resizableIdBase}-left-panels`}
+            orientation="vertical"
+            defaultLayout={VERTICAL_LAYOUT}
+            resizeTargetMinimumSize={{ coarse: 0, fine: 0 }}
+          >
+            <ResizablePanel id="activity">
+              <ActivityPanel />
+            </ResizablePanel>
+
+            <ResizableHandle
+              disabled
+              className={cn(
+                "opacity-33 hover:opacity-100",
+                !leftPanelOpen && "pointer-events-none opacity-0",
+              )}
+            />
+
+            <ResizablePanel id="files">
+              <FileBrowserPanel threadId={threadId} />
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </div>
       </ResizablePanel>
 
       <ResizableHandle
         id={`${resizableIdBase}-file-browser-separator`}
         disabled
-        className={cn(!fileBrowserOpen && "pointer-events-none opacity-0")}
+        className={cn(!leftPanelOpen && "pointer-events-none opacity-0")}
       />
 
       {/* ── Chat Panel (center) ── */}

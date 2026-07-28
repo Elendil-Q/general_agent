@@ -378,6 +378,7 @@ export const zhCN: Translations = {
     failed: "子任务失败",
     idle: "休眠中，等待后续指令",
     expired: "子任务已过期",
+    background: "后台运行中",
   },
 
   waitForTasks: {
@@ -637,6 +638,7 @@ export const zhCN: Translations = {
       emptyDescription: "相关的致谢信息会展示在这里。",
     },
   },
+  // Login / Auth
   login: {
     signInTitle: "登录你的账号",
     createAccountTitle: "创建新账号",
@@ -673,5 +675,19 @@ export const zhCN: Translations = {
         "该邮箱对应的账号已存在。请使用密码登录或联系管理员。",
       sso_not_allowed: "你的账号不允许使用 SSO 登录。请联系管理员。",
     },
+  },
+  // Activity panel
+  activity: {
+    title: "活动",
+    show: "显示活动面板",
+    hide: "隐藏活动面板",
+    todos: "待办事项",
+    subagents: "子代理",
+  },
+
+  // Left panel toggle (activity + files)
+  leftPanel: {
+    show: "显示活动与文件",
+    hide: "隐藏活动与文件",
   },
 };

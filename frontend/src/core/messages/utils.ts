@@ -469,6 +469,20 @@ export function hasSubagent(message: AIMessage) {
   return false;
 }
 
+export function collectTaskToolCallIds(messages: Message[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.type === "ai") {
+      for (const toolCall of message.tool_calls ?? []) {
+        if (toolCall.name === "task" && toolCall.id) {
+          ids.add(toolCall.id);
+        }
+      }
+    }
+  }
+  return ids;
+}
+
 export function findToolCallResult(toolCallId: string, messages: Message[]) {
   for (const message of messages) {
     if (message.type === "tool" && message.tool_call_id === toolCallId) {
