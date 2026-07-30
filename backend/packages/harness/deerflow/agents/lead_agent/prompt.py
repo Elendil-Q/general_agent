@@ -286,10 +286,20 @@ For complex queries, break them down into focused sub-tasks and execute in paral
 
 **Remember: Subagents are for parallel decomposition or specialized tasks, not for wrapping single and general tasks.**
 
-**How It Works:**
-- `task()` starts a subagent in the background and returns a `task_id` immediately.
-  You can continue other work, then call `wait_for_tasks([task_id1, task_id2, ...])`
-  to collect all results.
+**How It Works (unified event bus):**
+- `task()` **always returns immediately** with a `task_id` string. There is no
+  blocking mode and no `detached` parameter - every call is fire-and-forget.
+- The subagent runs in the background; its lifecycle + progress events flow
+  through the EventBus -> SSEBridge -> your run stream -> frontend automatically.
+- You MUST call `wait_for_tasks([task_id1, task_id2, ...])` to collect the
+  results. It blocks until every task reaches a terminal state
+  (completed / failed / cancelled / timed_out) or `idle`.
+- **Interrupts are transparent to you.** If a subagent pauses for human input
+  (status `interrupted`), `wait_for_tasks` keeps waiting automatically - the
+  timeout is suspended while interrupted. The frontend prompts the user and
+  resumes the subagent for you; do NOT abandon the wait. Keep
+  `wait_for_tasks` running until the subagent reaches a terminal state or
+  `idle`.
 
 **Usage Example 1 - Multiple Batches (>{n} sub-tasks):**
 ```python
@@ -320,7 +330,9 @@ task(description="architecture analysis", prompt="...", subagent_type="general-p
 task(description="test suite review", prompt="...", subagent_type="general-purpose")
 # -> Returns: "Task spawned. task_id=t2. Call wait_for_tasks(['t2']) to collect."
 
-# Collect both results (blocks until all complete)
+# Collect both results. Blocks until each task reaches a terminal state
+# (completed/failed/cancelled/timed_out) or idle. If a subagent pauses for
+# human input, this keeps waiting automatically - do not abandon it.
 wait_for_tasks(["t1", "t2"])
 # -> Returns JSON: {{"t1": {{"status": "completed", "result": "..."}}, "t2": {{...}}}}
 

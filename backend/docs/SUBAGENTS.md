@@ -10,20 +10,22 @@ Subagent 是 lead agent（主智能体）通过 `task` 工具委托的子任务�
 Lead Agent (model ↔ tools loop)
     │
     ├─ model 生成 AIMessage(tool_calls=[{name: "task", ...}, ...])
-    ├─ SubagentLimitMiddleware 截断超限 task 调用 (after_model)
+    ├─ SubagentContextMiddleware
+    │     ├─ awrap_model_call: 注入实时 subagent 状态 (SubagentStatusMessage)
+    │     └─ aafter_model: 截断超限 task 调用 + pending-task 守卫 (强制 wait_for_tasks)
     ├─ ToolNode 执行 task 工具
     │     │
-    │     ├─ task_tool(): 解析 subagent_type → 获取 SubagentConfig → 构建 SubagentExecutor
+    │     ├─ task_tool(): 解析 subagent_type -> 获取 SubagentConfig -> 构建 SubagentExecutor
     │     ├─ executor.execute_async(prompt, task_id=tool_call_id)
     │     │     └─ _scheduler_pool (ThreadPoolExecutor, 3 workers)
     │     │           └─ _submit_to_isolated_loop_in_context()
     │     │                 └─ 持久隔离 event loop (daemon thread)
     │     │                       └─ executor._aexecute(task, result_holder)
     │     │                             ├─ _build_initial_state(task)
-    │     │                             │     ├─ _load_skills() → default skills (全文注入)
-    │     │                             │     ├─ _load_on_demand_skills() → 仅目录
-    │     │                             │     ├─ _apply_skill_allowed_tools() → 策略过滤
-    │     │                             │     ├─ assemble_deferred_tools() → MCP 延迟加载
+    │     │                             │     ├─ _load_skills() -> default skills (全文注入)
+    │     │                             │     ├─ _load_on_demand_skills() -> 仅目录
+    │     │                             │     ├─ _apply_skill_allowed_tools() -> 策略过滤
+    │     │                             │     ├─ assemble_deferred_tools() -> MCP 延迟加载
     │     │                             │     └─ 组装 SystemMessage + HumanMessage
     │     │                             ├─ _create_agent(tools)
     │     │                             │     ├─ build_subagent_agent() [create_agent 模式]
@@ -31,32 +33,52 @@ Lead Agent (model ↔ tools loop)
     │     │                             │     │     ├─ build_subagent_runtime_middlewares()
     │     │                             │     │     └─ create_agent(model, tools, middlewares, ThreadState, checkpointer)
     │     │                             │     └─ _create_workflow_agent() [workflow 模式]
-    │     │                             │           └─ resolve_variable(config.workflow) → build_graph(model, tools, config)
+    │     │                             │           └─ resolve_variable(config.workflow) -> build_graph(model, tools, config)
     │     │                             ├─ agent.astream(state, config, context, stream_mode="values")
     │     │                             │     ├─ 协作取消检查 (cancel_event)
     │     │                             │     ├─ __interrupt__ 检测
     │     │                             │     └─ AI 消息采集 (按 message.id 去重)
-    │     │                             └─ SubagentResult (try_set_terminal / try_set_interrupted)
+    │     │                             └─ Executor 是唯一事件发射者:
+    │     │                                   event_bus.emit("subagent:lifecycle"|"subagent:progress"|"subagent:budget")
     │     │
-    │     └─ 轮询循环 (每 5s)
-    │           ├─ get_background_task_result(task_id)
-    │           ├─ 状态转换 → SSE 事件 (task_started/running/completed/failed/...)
-    │           ├─ INTERRUPTED → 发 task_interrupted SSE 一次，继续轮询
-    │           └─ COMPLETED → 返回结果字符串 → cleanup
+    │     ├─ task_tool 注册 SSE writer: sse_bridge.register_writer(thread_id, writer)
+    │     ├─ task_tool 发 started 生命周期事件 -> 立即返回 task_id 字符串 (不阻塞、不轮询)
+    │     │
+    │     └─ 统一事件流 (EventBus -> SSEBridge -> writer -> lead run stream -> 前端):
+    │           EventBus (进程级 pub/sub 单例)
+    │             └─ SSEBridge 订阅 lifecycle/progress/budget 频道
+    │                   └─ 按 thread_id 路由到注册的 writer
+    │                         └─ task_started/running/completed/failed/cancelled/timed_out/interrupted/idle/revived/expired
     │
-    ├─ ToolMessage(subagent 结果) 注入 messages
+    ├─ lead model 调用 wait_for_tasks([task_id, ...]) 收集结果
+    │     ├─ 轮询 agent_registry (每 5s)
+    │     ├─ 终端状态 (COMPLETED/FAILED/CANCELLED/TIMED_OUT) 或 IDLE -> 收集结果
+    │     ├─ INTERRUPTED -> 继续轮询 (超时暂停)，前端提示用户，subagent 自动恢复
+    │     └─ 返回 JSON 结果 -> 清理终端任务
+    │
+    ├─ ToolMessage(wait_for_tasks 结果) 注入 messages
     ├─ ToolErrorHandlingMiddleware 在 ToolMessage 上戳 subagent_status (status_contract.py)
     └─ TokenUsageMiddleware 合并 subagent token 用量到父 AIMessage
 ```
 
+统一事件总线要点：
+- **Executor 是唯一事件发射者**：所有生命周期（started/running/completed/failed/...）和进度事件都由 `SubagentExecutor` 通过 `event_bus.emit()` 发出，`task_tool` 不再自行发 SSE 事件。
+- **`task()` 立即返回**：`task_tool` 注册 writer、发 started 事件后立即返回 `task_id` 字符串，无阻塞轮询循环、无 `detached` 参数。
+- **`wait_for_tasks()` 负责收集**：lead 必须显式调用 `wait_for_tasks([task_id, ...])` 获取结果；它轮询 `agent_registry`，INTERRUPTED 时继续等待（超时暂停）。
+- **单一状态权威**：`agent_registry` 取代了原来的 `_background_tasks` / `_subagent_executors` 两个模块级字典。
+
 核心数据模型：
 
 ```
-SubagentConfig          — 配置（名称/提示词/工具/技能/模型/超时/最大轮次/workflow）
-SubagentResult          — 结果容器（任务 ID/状态/结果/错误/AI 消息/token 用量/中断负载）
-SubagentStatus(Enum)    — 状态机 (PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/TIMED_OUT/INTERRUPTED)
-SubagentExecutor        — 执行引擎（创建 agent、构造初始状态、流式运行、中断恢复）
-SubagentTokenCollector  — Token 采集回调
+SubagentConfig          - 配置（名称/提示词/工具/技能/模型/超时/最大轮次/workflow）
+SubagentResult          - 结果容器（任务 ID/状态/结果/错误/AI 消息/token 用量/中断负载）
+SubagentStatus(Enum)    - 状态机 (PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/TIMED_OUT/INTERRUPTED/IDLE)
+SubagentExecutor        - 执行引擎（创建 agent、构造初始状态、流式运行、中断恢复）+ 唯一事件发射者
+AgentRef                - 注册表条目（task_id/thread_id/status/config/executor/result/description/created_at/idle_since）
+AgentRegistry           - 进程级线程安全存储（取代 _background_tasks / _subagent_executors）
+EventBus                - 进程级 pub/sub 单例（lifecycle/progress/budget 频道）
+SSEBridge               - EventBus -> per-thread writer 桥接（按 thread_id 路由 SSE 事件）
+SubagentTokenCollector  - Token 采集回调
 ```
 
 关键源码位置：
@@ -68,10 +90,16 @@ SubagentTokenCollector  — Token 采集回调
 | `SubagentResult` / `SubagentStatus` | `packages/harness/deerflow/subagents/executor.py:52-204` |
 | `build_subagent_agent()` | `packages/harness/deerflow/subagents/builder.py:19` |
 | `task_tool()` | `packages/harness/deerflow/tools/builtins/task_tool.py:225` |
+| `wait_for_tasks()` | `packages/harness/deerflow/tools/builtins/wait_for_tasks.py` |
+| `follow_up()` | `packages/harness/deerflow/tools/builtins/follow_up.py` |
+| `AgentRef` / `AgentRegistry` / `agent_registry` | `packages/harness/deerflow/subagents/agent_registry.py` |
+| `EventBus` / `event_bus` | `packages/harness/deerflow/subagents/event_bus.py` |
+| `SSEBridge` / `sse_bridge` | `packages/harness/deerflow/subagents/sse_bridge.py` |
 | `build_subagent_runtime_middlewares()` | `packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py:210` |
-| `SubagentLimitMiddleware` | `packages/harness/deerflow/agents/middlewares/subagent_limit_middleware.py` |
+| `SubagentContextMiddleware` | `packages/harness/deerflow/agents/middlewares/subagent_context_middleware.py` |
 | `SubagentTokenCollector` | `packages/harness/deerflow/subagents/token_collector.py` |
 | `subagent_status` 契约 | `packages/harness/deerflow/subagents/status_contract.py` |
+| Resume 端点 | `app/gateway/routers/thread_runs.py:979` (`POST /{thread_id}/subagents/{task_id}/resume`) |
 
 ## Subagent 类型
 
@@ -155,36 +183,28 @@ executor = SubagentExecutor(
 
 `tool_call_id` 作为 `task_id` 传入，executor 据此派生 `subagent_thread_id = f"subagent::{thread_id}::{tool_call_id}"`。这使得中断的 subagent 可以通过 `task_id` 进行 API 寻址恢复。
 
-**阶段 D：启动后台执行**（`task_tool.py:388`）
+**阶段 D：启动后台执行 + 注册事件桥**（`task_tool.py:276-302`）
 
 ```python
-task_id = executor.execute_async(prompt, task_id=tool_call_id)
+task_id = executor.execute_async(prompt, task_id=tool_call_id)  # 提交到 _scheduler_pool
+agent_registry.update_status(task_id, SubagentStatus.RUNNING)    # 单一状态权威
+writer = get_stream_writer()
+sse_bridge.register_writer(thread_id, writer)                    # 注册 SSE writer
+event_bus.emit("subagent:lifecycle", {"event": "started", ...})  # Executor 是唯一事件源
+return f"Task spawned. task_id={task_id}. Call wait_for_tasks([{task_id!r}]) to collect."
 ```
 
-`execute_async()` 将任务提交到 `_scheduler_pool` (ThreadPoolExecutor, 3 workers)，异步运行在持久隔离 event loop 上。返回 `task_id` 后立即进入轮询。
+`execute_async()` 将任务提交到 `_scheduler_pool` (ThreadPoolExecutor, 3 workers)，异步运行在持久隔离 event loop 上。`task_tool` **立即返回** `task_id` 字符串 - 不阻塞、不轮询、无 `detached` 参数。结果的收集由 lead 显式调用 `wait_for_tasks()` 完成。
 
-**阶段 E：轮询循环**（`task_tool.py:411-530`）
+> **统一事件总线**：`task_tool` 在返回前注册 SSE writer 并发 `started` 生命周期事件。此后所有生命周期（running/completed/failed/cancelled/timed_out/interrupted/idle/revived/expired）和进度事件均由 `SubagentExecutor` 通过 `event_bus.emit()` 发出，经 `SSEBridge` 按 `thread_id` 路由到注册的 writer，最终流入 lead run stream 到达前端。`task_tool` 不再自行发 SSE 事件。
 
-每 5 秒轮询 `get_background_task_result(task_id)`：
+**阶段 E：结果收集（lead 侧 wait_for_tasks）**
 
-| 检测条件 | 动作 |
-|----------|------|
-| `result.status == COMPLETED` | 缓存 token 用量 → 发 `task_completed` SSE → 清理后台任务 → 返回 `"Task Succeeded. Result: ..."` |
-| `result.status == FAILED` | 缓存 token 用量 → 发 `task_failed` SSE → 清理 → 返回 `"Task failed. Error: ..."` |
-| `result.status == CANCELLED` | 缓存 token 用量 → 发 `task_cancelled` SSE → 清理 → 返回 `"Task cancelled by user."` |
-| `result.status == TIMED_OUT` | 缓存 token 用量 → 发 `task_timed_out` SSE → 清理 → 返回 `"Task timed out. Error: ..."` |
-| `result.status == INTERRUPTED` | 发 `task_interrupted` SSE **仅一次** → **不返回**，继续轮询等待恢复 |
-| `poll_count > max_poll_count` | 超时保护：`(timeout_seconds + 60) / 5` 次轮询后返回 polling timeout |
-| 新 AI 消息 | 对每个新消息发 `task_running` SSE（含 message dict、message_index、total_messages） |
+`task_tool` 不再轮询。lead model 在发起 `task()` 调用后，必须显式调用 `wait_for_tasks([task_id, ...])` 收集结果（详见 [`wait_for_tasks` 工具](#wait_for_tasks-结果收集工具) 章节）。
 
-**取消处理**（`task_tool.py:531-553`）
+**取消处理**
 
-当父 agent 被取消时，`task_tool` 捕获 `asyncio.CancelledError`：
-1. 调用 `request_cancel_background_task(task_id)` 设置 `cancel_event`（协作取消信号）
-2. 使用 `asyncio.shield()` 等待 subagent 到达终止状态以获取最终 token 用量
-3. 报告 token 用量到父 `RunJournal`
-4. 清理或调度延迟清理
-5. 重新 `raise` 传播取消
+当父 agent run 被取消时，executor 的 `_aexecute` 流式循环在下一个 astream 迭代边界检测到 `cancel_event`，将状态转为 `CANCELLED` 并发 `cancelled` 生命周期事件。Token 用量由 `SubagentTokenCollector` 采集，通过 `agent_registry` 中的 resident `SubagentResult` 暴露，供 `wait_for_tasks` / RunJournal 上报。
 
 ## 执行引擎 (SubagentExecutor)
 
@@ -219,10 +239,11 @@ _scheduler_pool (ThreadPoolExecutor, 3 workers)
 2. 有 → 通过 `_execute_in_isolated_loop()` 同步等待持久 loop 上的 future
 3. 无 → 直接 `asyncio.run(self._aexecute(task))`
 
-**`execute_async(task, task_id)`（后台）** — `executor.py:1118`:
-1. 创建 `SubagentResult(PENDING)`，注册到 `_background_tasks[task_id]` 和 `_subagent_executors[task_id]`
+**`execute_async(task, task_id)`（后台）** — `executor.py:1311`:
+1. 创建 `SubagentResult(PENDING)`，将 executor + result 注册到 `agent_registry`（单一状态权威，取代旧的 `_background_tasks` / `_subagent_executors` 模块级字典）
 2. 提交到 `_scheduler_pool`：worker 中设置 status=RUNNING，提交到持久 loop，`Future.result(timeout=)` 等待
 3. 超时 → `cancel_event.set()` + `try_set_terminal(TIMED_OUT)` + 取消 future
+4. 返回 `task_id`（调用方 `task_tool` 据此立即返回，不阻塞）
 
 ### Checkpointer 隔离
 
@@ -317,7 +338,7 @@ def is_terminal(self) -> bool:
 
 @property
 def is_stopped(self) -> bool:
-    """Terminal 或 paused — 轮询循环应停止等待"""
+    """Terminal 或 paused — 处于此状态的 subagent 不在活跃执行"""
     return self.is_terminal or self is INTERRUPTED
 ```
 
@@ -383,31 +404,43 @@ class SubagentResult:
 
 ### 后台任务生命周期管理
 
+所有任务状态统一存储在 `agent_registry`（`subagents/agent_registry.py`），键为 `task_id`。已删除旧的 `_background_tasks` 和 `_subagent_executors` 字典。
+
 ```
 execute_async()
-  └─ _background_tasks[task_id] = SubagentResult(PENDING)
-  └─ _subagent_executors[task_id] = self
+  └─ agent_registry.register(AgentRef(task_id, status=PENDING, ...))
   └─ _scheduler_pool.submit(run_task)
-       └─ _background_tasks[task_id].status = RUNNING
+       └─ agent_registry.update_status(task_id, RUNNING)
        └─ _submit_to_isolated_loop(self._aexecute)
        └─ Future.result(timeout=...)  # 阻塞等待执行结束或超时
   return task_id
 
-轮询循环 (task_tool)              后台线程
+task() 工具 (task_tool)             后台线程
   ┌─────────────────────┐          ┌──────────────────────────┐
-  │ while True:          │          │  agent.astream(...)      │
-  │   result = get_bt(t) │ ◄─────── │  检测 cancel_event       │
-  │   switch status:     │          │  收集 AI 消息            │
-  │     COMPLETED → break│          │  写入 SubagentResult     │
-  │     INTERRUPTED →    │          └──────────────────────────┘
-  │       继续轮询        │
-  │   sleep(5)           │
+  │ execute_async(...)   │          │  agent.astream(...)      │
+  │ 注册 SSE writer       │          │  检测 cancel_event       │
+  │ 立即返回 task_id      │          │  收集 AI 消息            │
+  │ 不轮询                │          │  直接 emit 事件到        │
+  └─────────────────────┘          │  EventBus (lifecycle +    │
+                                    │  progress)               │
+wait_for_tasks([task_id])          │  写入 SubagentResult     │
+  ┌─────────────────────┐          └──────────────────────────┘
+  │ 注册 SSE writer       │
+  │ while task_ids:       │
+  │   ref = registry.get  │
+  │   if is_terminal      │
+  │     or IDLE → done    │
+  │   sleep(1)            │
+  │   仅 RUNNING 时       │
+  │   推进超时计数         │
   └─────────────────────┘
 
 cleanup_background_task(task_id)
-  └─ 仅 is_terminal → del _background_tasks[task_id]
-  └─ INTERRUPTED → 不删除（等待 resume）
+  └─ 仅 is_terminal → agent_registry.remove(task_id)
+  └─ INTERRUPTED / IDLE → 不删除（等待 resume / follow_up）
 ```
+
+执行器（`SubagentExecutor`）是**唯一的事件发射源**。在 `_aexecute` / `_aresume` / `_acontinue` 的 astream 循环中直接 emit `subagent:lifecycle`（`started`/`running`/`completed`/`failed`/`cancelled`/`timed_out`/`interrupted`/`idle`/`revived`/`expired`）和 `subagent:progress`（含 `message` / `message_index` / `total_messages` 内容）。事件通过 `EventBus` → `SSEBridge` → lead run 的 LangGraph stream writer → 前端。
 
 ## 中间件链
 
@@ -501,9 +534,9 @@ Subagent 支持两种 skill 加载方式，通过 `config.skills` 和 `config.sk
 
 两者的 `allowed_tools` 策略都会在 `_apply_skill_allowed_tools()` (`executor.py:756`) 中合并处理，确保工具在 subagent 启动时就可调用（避免会话中途工具可用性跳变）。
 
-## 中断与恢复 (Route 甲)
+## 中断与恢复
 
-Subagent 支持 `interrupt()` 挂起等待人类输入，lead agent 保持在 `task` 工具中阻塞，用户回复后 subagent 恢复并在**同一 lead turn** 中返回结果。
+Subagent 支持 `interrupt()` 挂起等待人类输入。中断事件通过统一的 EventBus 路径传递：executor 直接 emit 事件 → EventBus → SSEBridge → lead run stream → 前端。`wait_for_tasks` 轮询穿透 INTERRUPTED（不立即返回），保持 writer 注册以接收恢复后的事件。
 
 ### 完整流程
 
@@ -514,61 +547,63 @@ Subagent 支持 `interrupt()` 挂起等待人类输入，lead agent 保持在 `t
      ↓
 3. LangGraph yield __interrupt__ chunk → astream 循环捕获
      ↓
-4. executor._aexecute: result.try_set_interrupted(interrupts, subagent_thread_id)
+4. executor._aexecute:
+   - result.try_set_interrupted(interrupts, subagent_thread_id)
+   - emit subagent:lifecycle interrupted → EventBus → SSEBridge → writer → 前端
      ↓
-5. task_tool 轮询检测 INTERRUPTED:
-   - 发 task_interrupted SSE 事件 (含 task_id, subagent_thread_id, interrupts)
-   - interrupt_announced = True (防止重复发送)
-   - 继续轮询 (不返回，lead 保持阻塞)
+5. wait_for_tasks 轮询检测 INTERRUPTED:
+   - 继续轮询（不返回，lead 保持在工具调用中）
+   - 超时暂停：INTERRUPTED 时不推进计时器
      ↓
 6. 前端收到 task_interrupted → 渲染问询表单
      ↓
 7. 用户提交答案 → 前端 POST /api/threads/{thread_id}/subagents/{task_id}/resume
+   → 202 fire-and-forget (resume 事件通过 EventBus 到达前端)
      ↓
 8. resume_background_subagent(task_id, resume_value)
    → executor.resume_async(resume_value, task_id)
    → result_holder.try_resume() (INTERRUPTED → RUNNING)
-   → _scheduler_pool.submit → _submit_to_isolated_loop → _aresume(resume_value)
+   → _scheduler_pool.submit → _aresume(resume_value)
      ↓
-9. _aresume: 使用相同的子 agent + checkpointer
-   → agent.astream(Command(resume=resume_value), ...)
-   → 同样的 stream 循环（cancel detection, interrupt detection, AI message collection）
+9. _aresume:
+   - emit subagent:lifecycle running → 前端
+   - agent.astream(Command(resume=resume_value), ...)
+   - emit subagent:progress 带消息内容 → 前端
      ↓
-10. 完成: try_set_terminal(COMPLETED) → task_tool 轮询检测 → 返回结果
-    或再中断: try_set_interrupted → step 5-9 重复
-    或失败: try_set_terminal(FAILED)
+10. 完成: emit subagent:lifecycle completed
+    → wait_for_tasks 检测 COMPLETED → 返回结果 (同一 turn)
+    或再中断: emit subagent:lifecycle interrupted → step 5-9 重复
+    或失败: emit subagent:lifecycle failed
 ```
 
 ### 关键设计细节
 
-**超时暂停**（`task_tool.py:509-512`）：
+**executor 是唯一事件发射者**：`_aexecute`、`_aresume`、`_acontinue` 的所有生命周期和进度事件都直接 emit 到 process-global EventBus。不再有 task_tool 轮询循环或 `_subagent_resume_event_stream` SSB 生成器重复发射事件。
+
+**超时暂停**（`wait_for_tasks.py`）：
 ```python
 # 只有 RUNNING 状态的轮询推进超时计数
-if result.status != SubagentStatus.INTERRUPTED:
-    poll_count += 1
+if any((r := agent_registry.get(tid)) and r.status == SubagentStatus.RUNNING for tid in pending):
+    elapsed += DEFAULT_POLL_SECONDS
 ```
 INTERRUPTED 时轮询仍每 5s 检查一次（等待恢复），但不消耗超时配额。这防止了缓慢的人类回复触发执行超时。
 
-**再中断支持**（`task_tool.py:426-429`）：
-```python
-# 当 subagent 离开 INTERRUPTED 状态时重置 announce 锁
-if last_status is SubagentStatus.INTERRUPTED:
-    interrupt_announced = False
-```
-恢复后的 subagent 如果再次调用 `interrupt()`，`task_interrupted` SSE 事件会重新发送。
-
-**取消优先**（`executor.py:1000-1007`）：
+**取消优先**（`executor.py`）：
 ```python
 if result.cancel_event.is_set():  # 先检查 cancel
     result.try_set_terminal(CANCELLED)
+    event_bus.emit("subagent:lifecycle", {"event": "cancelled", ...})
     return result
 if interrupts:  # 再检查 interrupt
     result.try_set_interrupted(...)
+    event_bus.emit("subagent:lifecycle", {"event": "interrupted", ...})
     return result
 ```
 
-**Resume 端点验证**（Gateway `thread_runs.py:1058`）：
+**Resume 端点验证**（Gateway `thread_runs.py`）：
 - 通过 `subagent_thread_id == f"subagent::{thread_id}::{task_id}"` 验证子 agent 属于指定 thread
+- 返回 `202 JSONResponse`，恢复事件通过 EventBus → SSEBridge → writer → lead run stream 到达前端
+- fire-and-forget（前端 watch 子 agent 运行所在的 lead run stream）
 - 检查 task 确实处于 INTERRUPTED 状态（通过 `get_subagent_interrupt(task_id)`）
 
 **内存存活限制**：INTERRUPTED 的 subagent 状态、executor、checkpointer 全部驻留在进程内存中。Gateway 重启会丢失这些状态（与正常 tool 调用在 flight 时丢失是一致的折衷）。
@@ -624,7 +659,7 @@ Workflow subagent 必须遵守以下协议以确保 executor 的外层机制正�
    ToolNode(tools).ainvoke(state)
    ```
 3. **返回未编译的 `StateGraph`** — executor 负责 `graph.compile(checkpointer=self._checkpointer)`
-4. **可选的 `interrupt()`** — 如果 workflow 调用 `interrupt()`，外层 HITL 机制（Route 甲）自动生效
+4. **可选的 `interrupt()`** — 如果 workflow 调用 `interrupt()`，外层 HITL 机制（executor 事件发射 + wait_for_tasks 穿透轮询 + POST /resume）自动生效
 
 示例：`packages/harness/deerflow/workflows/research_review.py`
 
