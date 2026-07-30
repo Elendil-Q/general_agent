@@ -16,22 +16,16 @@ import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_checkpointer, get_current_user, get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.pagination import trim_run_message_page
-from app.gateway.services import format_sse, sse_consumer, start_run, wait_for_run_completion
+from app.gateway.services import sse_consumer, start_run, wait_for_run_completion
 from deerflow.runtime import RunRecord, RunStatus, serialize_channel_values_for_api
-from deerflow.subagents.executor import (
-    SubagentStatus,
-    get_background_task_result,
-    get_subagent_executor,
-    get_subagent_interrupt,
-    resume_background_subagent,
-)
+from deerflow.subagents.executor import get_subagent_interrupt, resume_background_subagent
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY, get_original_user_content_text, message_to_text
 
 logger = logging.getLogger(__name__)
@@ -982,79 +976,6 @@ async def delete_chain_progress(thread_id: str, chain_name: str, request: Reques
 # ---------------------------------------------------------------------------
 
 
-async def _subagent_resume_event_stream(task_id: str, description: str | None):
-    """Async generator yielding SSE frames for a resumed subagent run.
-
-    Mirrors ``task_tool``'s poll loop: emits ``task_started`` (resume), then
-    ``task_running`` for each new AI message, then a terminal
-    ``task_completed``/``task_failed``/``task_interrupted``/``task_timed_out``
-    and finally ``end``. The subagent's own timeout (in ``resume_async``) is the
-    safety net; this poll loop also has a bounded fallback.
-    """
-    import asyncio as _asyncio
-
-    yield format_sse("task_started", {"task_id": task_id, "resume": True, "description": description})
-
-    executor = get_subagent_executor(task_id)
-    timeout_seconds = getattr(getattr(executor, "config", None), "timeout_seconds", 1800)
-    max_poll_count = (timeout_seconds + 60) // 5
-    last_message_count = 0
-    poll_count = 0
-
-    while True:
-        result = get_background_task_result(task_id)
-        if result is None:
-            yield format_sse("task_failed", {"task_id": task_id, "error": "Task disappeared from background tasks"})
-            break
-
-        ai_messages = result.ai_messages or []
-        current_message_count = len(ai_messages)
-        if current_message_count > last_message_count:
-            for i in range(last_message_count, current_message_count):
-                yield format_sse(
-                    "task_running",
-                    {
-                        "task_id": task_id,
-                        "message": ai_messages[i],
-                        "message_index": i + 1,
-                        "total_messages": current_message_count,
-                    },
-                )
-            last_message_count = current_message_count
-
-        if result.status == SubagentStatus.COMPLETED:
-            yield format_sse("task_completed", {"task_id": task_id, "result": result.result})
-            break
-        if result.status == SubagentStatus.FAILED:
-            yield format_sse("task_failed", {"task_id": task_id, "error": result.error})
-            break
-        if result.status == SubagentStatus.CANCELLED:
-            yield format_sse("task_cancelled", {"task_id": task_id, "error": result.error})
-            break
-        if result.status == SubagentStatus.TIMED_OUT:
-            yield format_sse("task_timed_out", {"task_id": task_id, "error": result.error})
-            break
-        if result.status == SubagentStatus.INTERRUPTED:
-            yield format_sse(
-                "task_interrupted",
-                {
-                    "task_id": task_id,
-                    "subagent_thread_id": result.subagent_thread_id,
-                    "description": description,
-                    "interrupts": result.interrupts,
-                },
-            )
-            break
-
-        await _asyncio.sleep(5)
-        poll_count += 1
-        if poll_count > max_poll_count:
-            yield format_sse("task_timed_out", {"task_id": task_id, "error": "Resume polling timed out"})
-            break
-
-    yield format_sse("end", None)
-
-
 @router.post("/{thread_id}/subagents/{task_id}/resume")
 @require_permission("runs", "create", owner_check=True, require_existing=True)
 async def resume_subagent(
@@ -1062,20 +983,15 @@ async def resume_subagent(
     task_id: str,
     body: SubagentResumeRequest,
     request: Request,
-) -> StreamingResponse:
+) -> JSONResponse:
     """Resume an INTERRUPTED subagent belonging to this thread.
 
-    The subagent must have been launched by the ``task`` tool from this thread
-    and be currently paused on ``interrupt()``. The ``resume`` value is fed back
-    to ``interrupt()`` via ``Command(resume=...)`` on the subagent's own
-    checkpointer — the lead-agent pipeline is not involved. Streams the resumed
-    run's events as SSE (same ``task_*`` event shapes ``task_tool`` emits).
+    Fire-and-forget: returns 202 immediately. Resume events flow through
+    the EventBus -> SSEBridge -> lead run stream (watched by the frontend).
     """
     interrupt_meta = get_subagent_interrupt(task_id)
     if interrupt_meta is None:
         raise HTTPException(status_code=409, detail=f"Subagent task {task_id} is not interrupted")
-    # Verify the paused subagent actually belongs to this thread (task_id is the
-    # tool_call_id; subagent_thread_id is derived as "subagent::{thread_id}::{task_id}").
     expected_thread_id = f"subagent::{thread_id}::{task_id}"
     if interrupt_meta.get("subagent_thread_id") != expected_thread_id:
         raise HTTPException(status_code=404, detail=f"Subagent task {task_id} not found for thread {thread_id}")
@@ -1087,13 +1003,4 @@ async def resume_subagent(
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
-    description = interrupt_meta.get("description")
-    return StreamingResponse(
-        _subagent_resume_event_stream(task_id, description),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return JSONResponse(status_code=202, content={"task_id": task_id, "status": "resumed"})
