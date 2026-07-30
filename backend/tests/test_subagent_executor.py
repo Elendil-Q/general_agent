@@ -3261,6 +3261,39 @@ class TestAcontinueEventEmission:
         assert cancelled_events[0]["thread_id"] == "test-thread"
 
     @pytest.mark.anyio
+    async def test_acontinue_emits_cancelled_on_pre_loop_cancel(self, classes, base_config, mock_agent, msg):
+        """_acontinue must emit subagent:lifecycle cancelled when cancel_event is set before astream starts."""
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+        SubagentStatus = classes["SubagentStatus"]
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+        )
+        executor._agent = mock_agent
+
+        result_holder = self._make_running_holder(classes, executor)
+        result_holder.cancel_event.set()
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:lifecycle", lambda p: events.append(p))
+        try:
+            result = await executor._acontinue("continue prompt", "continue-task", result_holder)
+        finally:
+            unsub()
+
+        assert result.status == SubagentStatus.CANCELLED
+        cancelled_events = [e for e in events if e.get("event") == "cancelled"]
+        assert len(cancelled_events) == 1
+        assert cancelled_events[0]["task_id"] == "continue-task"
+        assert cancelled_events[0]["thread_id"] == "test-thread"
+        # astream must never be called when cancelled before the loop starts
+        mock_agent.astream.assert_not_called()
+
+    @pytest.mark.anyio
     async def test_acontinue_emits_failed_on_budget_exceeded(self, classes, msg):
         """_acontinue must emit subagent:lifecycle failed on budget exceeded."""
         from deerflow.subagents.event_bus import event_bus

@@ -1839,6 +1839,10 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {"event": "cancelled", "task_id": task_id, "thread_id": self.thread_id or ""},
+                )
                 return result
 
             async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
