@@ -163,7 +163,6 @@ def _wire_detached_mocks(monkeypatch, captured=None):
         "get_available_subagent_names",
         lambda **kw: ["general-purpose"],
     )
-    monkeypatch.setattr(task_tool_module, "is_host_bash_allowed", lambda: True)
     monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: lambda _e: None)
     monkeypatch.setattr("deerflow.tools.get_available_tools", lambda **_kw: [])
 

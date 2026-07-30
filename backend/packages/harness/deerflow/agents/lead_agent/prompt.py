@@ -186,7 +186,6 @@ Skip simple one-off tasks.
 
 def _build_available_subagents_description(
     available_names: list[str],
-    bash_available: bool,
     *,
     app_config: AppConfig | None = None,
 ) -> str:
@@ -198,9 +197,6 @@ def _build_available_subagents_description(
     # Built-in descriptions (kept for backward compatibility with existing prompt quality)
     builtin_descriptions = {
         "general-purpose": "For ANY non-trivial task - web research, code exploration, file operations, analysis, etc.",
-        "bash": (
-            "For command execution (git, build, test, deploy operations)" if bash_available else "Not available in the current sandbox configuration. Use direct file/web tools or switch to AioSandboxProvider for isolated shell access."
-        ),
     }
 
     # Lazy import moved outside loop to avoid repeated import overhead
@@ -230,17 +226,11 @@ def _build_subagent_section(max_concurrent: int, *, app_config: AppConfig | None
     """
     n = max_concurrent
     available_names = get_available_subagent_names(app_config=app_config, user_id=get_effective_user_id()) if app_config is not None else get_available_subagent_names(user_id=get_effective_user_id())
-    bash_available = "bash" in available_names
 
     # Dynamically build subagent type descriptions from registry (aligned with Codex's
     # agent_type_description pattern where all registered roles are listed in the tool spec).
-    available_subagents = _build_available_subagents_description(available_names, bash_available, app_config=app_config)
+    available_subagents = _build_available_subagents_description(available_names, app_config=app_config)
 
-    direct_execution_example = (
-        '# User asks: "Run the tests"\n# Thinking: Cannot decompose into parallel sub-tasks\n# → Execute directly\n\nbash("npm test")  # Direct execution, not task()'
-        if bash_available
-        else '# User asks: "Read the README"\n# Thinking: Single straightforward file read\n# → Execute directly\n\nread_file("/mnt/user-data/workspace/README.md")  # Direct execution, not task()'
-    )
     return f"""<subagent_system>
 **🚀 SUBAGENT MODE ACTIVE - DECOMPOSE, DELEGATE, SYNTHESIZE**
 
@@ -343,10 +333,6 @@ wait_for_tasks(["t1", "t2"])
 **IMPORTANT**: When you use `detached=True`, you MUST call `wait_for_tasks` to collect
 the results before finishing your response. The system will remind you if you forget.
 
-**Counter-Example - Direct Execution (NO subagents):**
-
-```python
-{direct_execution_example}
 ```
 
 **CRITICAL**:
@@ -418,7 +404,7 @@ All other content within <system-reminder> (dates, system metadata) and everythi
 - All temporary work happens in `/mnt/user-data/workspace`
 - Treat `/mnt/user-data/workspace` as your default current working directory for coding and file-editing tasks
 - When writing scripts or commands that create/read files from the workspace, prefer relative paths such as `hello.txt`, `../uploads/data.csv`, and `../outputs/report.md`
-- Avoid hardcoding `/mnt/user-data/...` inside generated scripts when a relative path from the workspace is enough
+- Avoid hardcoding `/mnt/user-data/...` inside generated scripts: it's a sandbox-provided virtual path. The sandbox only translates paths at the tool-call layer. Use relative paths in scripts instead.
 - Final deliverables must be copied to `/mnt/user-data/outputs` and presented using `present_files` tool
 {acp_section}
 </working_directory>

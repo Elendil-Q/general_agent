@@ -11,11 +11,12 @@ from deerflow.subagents.config import SubagentConfig
 
 def test_validate_subagent_name_rejects_builtins():
     assert validate_subagent_name("general-purpose") is None
-    assert validate_subagent_name("bash") is None
     assert validate_subagent_name("") is None
     assert validate_subagent_name("bad name!") is None
     assert validate_subagent_name("deep-researcher") == "deep-researcher"
     assert validate_subagent_name("Deep-Researcher") == "deep-researcher"
+    # "bash" is no longer a reserved built-in name after its removal.
+    assert validate_subagent_name("bash") == "bash"
 
 
 def test_save_and_load_user_subagent_round_trip(tmp_path, monkeypatch):

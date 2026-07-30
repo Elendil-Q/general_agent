@@ -32,31 +32,35 @@ export function ActivityPanel() {
           {t.activity.title}
         </div>
       </header>
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-4 p-3">
-          {todos.length > 0 && (
-            <section>
-              <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">
-                {t.activity.todos}
-              </h3>
+      <div className="flex min-h-0 flex-1 flex-col">
+        {todos.length > 0 && (
+          <section className="flex shrink-0 flex-col border-b">
+            <h3 className="text-muted-foreground px-3 pt-3 text-xs font-semibold uppercase">
+              {t.activity.todos}
+            </h3>
+            <div className="px-3 pt-2 pb-3">
               <TodoList
                 todos={todos}
                 collapsed={false}
                 variant="sidebar"
                 className="rounded-lg border"
               />
-            </section>
-          )}
-          {activeTasks.length > 0 && (
-            <section>
-              <h3 className="text-muted-foreground mb-2 text-xs font-semibold uppercase">
-                {t.activity.subagents}
-              </h3>
-              <SubagentList tasks={activeTasks} />
-            </section>
-          )}
-        </div>
-      </ScrollArea>
+            </div>
+          </section>
+        )}
+        {activeTasks.length > 0 && (
+          <section className="flex min-h-0 flex-1 flex-col">
+            <h3 className="text-muted-foreground shrink-0 px-3 pt-3 text-xs font-semibold uppercase">
+              {t.activity.subagents}
+            </h3>
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="px-3 pt-2 pb-3">
+                <SubagentList tasks={activeTasks} />
+              </div>
+            </ScrollArea>
+          </section>
+        )}
+      </div>
     </div>
   );
 }

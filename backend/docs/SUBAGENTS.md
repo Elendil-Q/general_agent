@@ -84,9 +84,6 @@ SubagentTokenCollector  — Token 采集回调
 | 名称 | 文件 | max_turns | 工具限制 |
 |------|------|-----------|----------|
 | `general-purpose` | `builtins/general_purpose.py:5` | 150 | 继承所有父工具，禁用 `task` / `present_files`，允许 `ask_clarification`（支持中断） |
-| `bash` | `builtins/bash_agent.py:5` | 60 | 仅 `bash`/`ls`/`read_file`/`write_file`/`str_replace`，禁用 `task`/`ask_clarification`/`present_files` |
-
-`bash` 在沙箱配置不允许 host bash 时不可用（`get_available_subagent_names()` 运行时过滤）。
 
 ### 2. Custom Subagents（create_agent 模式）
 
@@ -107,7 +104,7 @@ SubagentTokenCollector  — Token 采集回调
 async def task_tool(
     description: str,       # 简要描述 (1-2 句)
     prompt: str,            # 详细任务指令
-    subagent_type: str,     # "general-purpose" / "bash" / 自定义名称
+    subagent_type: str,     # "general-purpose" / 自定义名称
     tool_call_id,           # LangChain 注入
     runtime: Runtime,       # LangGraph 注入
 ) -> str:
@@ -118,8 +115,7 @@ async def task_tool(
 **阶段 A：配置解析**（`task_tool.py:273-339`）
 
 1. `get_subagent_config(subagent_type)` 从注册表中按优先级解析 SubagentConfig
-2. 检查 `bash` 类型是否可用（沙箱 host bash 允许）
-3. 从 `runtime` 提取父 agent 上下文：`sandbox_state`、`thread_data`、`thread_id`、`parent_model`、`trace_id`、`user_id`、`user_role`、`oauth_provider`、`oauth_id`、`run_id`、`clarification_interrupt_enabled`
+2. 从 `runtime` 提取父 agent 上下文：`sandbox_state`、`thread_data`、`thread_id`、`parent_model`、`trace_id`、`user_id`、`user_role`、`oauth_provider`、`oauth_id`、`run_id`、`clarification_interrupt_enabled`
 4. 合并 skill 白名单：如果父 agent 的 `available_skills` 存在，限制 subagent 只能加载父 agent 可见的 skill 子集
 5. 解析有效模型名称：`resolve_subagent_model_name(config, parent_model)`
 
@@ -478,12 +474,10 @@ get_available_tools(subagent_enabled=False)  → 获取父 agent 可用的所有
     └─ _filter_tools(tools, config.tools, config.disallowed_tools)
          │
          ├─ 第一层 (allowlist): 如果 config.tools 不为 None，仅保留白名单中的工具
-         │      bash subagent: tools=["bash", "ls", "read_file", "write_file", "str_replace"]
-         │      general-purpose: tools=None → 不限制（继承全部）
+         │      general-purpose: tools=None -> 不限制（继承全部）
          │
          └─ 第二层 (denylist): 总是排除 config.disallowed_tools 中的工具
                 默认 disallowed_tools=["task"]（防止递归嵌套）
-                bash 额外排除 ask_clarification, present_files
                 general-purpose 额外排除 present_files
 
     └─ 第三层 (exclusive_tools): 加载额外工具，不经过父 agent 工具集

@@ -70,6 +70,7 @@ COPY backend ./backend
 # When UV_EXTRAS is set (e.g. "postgres"), installs optional dependencies.
 RUN --mount=type=cache,target=/root/.cache/uv \
     sh -c "cd backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync ${UV_EXTRAS:+--extra $UV_EXTRAS}"
+
 # Bake build backend (hatchling) into the persistent image cache so dev
 # containers can run `uv sync --offline` on air-gapped hosts. The
 # --mount=type=cache above is ephemeral (BuildKit), so hatchling would
@@ -79,7 +80,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # for the deerflow-harness workspace member: "No solution found when
 # resolving: hatchling".
 RUN cd backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} \
-    uv pip download --no-deps hatchling
+    uv pip install --no-deps --no-compile hatchling || \
+    pip download --no-deps --dest /root/.cache/uv/wheels hatchling
 
 # UTF-8 locale prevents UnicodeEncodeError on Chinese/emoji content in minimal
 # containers where locale configuration may be missing and the default encoding is not UTF-8.

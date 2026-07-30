@@ -48,7 +48,7 @@
     {
       "name": "pre_unknown_subagent",
       "origin": "task_tool.py pre-execution Error path (unknown subagent type)",
-      "content": "Error: Unknown subagent type 'foo'. Available: bash, general-purpose",
+      "content": "Error: Unknown subagent type 'foo'. Available: general-purpose",
       "expected_status": "failed",
       "expected_error_contains": "Unknown subagent"
     },

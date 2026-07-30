@@ -99,13 +99,12 @@ describe("parseSubtaskResult", () => {
   });
 
   it("recognises task_tool pre-execution Error: returns via the wrapper", () => {
-    // `task_tool.py` returns three `Error:` strings for unknown subagent
-    // type, host-bash disabled, and "task disappeared". They share the
-    // ERROR_WRAPPER_PATTERN, not a dedicated prefix, so this guards
-    // against a refactor splitting them off.
+    // `task_tool.py` returns `Error:` strings for unknown subagent
+    // type and "task disappeared". They share the ERROR_WRAPPER_PATTERN,
+    // not a dedicated prefix, so this guards against a refactor splitting
+    // them off.
     for (const text of [
-      "Error: Unknown subagent type 'foo'. Available: bash, general-purpose",
-      "Error: Host bash subagent is disabled by configuration",
+      "Error: Unknown subagent type 'foo'. Available: general-purpose",
       "Error: Task 1234 disappeared from background tasks",
     ]) {
       expect(parseSubtaskResult(text).status).toBe("failed");

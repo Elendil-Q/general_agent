@@ -13,12 +13,6 @@ LOCAL_HOST_BASH_DISABLED_MESSAGE = (
     "sandbox.allow_host_bash: true only in a fully trusted local environment."
 )
 
-LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE = (
-    "Bash subagent is disabled for LocalSandboxProvider because host bash execution is not "
-    "a secure sandbox boundary. Switch to AioSandboxProvider for isolated bash access, or "
-    "set sandbox.allow_host_bash: true only in a fully trusted local environment."
-)
-
 
 def uses_local_sandbox_provider(config=None) -> bool:
     """Return True when the active sandbox provider is the host-local provider."""

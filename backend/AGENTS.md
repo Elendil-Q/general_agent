@@ -39,7 +39,7 @@ deer-flow/
 │   │           │   ├── tools.py       # bash, ls, read/write/str_replace
 │   │           │   └── middleware.py  # Sandbox lifecycle management
 │   │           ├── subagents/         # Subagent delegation system
-│   │           │   ├── builtins/      # general-purpose, bash agents
+│   │           │   ├── builtins/      # general-purpose agent
 │   │           │   ├── executor.py    # Background execution engine
 │   │           │   └── registry.py    # Agent registry
 │   │           ├── tools/builtins/    # Built-in tools (present_files, ask_clarification, view_image)
@@ -291,7 +291,7 @@ CORS is same-origin by default when requests enter through nginx on port 2026. S
 | **Runs** (`/api/runs`) | `POST /stream` - stateless run + SSE; `POST /wait` - stateless run + block; `GET /{rid}/messages` - paginated messages by run_id `{data, has_more}` (cursor: `after_seq`/`before_seq`); `GET /{rid}/feedback` - list feedback by run_id |
 | **Subagents** (`/api/subagents`) | `GET /` - list (built-in + per-user + global); `GET /check` - name availability; `GET /catalogs` - selectable tools/skills; `GET /{name}` - details; `POST /` - create (201); `PUT /{name}` - update; `DELETE /{name}` - delete (204) |
 
-**Custom Subagent Designer**: Per-user custom subagent types are designed via the `/api/subagents` CRUD router (`app/gateway/routers/subagents.py`) and persisted as `users/{user_id}/subagents/{name}.yaml` (`config/subagents_user_config.py`). The registry (`subagents/registry.py`) resolves names through a per-user shadow layer - built-in -> per-user -> global custom - when `user_id` is threaded from the auth context through `task_tool` and the lead prompt. Built-in names (`general-purpose`, `bash`) are reserved and never shadowed; `validate_subagent_name` rejects collisions at write time.
+**Custom Subagent Designer**: Per-user custom subagent types are designed via the `/api/subagents` CRUD router (`app/gateway/routers/subagents.py`) and persisted as `users/{user_id}/subagents/{name}.yaml` (`config/subagents_user_config.py`). The registry (`subagents/registry.py`) resolves names through a per-user shadow layer - built-in -> per-user -> global custom - when `user_id` is threaded from the auth context through `task_tool` and the lead prompt. Built-in names (`general-purpose`) are reserved and never shadowed; `validate_subagent_name` rejects collisions at write time.
 
 **RunManager / RunStore contract**:
 - `RunManager.get()` is async; direct callers must `await` it.
@@ -326,7 +326,7 @@ Proxied through nginx: `/api/langgraph/*` → Gateway LangGraph-compatible runti
 
 ### Subagent System (`packages/harness/deerflow/subagents/`)
 
-**Built-in Agents**: `general-purpose` (all tools except `task`/`present_files`; `ask_clarification` is allowed so it can pause for human input) and `bash` (command specialist; `ask_clarification` disallowed)
+**Built-in Agents**: `general-purpose` (all tools except `task`/`present_files`; `ask_clarification` is allowed so it can pause for human input)
 **Custom Agents**: Registered via YAML files under `subagents/{public,custom}/` (auto-discovered at runtime) or `config.yaml`'s `subagents.custom_agents` section. Config.yaml entries override YAML files of the same name (shadow semantics, same as chains/skills). Each YAML file defines `name`, `description`, `system_prompt`, `tools`, `disallowed_tools`, `exclusive_tools`, `skills`, `model`, `max_turns`, `timeout_seconds`, `keep_alive`, and optionally `workflow`. See `subagents/public/example-analyst.yaml` for a full example. `keep_alive` is also configurable as a per-agent override under `subagents.agents.*` (field-level merge, applies to both built-in and custom agents).
 **Exclusive Tools**: Custom subagents may declare `exclusive_tools` — a list of `resolve_variable("module.path:variable_name")` references that are loaded directly and merged into the subagent's toolset, even if the parent agent does not have them. These are resolved at executor construction time and are not subject to parent-agent `tools`/`disallowed_tools` filtering.
 **Execution**: Dual thread pool - `_scheduler_pool` (3 workers) + `_execution_pool` (3 workers)

@@ -243,7 +243,19 @@ tool_groups:
 
 ### Tools
 
-Configure specific tools available to the agent:
+Configure specific tools available to the agent. The agent's final toolset is assembled from **multiple sources**, not just `config.yaml`:
+
+| Source | Where Defined | Always Loaded? | Affected by `groups` filter? |
+|---|---|---|---|
+| **Config tools** | `config.yaml tools:` list | Yes (subject to sandbox allow checks) | Yes |
+| **Built-in: `ask_clarification`** | `tools/builtins/clarification_tool.py` | **Always** | No |
+| **Built-in: `present_files`** | `tools/builtins/present_file_tool.py` | **Always** | No |
+| **Built-in: `view_image`** | `tools/builtins/view_image_tool.py` | Only if model has `supports_vision: true` | No |
+| **Subagent tools** | `tools/builtins/task_tool.py` etc. | Only if `subagent_enabled=True` at runtime | No |
+| **MCP tools** | `extensions_config.json` `mcpServers` | Only if MCP servers enabled | No (but deferrable) |
+| **ACP tools** | `config.yaml` `acp_agents` | Only if ACP agents configured | No |
+
+**Config-defined tools** use a `use` field pointing to a Python dotted path:
 
 ```yaml
 tools:
@@ -254,15 +266,19 @@ tools:
     # api_key: $TAVILY_API_KEY  # Optional
 ```
 
-**Built-in Tools**:
-- `web_search` - Search the web (DuckDuckGo, Tavily, Brave, Exa, InfoQuest, Firecrawl, fastCRW, GroundRoute)
-- `web_fetch` - Fetch web pages (Jina AI, Exa, InfoQuest, Firecrawl, fastCRW, GroundRoute)
-- `image_search` - Search for reference images (DuckDuckGo, InfoQuest, Serper)
-- `ls` - List directory contents
-- `read_file` - Read file contents
-- `write_file` - Write file contents
-- `str_replace` - String replacement in files
-- `bash` - Execute bash commands
+The `use` path is resolved at runtime via `resolve_variable()`. Any extra fields (like `max_results`, `api_key`) are passed through to the tool constructor — see `ToolConfig` in `config/tool_config.py`.
+
+**Built-in tools** (`ask_clarification`, `present_files`) are hardcoded in `tools/tools.py::BUILTIN_TOOLS` and injected unconditionally. They are **not** defined in `config.yaml` and are **not** subject to `groups` filtering. For example, `ask_clarification` always appears in the agent's toolset regardless of which `tool_groups` are enabled.
+
+**Deduplication**: tools from all sources are merged by name. Config-defined tools take priority, followed by built-ins, MCP tools, and ACP tools. To suppress a built-in tool, define a tool with the same name in `config.yaml`.
+
+**Configurable tool implementations** (switch providers by changing `use`):
+- `web_search` — DuckDuckGo (default), Serper, Brave, Tavily, InfoQuest, Exa, Firecrawl, GroundRoute, fastCRW, SearXNG
+- `web_fetch` — Jina AI (default), Browserless, Exa, InfoQuest, Firecrawl, GroundRoute, fastCRW
+- `image_search` — DuckDuckGo (default), InfoQuest, Serper
+- `ls`, `read_file`, `glob`, `grep` — Local sandbox file read tools
+- `write_file`, `str_replace` — Local sandbox file write tools
+- `bash` — Local or Docker sandbox shell execution
 
 ### Sandbox
 

@@ -1055,7 +1055,7 @@ sandbox:
 #   # Custom agents use their own timeout_seconds (default 900) unless overridden.
 #   timeout_seconds: 1800
 #   # Optional global max-turn override for all subagents.
-#   # Built-in defaults: general-purpose=150, bash=60. Leave unset to keep them.
+#   # Built-in defaults: general-purpose=150. Leave unset to keep them.
 #   # max_turns: 120
 #
 #   # Optional per-agent overrides (applies to both built-in and custom agents)
@@ -1068,14 +1068,10 @@ sandbox:
   #       #   - web-search
   #       #   - data-analysis
   #       # keep_alive: true     # Keep subagent IDLE after completion so follow_up can revive it
-#     bash:
-#       timeout_seconds: 300   # 5 minutes for quick command execution
-#       max_turns: 80
-#       # skills: []            # No skills for bash agent
 #
 #   # Custom subagent types: define specialized agents with their own prompts,
 #   # tools, skills, and model configuration. Custom agents are available via
-#   # the `task` tool alongside built-in types (general-purpose, bash).
+#   # the `task` tool alongside built-in types (general-purpose).
 #   # You can also define custom subagents as standalone YAML files under
 #   # `subagents/public/` or `subagents/custom/` — see subagents/public/example-analyst.yaml.
 #   # Config.yaml entries override YAML files of the same name.

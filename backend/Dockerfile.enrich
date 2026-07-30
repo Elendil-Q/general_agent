@@ -1,0 +1,130 @@
+# Dockerfile.enrich
+# 基于 deer-flow-dev-gateway:latest 镜像，添加更完备的工具链
+# 用于给 agent 作为命令执行环境，同时也在本容器中运行 gateway
+
+FROM deer-flow-dev-gateway:latest
+
+ARG TARGETARCH
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Shanghai
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-${TARGETARCH}
+
+# 安装系统依赖
+# 包含：编译工具、Java运行时（JAR执行）、常用系统工具
+RUN apt-get update && apt-get install -y \
+    openjdk-17-jre-headless \
+    wget \
+    vim \
+    git \
+    jq \
+    unzip \
+    zip \
+    htop \
+    procps \
+    net-tools \
+    gcc \
+    g++ \
+    make \
+    libffi-dev \
+    libssl-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    libncurses5-dev \
+    libncursesw5-dev \
+    xz-utils \
+    tk-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libfreetype6-dev \
+    libwebp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 常用包
+# 使用 pip 直接安装到系统 Python（agent 执行脚本时可直接 python3，无需 uv run）
+
+WORKDIR /app
+
+RUN cat > /tmp/python-requirements.txt << 'EOF'
+numpy>=1.26.0,<2.0.0
+scipy>=1.11.0
+pandas>=2.1.0
+scikit-learn>=1.4.0
+sympy>=1.12.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+plotly>=5.18.0
+Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+scikit-image>=0.22.0
+requests>=2.31.0
+httpx>=0.25.0
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+psycopg2-binary>=2.9.0
+pymysql>=1.1.0
+redis>=5.0.0
+openpyxl>=3.1.0
+xlrd>=2.0.0
+xlwt>=1.3.0
+tabulate>=0.9.0
+pyyaml>=6.0
+toml>=0.10.0
+loguru>=0.7.0
+rich>=13.7.0
+python-dateutil>=2.8.0
+pytz>=2023.3
+tqdm>=4.66.0
+click>=8.1.0
+python-docx>=1.1.0
+PyPDF2>=3.0.0
+pdfplumber>=0.10.0
+selenium>=4.15.0
+fake-useragent>=1.4.0
+black>=23.12.0
+flake8>=7.0.0
+pylint>=3.0.0
+mypy>=1.7.0
+pytest>=7.4.0
+jupyter>=1.0.0
+nbformat>=5.9.0
+ipykernel>=6.26.0
+EOF
+
+RUN pip install --no-cache-dir -r /tmp/python-requirements.txt || \
+    pip install --no-cache-dir \
+        numpy pandas matplotlib scipy scikit-learn Pillow requests httpx pyyaml
+
+RUN rm -f /tmp/python-requirements.txt
+
+# 安装 Node.js 全局工具
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install -g \
+    nodemon \
+    pm2 \
+    json5 \
+    yaml \
+    axios \
+    typescript \
+    ts-node \
+    @types/node \
+    puppeteer \
+    eslint \
+    prettier \
+    webpack \
+    webpack-cli \
+    && npm cache clean --force
+
+# 安装 OpenCode
+RUN npm install -g opencode-ai
+
+# 配置 entrypoint：有参数时执行参数，无参数时启动 gateway
+RUN printf '#!/bin/sh\nif [ $# -gt 0 ]; then\n    exec "$@"\nelse\n    echo "Starting Gateway API..."\n    cd /app/backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001\nfi\n' > /entrypoint.sh \
+    && chmod +x /entrypoint.sh
+
+EXPOSE 8001
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD []

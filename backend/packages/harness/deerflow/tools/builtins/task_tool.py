@@ -12,7 +12,6 @@ from langgraph.config import get_stream_writer
 
 from deerflow.config import get_app_config
 from deerflow.runtime.user_context import resolve_runtime_user_id
-from deerflow.sandbox.security import LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE, is_host_bash_allowed
 from deerflow.subagents import SubagentExecutor, get_available_subagent_names, get_subagent_config
 from deerflow.subagents.agent_registry import agent_registry
 from deerflow.subagents.config import resolve_subagent_model_name
@@ -245,9 +244,6 @@ async def task_tool(
     - **general-purpose**: A capable agent for complex, multi-step tasks that require
       both exploration and action. Use when the task requires complex reasoning,
       multiple dependent steps, or would benefit from isolated context.
-    - **bash**: Command execution specialist for running bash commands. This is only
-      available when host bash is explicitly allowed or when using an isolated shell
-      sandbox such as `AioSandboxProvider`.
 
     Additional custom subagent types may be defined in config.yaml under
     `subagents.custom_agents`. Each custom type can have its own system prompt,
@@ -281,10 +277,6 @@ async def task_tool(
     if config is None:
         available = ", ".join(available_subagent_names)
         return f"Error: Unknown subagent type '{subagent_type}'. Available: {available}"
-    if subagent_type == "bash":
-        host_bash_allowed = is_host_bash_allowed(runtime_app_config) if runtime_app_config is not None else is_host_bash_allowed()
-        if not host_bash_allowed:
-            return f"Error: {LOCAL_BASH_SUBAGENT_DISABLED_MESSAGE}"
 
     # Build config overrides
     overrides: dict = {}

@@ -65,7 +65,6 @@ def test_list_subagents_includes_builtins(client):
     assert r.status_code == 200
     names = [s["name"] for s in r.json()["subagents"]]
     assert "general-purpose" in names
-    assert "bash" in names
 
 
 def test_create_and_get_user_subagent(client, tmp_user_id="default"):
@@ -88,13 +87,13 @@ def test_create_and_get_user_subagent(client, tmp_user_id="default"):
 
 
 def test_create_rejects_builtin_name(client):
-    r = client.post("/api/subagents", json={"name": "bash", "description": "x"})
+    r = client.post("/api/subagents", json={"name": "general-purpose", "description": "x"})
     assert r.status_code == 422
 
 
 def test_write_to_builtin_403(client):
-    assert client.put("/api/subagents/bash", json={"description": "x"}).status_code == 403
-    assert client.delete("/api/subagents/bash").status_code == 403
+    assert client.put("/api/subagents/general-purpose", json={"description": "x"}).status_code == 403
+    assert client.delete("/api/subagents/general-purpose").status_code == 403
 
 
 def test_update_user_subagent(client):
@@ -112,7 +111,7 @@ def test_delete_user_subagent(client):
 def test_name_check(client):
     r = client.get("/api/subagents/check", params={"name": "new-one"})
     assert r.status_code == 200 and r.json()["available"] is True
-    r = client.get("/api/subagents/check", params={"name": "bash"})
+    r = client.get("/api/subagents/check", params={"name": "general-purpose"})
     assert r.json()["available"] is False  # builtin reserved
 
 

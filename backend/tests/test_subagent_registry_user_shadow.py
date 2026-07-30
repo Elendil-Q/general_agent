@@ -47,8 +47,8 @@ def test_per_user_shadows_global(monkeypatch, tmp_path):
 
 def test_builtin_still_wins_over_user_file(monkeypatch):
     def fake_load_user(name, *, user_id):
-        if name == "bash":
-            return SubagentConfig(name="bash", description="user-stolen", system_prompt="x")
+        if name == "general-purpose":
+            return SubagentConfig(name="general-purpose", description="user-stolen", system_prompt="x")
         return None
 
     monkeypatch.setattr(registry_module, "load_user_subagent", fake_load_user)
@@ -56,8 +56,8 @@ def test_builtin_still_wins_over_user_file(monkeypatch):
     _reset()
     from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
 
-    cfg = get_subagent_config("bash", user_id="u1")
-    assert cfg is not None and cfg.description == BUILTIN_SUBAGENTS["bash"].description
+    cfg = get_subagent_config("general-purpose", user_id="u1")
+    assert cfg is not None and cfg.description == BUILTIN_SUBAGENTS["general-purpose"].description
 
 
 def test_get_subagent_names_dedup_with_user_shadow(monkeypatch):
@@ -109,7 +109,6 @@ def test_get_available_subagent_names_forwards_user_id(monkeypatch):
 
     monkeypatch.setattr(registry_module, "list_user_subagent_names", fake_list_user_names)
     monkeypatch.setattr(registry_module, "load_user_subagent", fake_load_user)
-    monkeypatch.setattr(registry_module, "is_host_bash_allowed", lambda *a, **k: True)
     _reset()
 
     names = get_available_subagent_names(user_id="u1")

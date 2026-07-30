@@ -125,24 +125,9 @@ def test_task_tool_returns_error_for_unknown_subagent(monkeypatch):
     assert result == "Error: Unknown subagent type 'general-purpose'. Available: general-purpose"
 
 
-def test_task_tool_rejects_bash_subagent_when_host_bash_disabled(monkeypatch):
-    monkeypatch.setattr(task_tool_module, "get_subagent_config", lambda name, **kw: _make_subagent_config())
-    monkeypatch.setattr(task_tool_module, "is_host_bash_allowed", lambda: False)
-
-    result = _run_task_tool(
-        runtime=_make_runtime(),
-        description="执行任务",
-        prompt="run commands",
-        subagent_type="bash",
-        tool_call_id="tc-bash",
-    )
-
-    assert result.startswith("Error: Bash subagent is disabled")
-
-
 def test_task_tool_threads_runtime_app_config_to_subagent_dependencies(monkeypatch):
     app_config = object()
-    config = _make_subagent_config(name="bash")
+    config = _make_subagent_config(name="general-purpose")
     runtime = _make_runtime(app_config=app_config)
     events = []
     captured = {}
@@ -157,15 +142,11 @@ def test_task_tool_threads_runtime_app_config_to_subagent_dependencies(monkeypat
 
     def fake_get_available_subagent_names(*, app_config, user_id=None):
         captured["names_app_config"] = app_config
-        return ["bash"]
+        return ["general-purpose"]
 
     def fake_get_subagent_config(name, *, app_config, user_id=None):
         captured["config_lookup"] = (name, app_config)
         return config
-
-    def fake_is_host_bash_allowed(config):
-        captured["bash_gate_app_config"] = config
-        return True
 
     def fake_get_available_tools(**kwargs):
         captured["tools_kwargs"] = kwargs
@@ -175,7 +156,6 @@ def test_task_tool_threads_runtime_app_config_to_subagent_dependencies(monkeypat
     monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
     monkeypatch.setattr(task_tool_module, "get_available_subagent_names", fake_get_available_subagent_names)
     monkeypatch.setattr(task_tool_module, "get_subagent_config", fake_get_subagent_config)
-    monkeypatch.setattr(task_tool_module, "is_host_bash_allowed", fake_is_host_bash_allowed)
     monkeypatch.setattr(
         task_tool_module,
         "get_background_task_result",
@@ -189,14 +169,13 @@ def test_task_tool_threads_runtime_app_config_to_subagent_dependencies(monkeypat
         runtime=runtime,
         description="运行命令",
         prompt="inspect files",
-        subagent_type="bash",
+        subagent_type="general-purpose",
         tool_call_id="tc-explicit-config",
     )
 
     assert output == "Task Succeeded. Result: done"
     assert captured["names_app_config"] is app_config
-    assert captured["config_lookup"] == ("bash", app_config)
-    assert captured["bash_gate_app_config"] is app_config
+    assert captured["config_lookup"] == ("general-purpose", app_config)
     assert captured["tools_kwargs"]["app_config"] is app_config
     assert captured["executor_kwargs"]["app_config"] is app_config
     assert captured["executor_kwargs"]["tools"] == ["tool-a"]

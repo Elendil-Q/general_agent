@@ -8,7 +8,6 @@ from deerflow.config.subagents_user_config import (
     list_user_subagent_names,
     load_user_subagent,
 )
-from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
 from deerflow.subagents.config import SubagentConfig
 from deerflow.subagents.storage import get_or_new_subagent_storage
@@ -74,7 +73,7 @@ def get_subagent_config(
     """Get a subagent configuration by name, with config.yaml overrides applied.
 
     Resolution order (mirrors Codex's config layering):
-    1. Built-in subagents (general-purpose, bash) - names reserved, never shadowed
+    1. Built-in subagent (general-purpose) - name reserved, never shadowed
     2. Per-user subagent files (shadows the global custom layer) - only when
        ``user_id`` is provided
     3. Custom subagents from config.yaml custom_agents section / shared YAML files
@@ -238,15 +237,6 @@ def get_available_subagent_names(
         app_config: Optional AppConfig or SubagentsAppConfig to resolve from.
 
     Returns:
-        List of subagent names visible to the current sandbox configuration.
+        List of subagent names visible to the current runtime.
     """
-    names = get_subagent_names(user_id=user_id, app_config=app_config)
-    try:
-        host_bash_allowed = is_host_bash_allowed(app_config) if hasattr(app_config, "sandbox") else is_host_bash_allowed()
-    except Exception:
-        logger.debug("Could not determine host bash availability; exposing all subagents")
-        return names
-
-    if not host_bash_allowed:
-        names = [name for name in names if name != "bash"]
-    return names
+    return get_subagent_names(user_id=user_id, app_config=app_config)

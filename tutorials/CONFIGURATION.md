@@ -294,16 +294,41 @@ DeerFlow 默认启用 `web_search`（DuckDuckGo，无需 API key）与 `web_fetc
 
 默认 tool groups：`web`、`file:read`、`file:write`、`bash`。
 
-内置工具：
+Agent 的最终工具集由**多个来源**拼装而成，并非只来自 `config.yaml`：
 
-| 工具 | 默认 provider | 说明 |
-|------|---------------|------|
-| `web_search` | DuckDuckGo | 可切换 Serper、Brave、Tavily、InfoQuest、Exa、Firecrawl、GroundRoute、fastCRW、SearXNG |
-| `web_fetch` | Jina AI | 可切换 Browserless、Exa、InfoQuest、Firecrawl、GroundRoute、fastCRW |
-| `image_search` | DuckDuckGo | 可切换 InfoQuest、Serper |
-| `ls`、`read_file`、`glob`、`grep` | 本地沙箱 | 文件读取类 |
-| `write_file`、`str_replace` | 本地沙箱 | 文件写入类 |
-| `bash` | 本地沙箱 | 仅在隔离沙箱或 `sandbox.allow_host_bash: true` 时可用 |
+| 来源 | 定义位置 | 是否始终加载 | 受 `groups` 过滤？ |
+|---|---|---|---|
+| **config.yaml 工具** | `config.yaml tools:` 列表 | 是（受沙箱权限限制） | 是 |
+| **内置：`ask_clarification`** | `tools/builtins/clarification_tool.py` | **始终** | 否 |
+| **内置：`present_files`** | `tools/builtins/present_file_tool.py` | **始终** | 否 |
+| **内置：`view_image`** | `tools/builtins/view_image_tool.py` | 仅当模型 `supports_vision: true` | 否 |
+| **Subagent 工具** | `tools/builtins/task_tool.py` 等 | 仅当 `subagent_enabled=True` | 否 |
+| **MCP 工具** | `extensions_config.json` `mcpServers` | 仅当 MCP 启用 | 否（但可延迟加载） |
+| **ACP 工具** | `config.yaml` `acp_agents` | 仅当配置了 ACP agent | 否 |
+
+**`config.yaml` 中定义的工具**通过 `use` 字段指定 Python 点号路径，运行时通过 `resolve_variable()` 动态加载：
+
+```yaml
+tools:
+  - name: web_search
+    group: web
+    use: deerflow.community.tavily.tools:web_search_tool
+```
+
+**内置工具**（`ask_clarification`、`present_files`）硬编码在 `tools/tools.py::BUILTIN_TOOLS` 中，无条件注入。它们**不在** `config.yaml` 中定义，也不受 `groups` 过滤。例如 `ask_clarification` 始终出现在 agent 的工具集中，无论开启了哪些 `tool_groups`。
+
+**去重规则**：所有来源的工具按名称合并，config.yaml 定义的工具优先级最高，其次是内置工具、MCP 工具、ACP 工具。如果想屏蔽某个内置工具，在 `config.yaml` 中定义一个同名工具即可覆盖。
+
+可配置的工具实现（切换 `use` 路径即可更换 provider）：
+
+| 工具 | 默认 provider | 可选 provider |
+|------|---------------|---------------|
+| `web_search` | DuckDuckGo | Serper、Brave、Tavily、InfoQuest、Exa、Firecrawl、GroundRoute、fastCRW、SearXNG |
+| `web_fetch` | Jina AI | Browserless、Exa、InfoQuest、Firecrawl、GroundRoute、fastCRW |
+| `image_search` | DuckDuckGo | InfoQuest、Serper |
+| `ls`、`read_file`、`glob`、`grep` | 本地沙箱 | — |
+| `write_file`、`str_replace` | 本地沙箱 | — |
+| `bash` | 本地沙箱 | 仅在隔离沙箱或 `allow_host_bash: true` 时可用 |
 
 > 工具 provider 详细配置见 [backend/docs/CONFIGURATION.md#tools](../backend/docs/CONFIGURATION.md#tools)。
 
@@ -425,7 +450,7 @@ Effort 是前端概念：用户在输入框选择 effort 后，前端派生出�
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `timeout_seconds` | `1800`（30 分钟） | 内置 subagent 默认超时 |
-| `max_turns` | `null` | 全局最大轮数覆盖；内置默认值 general-purpose=150，bash=60 |
+| `max_turns` | `null` | 全局最大轮数覆盖；内置默认值 general-purpose=150 |
 | `agents` | `{}` | 按 agent 覆盖 timeout、max_turns、model、skills、keep_alive |
 | `custom_agents` | `{}` | 自定义 subagent 类型，可配置 system_prompt、tools、skills、model、workflow、keep_alive 等 |
 
