@@ -1,11 +1,10 @@
-"""Tests for detached execution mode in the task tool.
+"""Tests for the unified task tool (always returns immediately).
 
 Covers:
-- ``task_tool(detached=True)`` returns immediately with a ``task_id=`` string.
+- ``task()`` returns immediately with a ``task_id=`` string (no blocking poll).
 - An ``AgentRef`` is registered in ``agent_registry`` with status RUNNING.
 - A ``subagent:lifecycle`` "started" event is emitted via the EventBus.
-- ``task_tool(detached=False)`` (default / backward-compat) still polls and
-  returns ``Task Succeeded``.
+- ``wait_for_tasks()`` collects results and emits lifecycle events.
 """
 
 import asyncio
@@ -76,7 +75,7 @@ def _make_subagent_config(name="general-purpose"):
 
     return SubagentConfig(
         name=name,
-        description="Test subagent for detached mode",
+        description="Test subagent for unified mode",
         system_prompt="You are a test subagent.",
         max_turns=10,
         timeout_seconds=60,
@@ -95,23 +94,6 @@ def _make_subagent_config_with_timeout(timeout_seconds: int):
     )
 
 
-def _make_completed_result(result_text="done"):
-    return SimpleNamespace(
-        status=FakeSubagentStatus.COMPLETED,
-        ai_messages=[],
-        result=result_text,
-        error=None,
-        token_usage_records=[],
-        usage_reported=False,
-        interrupts=None,
-        subagent_thread_id=None,
-    )
-
-
-async def _no_sleep(_: float) -> None:
-    return None
-
-
 def _run_task_tool(**kwargs) -> str:
     """Execute the task tool through LangChain's sync/async wrapper."""
     coroutine = getattr(task_tool_module.task_tool, "coroutine", None)
@@ -128,17 +110,15 @@ def _run_task_tool(**kwargs) -> str:
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Clear the process-global agent_registry before and after each test."""
-    # Drain before test (in case a previous test leaked state).
     for ref in list(agent_registry.list_all()):
         agent_registry.remove(ref.task_id)
     yield
-    # Drain after test so we never leak between test files.
     for ref in list(agent_registry.list_all()):
         agent_registry.remove(ref.task_id)
 
 
-def _wire_detached_mocks(monkeypatch, captured=None):
-    """Patch symbol table so task_tool can run detached without real infra."""
+def _wire_unified_mocks(monkeypatch, captured=None):
+    """Patch symbol table so task_tool can run the unified path without real infra."""
 
     class DummyExecutor:
         def __init__(self, **kwargs):
@@ -172,17 +152,16 @@ def _wire_detached_mocks(monkeypatch, captured=None):
 # ---------------------------------------------------------------------------
 
 
-def test_detached_returns_immediately(monkeypatch):
-    """``detached=True`` returns a ``task_id=`` string and does NOT poll."""
-    _wire_detached_mocks(monkeypatch)
+def test_task_returns_immediately(monkeypatch):
+    """``task()`` returns a ``task_id=`` string and does NOT poll."""
+    _wire_unified_mocks(monkeypatch)
 
     result = _run_task_tool(
         runtime=_make_runtime(),
-        description="do detached work",
+        description="do work",
         prompt="run in background",
         subagent_type="general-purpose",
-        tool_call_id="tc-detached-1",
-        detached=True,
+        tool_call_id="tc-1",
     )
 
     assert "task_id=" in result, f"Expected 'task_id=' in result, got: {result!r}"
@@ -190,29 +169,28 @@ def test_detached_returns_immediately(monkeypatch):
     assert "Task failed" not in result
 
 
-def test_detached_registers_agent_ref(monkeypatch):
-    """``detached=True`` registers an AgentRef with RUNNING status."""
-    _wire_detached_mocks(monkeypatch)
+def test_task_registers_agent_ref(monkeypatch):
+    """``task()`` registers an AgentRef with RUNNING status."""
+    _wire_unified_mocks(monkeypatch)
 
     _run_task_tool(
         runtime=_make_runtime(),
-        description="do detached work",
+        description="do work",
         prompt="run in background",
         subagent_type="general-purpose",
-        tool_call_id="tc-detached-2",
-        detached=True,
+        tool_call_id="tc-2",
     )
 
-    ref = agent_registry.get("tc-detached-2")
-    assert ref is not None, "AgentRef must exist in agent_registry after detached spawn"
+    ref = agent_registry.get("tc-2")
+    assert ref is not None, "AgentRef must exist in agent_registry after spawn"
     assert ref.status == FakeSubagentStatus.RUNNING
     assert ref.subagent_type == "general-purpose"
-    assert ref.description == "do detached work"
+    assert ref.description == "do work"
 
 
-def test_detached_emits_started_event(monkeypatch):
-    """``detached=True`` emits a ``subagent:lifecycle`` "started" event."""
-    _wire_detached_mocks(monkeypatch)
+def test_task_emits_started_event(monkeypatch):
+    """``task()`` emits a ``subagent:lifecycle`` "started" event."""
+    _wire_unified_mocks(monkeypatch)
 
     events: list[dict] = []
 
@@ -226,43 +204,18 @@ def test_detached_emits_started_event(monkeypatch):
             description="emit test",
             prompt="background",
             subagent_type="general-purpose",
-            tool_call_id="tc-detached-3",
-            detached=True,
+            tool_call_id="tc-3",
         )
     finally:
         unsub()
 
     started_events = [e for e in events if e.get("event") == "started"]
     assert len(started_events) >= 1, f"Expected at least one 'started' event, got: {events}"
-    assert started_events[0]["task_id"] == "tc-detached-3"
+    assert started_events[0]["task_id"] == "tc-3"
 
 
-def test_blocking_mode_still_works(monkeypatch):
-    """``detached=False`` (default) still polls and returns ``Task Succeeded``."""
-    _wire_detached_mocks(monkeypatch)
-
-    # Override the background task result to complete immediately.
-    monkeypatch.setattr(
-        task_tool_module,
-        "get_background_task_result",
-        lambda _: _make_completed_result("all good"),
-    )
-    monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
-
-    result = _run_task_tool(
-        runtime=_make_runtime(),
-        description="blocking work",
-        prompt="do it now",
-        subagent_type="general-purpose",
-        tool_call_id="tc-blocking-1",
-        detached=False,
-    )
-
-    assert "Task Succeeded" in result
-
-
-def test_wait_for_tasks_collects_detached_results(monkeypatch, _setup_executor_classes):
-    """``wait_for_tasks`` collects results of detached subagents as JSON."""
+def test_wait_for_tasks_collects_results(monkeypatch, _setup_executor_classes):
+    """``wait_for_tasks`` collects results of spawned subagents as JSON."""
     import sys
     from datetime import datetime
 
@@ -270,14 +223,12 @@ def test_wait_for_tasks_collects_detached_results(monkeypatch, _setup_executor_c
     from deerflow.subagents.executor import SubagentResult, SubagentStatus
     from deerflow.tools.builtins.wait_for_tasks import wait_for_tasks
 
-    # Mock get_stream_writer to return a no-op writer
     monkeypatch.setattr(
         sys.modules["deerflow.tools.builtins.wait_for_tasks"],
         "get_stream_writer",
         lambda: lambda event: None,
     )
 
-    # Register two completed AgentRefs
     tid_1 = "tid-wait-1"
     tid_2 = "tid-wait-2"
     for tid in (tid_1, tid_2):
@@ -298,7 +249,7 @@ def test_wait_for_tasks_collects_detached_results(monkeypatch, _setup_executor_c
                 started_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
             ),
-            description=f"detached work {tid}",
+            description=f"work {tid}",
             created_at=datetime.now(UTC),
         )
         agent_registry.register(ref)
@@ -334,14 +285,11 @@ def test_wait_for_tasks_times_out(monkeypatch, _setup_executor_classes):
 
     _module = sys.modules["deerflow.tools.builtins.wait_for_tasks"]
 
-    # Mock get_stream_writer to return a no-op writer
     monkeypatch.setattr(_module, "get_stream_writer", lambda: lambda event: None)
-    # Make polling fast: 10ms polls, 0s timeout = 1 poll before timeout
     monkeypatch.setattr(_module, "DEFAULT_POLL_SECONDS", 0.01)
     monkeypatch.setattr(_module, "DEFAULT_TIMEOUT_SECONDS", 0)
     monkeypatch.setattr(_module, "_TIMEOUT_BUFFER_SECONDS", 0)
 
-    # One completed, one still RUNNING (never finishes)
     tid_done = "tid-wait-done"
     tid_pending = "tid-wait-pending"
 

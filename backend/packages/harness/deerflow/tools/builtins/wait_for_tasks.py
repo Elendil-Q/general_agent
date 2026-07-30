@@ -1,4 +1,4 @@
-"""Wait-for-tasks tool: blocks until detached subagents complete."""
+"""Wait-for-tasks tool: blocks until spawned subagents complete."""
 
 from __future__ import annotations
 
@@ -23,13 +23,13 @@ async def wait_for_tasks(
     tool_call_id: Annotated[str, InjectedToolCallId],
     runtime,
 ) -> str:
-    """Wait for detached subagents to complete and collect their results.
+    """Wait for spawned subagents to complete and collect their results.
 
     Blocks until each task_id reaches a stopped state (COMPLETED, FAILED,
     CANCELLED, TIMED_OUT, INTERRUPTED, or IDLE). Returns a JSON map keyed by task_id.
 
     Args:
-        task_ids: List of task IDs to wait for (returned by task(detached=True)).
+        task_ids: List of task IDs to wait for (returned by task()).
     """
     from deerflow.subagents.agent_registry import agent_registry
     from deerflow.subagents.event_bus import event_bus

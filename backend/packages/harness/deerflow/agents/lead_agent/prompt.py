@@ -287,17 +287,14 @@ For complex queries, break them down into focused sub-tasks and execute in paral
 **Remember: Subagents are for parallel decomposition or specialized tasks, not for wrapping single and general tasks.**
 
 **How It Works:**
-- **Blocking mode** (default): `task()` runs the subagent and blocks until complete,
-  then returns the result directly. Use this for sequential dependencies.
-- **Detached mode** (`detached=True`): `task(detached=True)` starts the subagent in
-  the background and returns a `task_id` immediately. You can continue other work,
-  then call `wait_for_tasks([task_id1, task_id2, ...])` to collect all results.
-  Use this for parallel investigation when you have other work to do while subagents run.
+- `task()` starts a subagent in the background and returns a `task_id` immediately.
+  You can continue other work, then call `wait_for_tasks([task_id1, task_id2, ...])`
+  to collect all results.
 
 **Usage Example 1 - Multiple Batches (>{n} sub-tasks):**
 ```python
 # User asks: "Compare AWS, Azure, GCP, Alibaba Cloud, and Oracle Cloud"
-# Thinking: 5 sub-tasks → need multiple batches (max {n} per batch)
+# Thinking: 5 sub-tasks -> need multiple batches (max {n} per batch)
 
 # Turn 1: Launch first batch of {n}
 task(description="AWS analysis", prompt="...", subagent_type="general-purpose")
@@ -311,16 +308,16 @@ task(description="Oracle Cloud analysis", prompt="...", subagent_type="general-p
 # Turn 3: Synthesize ALL results from both batches
 ```
 
-**Usage Example 2 - Detached Parallel Investigation:**
+**Usage Example 2 - Parallel Investigation:**
 ```python
 # User asks: "Analyze the codebase architecture and review the test suite"
 # Thinking: 2 independent sub-tasks - run them in parallel, collect later
 
 # Launch both in background
-task(description="architecture analysis", prompt="...", subagent_type="general-purpose", detached=True)
+task(description="architecture analysis", prompt="...", subagent_type="general-purpose")
 # -> Returns: "Task spawned. task_id=t1. Call wait_for_tasks(['t1']) to collect."
 
-task(description="test suite review", prompt="...", subagent_type="general-purpose", detached=True)
+task(description="test suite review", prompt="...", subagent_type="general-purpose")
 # -> Returns: "Task spawned. task_id=t2. Call wait_for_tasks(['t2']) to collect."
 
 # Collect both results (blocks until all complete)
@@ -330,8 +327,8 @@ wait_for_tasks(["t1", "t2"])
 # Synthesize the results into a final answer
 ```
 
-**IMPORTANT**: When you use `detached=True`, you MUST call `wait_for_tasks` to collect
-the results before finishing your response. The system will remind you if you forget.
+**IMPORTANT**: You MUST call `wait_for_tasks` to collect the results before finishing
+your response. The system will remind you if you forget.
 
 ```
 

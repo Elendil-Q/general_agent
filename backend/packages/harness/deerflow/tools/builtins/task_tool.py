@@ -1,6 +1,5 @@
 """Task tool for delegating work to subagents."""
 
-import asyncio
 import logging
 import uuid
 from dataclasses import replace
@@ -16,12 +15,7 @@ from deerflow.subagents import SubagentExecutor, get_available_subagent_names, g
 from deerflow.subagents.agent_registry import agent_registry
 from deerflow.subagents.config import resolve_subagent_model_name
 from deerflow.subagents.event_bus import event_bus
-from deerflow.subagents.executor import (
-    SubagentStatus,
-    cleanup_background_task,
-    get_background_task_result,
-    request_cancel_background_task,
-)
+from deerflow.subagents.executor import SubagentStatus
 from deerflow.subagents.sse_bridge import sse_bridge
 from deerflow.tools.types import Runtime
 
@@ -51,93 +45,6 @@ def _cache_subagent_usage(tool_call_id: str, usage: dict | None, *, enabled: boo
 
 def pop_cached_subagent_usage(tool_call_id: str) -> dict | None:
     return _subagent_usage_cache.pop(tool_call_id, None)
-
-
-def _is_subagent_terminal(result: Any) -> bool:
-    """Return whether a background subagent result is safe to clean up.
-
-    INTERRUPTED is intentionally excluded: a paused subagent must stay resident
-    so it can be resumed via ``resume_background_subagent``.
-    """
-    return result.status in {SubagentStatus.COMPLETED, SubagentStatus.FAILED, SubagentStatus.CANCELLED, SubagentStatus.TIMED_OUT}
-
-
-def _summarize_interrupts(interrupts: Any) -> str:
-    """Render the serialized ``__interrupt__`` payload as a short human-readable string.
-
-    ``interrupts`` is the list of ``{value, id}`` dicts produced by
-    ``serialize_lc_object`` on the raw ``Interrupt`` tuple. Falls back to a
-    plain ``str`` rendering for anything unexpected so the lead agent always
-    gets *some* question to surface.
-    """
-    if not interrupts:
-        return "(no question provided)"
-    parts: list[str] = []
-    if isinstance(interrupts, (list, tuple)):
-        items = interrupts
-    else:
-        items = [interrupts]
-    for item in items:
-        value = item.get("value") if isinstance(item, dict) else item
-        if isinstance(value, str):
-            parts.append(value)
-        elif value is not None:
-            try:
-                import json
-
-                parts.append(json.dumps(value, ensure_ascii=False, default=str))
-            except Exception:
-                parts.append(str(value))
-    return " | ".join(parts) if parts else "(no question provided)"
-
-
-async def _await_subagent_terminal(task_id: str, max_polls: int) -> Any | None:
-    """Poll until the background subagent stops or we run out of polls.
-
-    ``is_stopped`` (terminal OR INTERRUPTED) is the right predicate here: a
-    paused subagent is no longer actively running, so a parent cancel should not
-    block waiting on it. INTERRUPTED tasks are left resident for resume.
-    """
-    for _ in range(max_polls):
-        result = get_background_task_result(task_id)
-        if result is None:
-            return None
-        if getattr(result.status, "is_stopped", result.status.is_terminal):
-            return result
-        await asyncio.sleep(5)
-    return None
-
-
-async def _deferred_cleanup_subagent_task(task_id: str, trace_id: str, max_polls: int) -> None:
-    """Keep polling a cancelled subagent until it can be safely removed."""
-    cleanup_poll_count = 0
-    while True:
-        result = get_background_task_result(task_id)
-        if result is None:
-            return
-        if _is_subagent_terminal(result):
-            cleanup_background_task(task_id)
-            return
-        if cleanup_poll_count >= max_polls:
-            logger.warning(f"[trace={trace_id}] Deferred cleanup for task {task_id} timed out after {cleanup_poll_count} polls")
-            return
-        await asyncio.sleep(5)
-        cleanup_poll_count += 1
-
-
-def _log_cleanup_failure(cleanup_task: asyncio.Task[None], *, trace_id: str, task_id: str) -> None:
-    if cleanup_task.cancelled():
-        return
-
-    exc = cleanup_task.exception()
-    if exc is not None:
-        logger.error(f"[trace={trace_id}] Deferred cleanup failed for task {task_id}: {exc}")
-
-
-def _schedule_deferred_subagent_cleanup(task_id: str, trace_id: str, max_polls: int) -> None:
-    logger.debug(f"[trace={trace_id}] Scheduling deferred cleanup for cancelled task {task_id}")
-    cleanup_task = asyncio.create_task(_deferred_cleanup_subagent_task(task_id, trace_id, max_polls))
-    cleanup_task.add_done_callback(lambda task: _log_cleanup_failure(task, trace_id=trace_id, task_id=task_id))
 
 
 def _find_usage_recorder(runtime: Any) -> Any | None:
@@ -170,17 +77,6 @@ def _find_usage_recorder(runtime: Any) -> Any | None:
         if hasattr(cb, "record_external_llm_usage_records"):
             return cb
     return None
-
-
-def _summarize_usage(records: list[dict] | None) -> dict | None:
-    """Summarize token usage records into a compact dict for SSE events."""
-    if not records:
-        return None
-    return {
-        "input_tokens": sum(r.get("input_tokens", 0) or 0 for r in records),
-        "output_tokens": sum(r.get("output_tokens", 0) or 0 for r in records),
-        "total_tokens": sum(r.get("total_tokens", 0) or 0 for r in records),
-    }
 
 
 def _report_subagent_usage(runtime: Any, result: Any) -> None:
@@ -231,7 +127,6 @@ async def task_tool(
     prompt: str,
     subagent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
-    detached: bool = False,
 ) -> str:
     """Delegate a task to a specialized subagent that runs in its own context.
 
@@ -264,12 +159,9 @@ async def task_tool(
         description: A short (3-5 word) description of the task for logging/display. ALWAYS PROVIDE THIS PARAMETER FIRST.
         prompt: The task description for the subagent. Be specific and clear about what needs to be done. ALWAYS PROVIDE THIS PARAMETER SECOND.
         subagent_type: The type of subagent to use. ALWAYS PROVIDE THIS PARAMETER THIRD.
-        detached: If True, start the subagent in the background and return immediately
-            with a task ID. The result can be collected later with ``wait_for_tasks``.
     """
     runtime_app_config = _get_runtime_app_config(runtime)
     runtime_user_id = resolve_runtime_user_id(runtime)
-    cache_token_usage = _token_usage_cache_enabled(runtime_app_config)
     available_subagent_names = get_available_subagent_names(app_config=runtime_app_config, user_id=runtime_user_id) if runtime_app_config is not None else get_available_subagent_names(user_id=runtime_user_id)
 
     # Get subagent configuration
@@ -381,67 +273,34 @@ async def task_tool(
         executor_kwargs["app_config"] = resolved_app_config
     executor = SubagentExecutor(**executor_kwargs)
 
-    if detached:
-        task_id = executor.execute_async(prompt, task_id=tool_call_id)
-        # execute_async already registers an AgentRef (PENDING) with the
-        # correct SubagentResult. Bump to RUNNING; do NOT re-register or
-        # we overwrite the SubagentResult reference with None.
-        if agent_registry.update_status(task_id, SubagentStatus.RUNNING) is None:
-            # Fallback: execute_async didn't register (e.g., mocked in tests).
-            # Register a best-effort AgentRef without the SubagentResult.
-            from datetime import UTC, datetime
-
-            from deerflow.subagents.agent_registry import AgentRef
-
-            agent_registry.register(
-                AgentRef(
-                    task_id=task_id,
-                    thread_id=thread_id or "",
-                    trace_id=trace_id or "",
-                    subagent_type=subagent_type,
-                    status=SubagentStatus.RUNNING,
-                    config=config,
-                    executor=executor,
-                    result=None,
-                    description=description,
-                    created_at=datetime.now(UTC),
-                )
-            )
-        event_bus.emit(
-            "subagent:lifecycle",
-            {
-                "event": "started",
-                "task_id": task_id,
-                "thread_id": thread_id,
-                "description": description,
-            },
-        )
-        return f"Task spawned. task_id={task_id}. Call wait_for_tasks([{task_id!r}]) to collect."
-
-    # Start background execution (always async to prevent blocking)
-    # Use tool_call_id as task_id for better traceability
     task_id = executor.execute_async(prompt, task_id=tool_call_id)
 
-    # Poll for task completion in backend (removes need for LLM to poll)
-    poll_count = 0
-    last_status = None
-    last_message_count = 0  # Track how many AI messages we've already sent
-    # Route 甲: when the subagent pauses on interrupt() we keep polling (the
-    # lead run stays open, blocked in this tool) instead of returning a pause
-    # string, so the lead model continues in the SAME turn once the subagent
-    # resumes and completes. ``interrupt_announced`` ensures the
-    # ``task_interrupted`` SSE event fires once per pause (not every 5s poll);
-    # it resets when the subagent leaves INTERRUPTED so a re-interrupt re-announces.
-    interrupt_announced = False
-    # Polling timeout: execution timeout + 60s buffer, checked every 5s. Only
-    # RUNNING polls advance the countdown (INTERRUPTED polls suspend it — see below).
-    max_poll_count = (config.timeout_seconds + 60) // 5
+    # Update to RUNNING; execute_async registers PENDING in agent_registry.
+    if agent_registry.update_status(task_id, SubagentStatus.RUNNING) is None:
+        from datetime import UTC, datetime
 
-    logger.info(f"[trace={trace_id}] Started background task {task_id} (subagent={subagent_type}, timeout={config.timeout_seconds}s, polling_limit={max_poll_count} polls)")
+        from deerflow.subagents.agent_registry import AgentRef
 
+        agent_registry.register(
+            AgentRef(
+                task_id=task_id,
+                thread_id=thread_id or "",
+                trace_id=trace_id or "",
+                subagent_type=subagent_type,
+                status=SubagentStatus.RUNNING,
+                config=config,
+                executor=executor,
+                result=None,
+                description=description,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    # Always register SSE writer so subagent events reach the frontend
+    # from the moment it is spawned.
     writer = get_stream_writer()
     sse_bridge.register_writer(thread_id, writer)
-    # Send Task Started message
+
     event_bus.emit(
         "subagent:lifecycle",
         {
@@ -452,225 +311,4 @@ async def task_tool(
         },
     )
 
-    try:
-        while True:
-            result = get_background_task_result(task_id)
-
-            if result is None:
-                logger.error(f"[trace={trace_id}] Task {task_id} not found in background tasks")
-                event_bus.emit(
-                    "subagent:lifecycle",
-                    {
-                        "event": "failed",
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "error": "Task disappeared from background tasks",
-                    },
-                )
-                cleanup_background_task(task_id)
-                return f"Error: Task {task_id} disappeared from background tasks"
-
-            # Log status changes for debugging
-            if result.status != last_status:
-                logger.info(f"[trace={trace_id}] Task {task_id} status: {result.status.value}")
-                # Reset the interrupt-announce latch whenever the subagent
-                # transitions OUT of INTERRUPTED (e.g. resumed -> RUNNING) so a
-                # later re-interrupt fires task_interrupted again.
-                if last_status is SubagentStatus.INTERRUPTED:
-                    interrupt_announced = False
-                last_status = result.status
-
-            # Check for new AI messages and send task_running events
-            ai_messages = result.ai_messages or []
-            current_message_count = len(ai_messages)
-            if current_message_count > last_message_count:
-                # Send task_running event for each new message
-                for i in range(last_message_count, current_message_count):
-                    message = ai_messages[i]
-                    event_bus.emit(
-                        "subagent:progress",
-                        {
-                            "task_id": task_id,
-                            "thread_id": thread_id,
-                            "message": message,
-                            "message_index": i + 1,  # 1-based index for display
-                            "total_messages": current_message_count,
-                        },
-                    )
-                    logger.info(f"[trace={trace_id}] Task {task_id} sent message #{i + 1}/{current_message_count}")
-                last_message_count = current_message_count
-
-            # Check if task completed, failed, or timed out
-            usage = _summarize_usage(getattr(result, "token_usage_records", None))
-            if result.status == SubagentStatus.COMPLETED:
-                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
-                _report_subagent_usage(runtime, result)
-                event_bus.emit(
-                    "subagent:lifecycle",
-                    {
-                        "event": "completed",
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "result": result.result,
-                        "usage": usage,
-                    },
-                )
-                logger.info(f"[trace={trace_id}] Task {task_id} completed after {poll_count} polls")
-                cleanup_background_task(task_id)
-                return f"Task Succeeded. Result: {result.result}"
-            elif result.status == SubagentStatus.IDLE:
-                # keep_alive=True: the subagent finished cleanly and parked
-                # as IDLE for a later ``follow_up``. Surface the result on
-                # turn 1 (mirrors the COMPLETED branch) but do NOT clean up
-                # - the lifecycle manager owns the IDLE entry's TTL.
-                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
-                _report_subagent_usage(runtime, result)
-                event_bus.emit(
-                    "subagent:lifecycle",
-                    {
-                        "event": "idle",
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "result": result.result,
-                        "usage": usage,
-                    },
-                )
-                logger.info(f"[trace={trace_id}] Task {task_id} parked as IDLE (keep_alive) after {poll_count} polls")
-                return f"Task Succeeded. Result: {result.result}"
-            elif result.status == SubagentStatus.FAILED:
-                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
-                _report_subagent_usage(runtime, result)
-                event_bus.emit(
-                    "subagent:lifecycle",
-                    {
-                        "event": "failed",
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "error": result.error,
-                        "usage": usage,
-                    },
-                )
-                logger.error(f"[trace={trace_id}] Task {task_id} failed: {result.error}")
-                cleanup_background_task(task_id)
-                return f"Task failed. Error: {result.error}"
-            elif result.status == SubagentStatus.CANCELLED:
-                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
-                _report_subagent_usage(runtime, result)
-                event_bus.emit(
-                    "subagent:lifecycle",
-                    {
-                        "event": "cancelled",
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "error": result.error,
-                        "usage": usage,
-                    },
-                )
-                logger.info(f"[trace={trace_id}] Task {task_id} cancelled: {result.error}")
-                cleanup_background_task(task_id)
-                return "Task cancelled by user."
-            elif result.status == SubagentStatus.TIMED_OUT:
-                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
-                _report_subagent_usage(runtime, result)
-                event_bus.emit(
-                    "subagent:lifecycle",
-                    {
-                        "event": "timed_out",
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "error": result.error,
-                        "usage": usage,
-                    },
-                )
-                logger.warning(f"[trace={trace_id}] Task {task_id} timed out: {result.error}")
-                cleanup_background_task(task_id)
-                return f"Task timed out. Error: {result.error}"
-            elif result.status == SubagentStatus.INTERRUPTED:
-                # Route 甲: the subagent paused on interrupt() awaiting human
-                # input. Announce the interrupt ONCE (so the frontend shows the
-                # form) but do NOT return — keep polling so the lead run stays
-                # open (blocked in this tool) while the user answers. The
-                # subagent is resumed via
-                # POST /api/threads/{parent}/subagents/{task_id}/resume; when it
-                # reaches COMPLETED the branch above returns the result and the
-                # lead model continues in the SAME turn (no continuation-turn
-                # mechanism). Token-usage reporting is deferred to COMPLETED (or
-                # the cancel path) to avoid double-counting the paused turn.
-                if not interrupt_announced:
-                    event_bus.emit(
-                        "subagent:lifecycle",
-                        {
-                            "event": "interrupted",
-                            "task_id": task_id,
-                            "thread_id": thread_id,
-                            "subagent_thread_id": result.subagent_thread_id,
-                            "description": description,
-                            "interrupts": result.interrupts,
-                        },
-                    )
-                    logger.info(f"[trace={trace_id}] Task {task_id} interrupted awaiting human input: {_summarize_interrupts(result.interrupts)}")
-                    interrupt_announced = True
-                # Fall through to the sleep + (suspended) timeout below; do NOT return.
-
-            # Wait before the next poll (covers both still-RUNNING and paused-
-            # INTERRUPTED states — the latter keeps the lead run open while the
-            # user answers, re-checking every 5s whether the subagent was resumed).
-            await asyncio.sleep(5)
-            # Suspend the execution-timeout clock while INTERRUPTED: a slow
-            # human reply must never trip the execution timeout, which exists to
-            # catch a stuck *running* subagent. Only RUNNING polls advance it.
-            if result.status != SubagentStatus.INTERRUPTED:
-                poll_count += 1
-
-            # Polling timeout as a safety net (in case thread pool timeout doesn't work)
-            # Set to execution timeout + 60s buffer, in 5s poll intervals
-            # This catches edge cases where the background task gets stuck
-            if poll_count > max_poll_count:
-                timeout_minutes = config.timeout_seconds // 60
-                logger.error(f"[trace={trace_id}] Task {task_id} polling timed out after {poll_count} polls (should have been caught by thread pool timeout)")
-                _report_subagent_usage(runtime, result)
-                usage = _summarize_usage(getattr(result, "token_usage_records", None))
-                _cache_subagent_usage(tool_call_id, usage, enabled=cache_token_usage)
-                event_bus.emit(
-                    "subagent:lifecycle",
-                    {
-                        "event": "timed_out",
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "usage": usage,
-                    },
-                )
-                # The task may still be running in the background. Signal cooperative
-                # cancellation and schedule deferred cleanup to remove the entry from
-                # the registry once the background thread reaches a terminal state.
-                request_cancel_background_task(task_id)
-                _schedule_deferred_subagent_cleanup(task_id, trace_id, max_poll_count)
-                return f"Task polling timed out after {timeout_minutes} minutes. This may indicate the background task is stuck. Status: {result.status.value}"
-    except asyncio.CancelledError:
-        # Signal the background subagent thread to stop cooperatively.
-        request_cancel_background_task(task_id)
-
-        # Wait (shielded) for the subagent to reach a terminal state so the
-        # final token usage snapshot is reported to the parent RunJournal
-        # before the parent worker persists get_completion_data().
-        terminal_result = None
-        try:
-            terminal_result = await asyncio.shield(_await_subagent_terminal(task_id, max_poll_count))
-        except asyncio.CancelledError:
-            pass
-
-        # Report whatever the subagent collected (even if we timed out).
-        final_result = terminal_result or get_background_task_result(task_id)
-        if final_result is not None:
-            _report_subagent_usage(runtime, final_result)
-        if final_result is not None and _is_subagent_terminal(final_result):
-            cleanup_background_task(task_id)
-        else:
-            _schedule_deferred_subagent_cleanup(task_id, trace_id, max_poll_count)
-        _subagent_usage_cache.pop(tool_call_id, None)
-        raise
-    except Exception:
-        _subagent_usage_cache.pop(tool_call_id, None)
-        raise
-    finally:
-        sse_bridge.unregister_writer(thread_id)
+    return f"Task spawned. task_id={task_id}. Call wait_for_tasks([{task_id!r}]) to collect."
