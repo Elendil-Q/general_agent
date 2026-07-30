@@ -1469,6 +1469,11 @@ the same skill directory only when needed during execution.
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} resuming after interrupt")
 
+            event_bus.emit(
+                "subagent:lifecycle",
+                {"event": "running", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
+            )
+
             # Resume input: Command(resume=...) tells LangGraph to resume from
             # the paused checkpoint, feeding ``resume_value`` back to ``interrupt()``.
             graph_input = Command(resume=resume_value)
@@ -1482,6 +1487,10 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
+                )
                 return result
 
             async for chunk in agent.astream(graph_input, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
@@ -1490,6 +1499,10 @@ the same skill directory only when needed during execution.
                         SubagentStatus.CANCELLED,
                         error="Cancelled by user",
                         token_usage_records=collector.snapshot_records(),
+                    )
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
                     )
                     return result
 
@@ -1513,12 +1526,27 @@ the same skill directory only when needed during execution.
                             ai_messages.append(message_dict)
                             if message_id:
                                 seen_message_ids.add(message_id)
+                            event_bus.emit(
+                                "subagent:progress",
+                                {
+                                    "task_id": result.task_id or "",
+                                    "thread_id": self.thread_id or "",
+                                    "status": result.status.value,
+                                    "message": message_dict.get("content", ""),
+                                    "message_index": len(ai_messages),
+                                    "total_messages": len(ai_messages),
+                                },
+                            )
 
             if result.cancel_event.is_set():
                 result.try_set_terminal(
                     SubagentStatus.CANCELLED,
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
+                )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
                 )
                 return result
             if interrupts:
@@ -1527,6 +1555,15 @@ the same skill directory only when needed during execution.
                     interrupts=serialize_lc_object(interrupts),
                     subagent_thread_id=self.subagent_thread_id,
                     token_usage_records=collector.snapshot_records(),
+                )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "interrupted",
+                        "task_id": result.task_id or "",
+                        "thread_id": self.thread_id or "",
+                        "interrupts": serialize_lc_object(interrupts),
+                    },
                 )
                 return result
 
@@ -1538,6 +1575,15 @@ the same skill directory only when needed during execution.
                 result=final_result,
                 token_usage_records=token_usage_records,
             )
+            event_bus.emit(
+                "subagent:lifecycle",
+                {
+                    "event": "completed",
+                    "task_id": result.task_id or "",
+                    "thread_id": self.thread_id or "",
+                    "result": result.result,
+                },
+            )
 
         except Exception as e:
             logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} resume failed")
@@ -1545,6 +1591,15 @@ the same skill directory only when needed during execution.
                 SubagentStatus.FAILED,
                 error=str(e),
                 token_usage_records=(collector.snapshot_records() if collector is not None else None),
+            )
+            event_bus.emit(
+                "subagent:lifecycle",
+                {
+                    "event": "failed",
+                    "task_id": result.task_id or "",
+                    "thread_id": self.thread_id or "",
+                    "error": str(e),
+                },
             )
 
         return result
