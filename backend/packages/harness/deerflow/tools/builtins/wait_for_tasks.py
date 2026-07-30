@@ -23,16 +23,18 @@ async def wait_for_tasks(
     tool_call_id: Annotated[str, InjectedToolCallId],
     runtime,
 ) -> str:
-    """Wait for spawned subagents to complete and collect their results.
+    """Wait for subagents to complete and collect their results.
 
-    Blocks until each task_id reaches a stopped state (COMPLETED, FAILED,
-    CANCELLED, TIMED_OUT, INTERRUPTED, or IDLE). Returns a JSON map keyed by task_id.
+    Blocks until each task_id reaches a terminal state (COMPLETED, FAILED,
+    CANCELLED, TIMED_OUT) or IDLE. INTERRUPTED tasks are NOT terminal -
+    wait_for_tasks keeps polling, suspending the timeout, so resume events
+    flow through and the lead model gets the result in the same turn.
 
     Args:
         task_ids: List of task IDs to wait for (returned by task()).
     """
     from deerflow.subagents.agent_registry import agent_registry
-    from deerflow.subagents.event_bus import event_bus
+    from deerflow.subagents.executor import SubagentStatus, cleanup_background_task
     from deerflow.subagents.sse_bridge import sse_bridge
 
     thread_id = runtime.context.get("thread_id") if runtime.context else None
@@ -43,7 +45,7 @@ async def wait_for_tasks(
     try:
         results: dict[str, dict] = {}
         pending = set(task_ids)
-        poll_count = 0
+        elapsed = 0
         # Dynamic timeout: max(timeout_seconds of awaited) + buffer
         max_timeout = DEFAULT_TIMEOUT_SECONDS
         for tid in task_ids:
@@ -51,9 +53,8 @@ async def wait_for_tasks(
             if ref is not None:
                 max_timeout = max(max_timeout, ref.config.timeout_seconds)
         effective_timeout = max_timeout + _TIMEOUT_BUFFER_SECONDS
-        max_polls = max(effective_timeout // DEFAULT_POLL_SECONDS, 1)
 
-        while pending and poll_count < max_polls:
+        while pending and elapsed < effective_timeout:
             done: set[str] = set()
             for tid in list(pending):
                 ref = agent_registry.get(tid)
@@ -63,7 +64,7 @@ async def wait_for_tasks(
                     continue
 
                 status = ref.status
-                if status.is_stopped:
+                if status.is_terminal or status == SubagentStatus.IDLE:
                     result_val = ref.result.result if ref.result else None
                     error_val = ref.result.error if ref.result else None
                     results[tid] = {
@@ -72,25 +73,24 @@ async def wait_for_tasks(
                         "error": error_val,
                     }
                     done.add(tid)
-                    event_bus.emit(
-                        "subagent:lifecycle",
-                        {
-                            "event": status.value,
-                            "task_id": tid,
-                            "thread_id": thread_id or "",
-                            "result": result_val,
-                            "error": error_val,
-                        },
-                    )
 
             pending -= done
             if pending:
                 await asyncio.sleep(DEFAULT_POLL_SECONDS)
-                poll_count += 1
+                # Only advance timeout if at least one task is RUNNING
+                # (not all INTERRUPTED - a slow human reply must not trip the timeout)
+                if any((r := agent_registry.get(tid)) and r.status == SubagentStatus.RUNNING for tid in pending):
+                    elapsed += DEFAULT_POLL_SECONDS
 
         # Report timed-out tasks
         for tid in pending:
             results[tid] = {"status": "pending", "error": "wait_for_tasks timed out"}
+
+        # Clean up terminal tasks after returning results
+        for tid in results:
+            ref = agent_registry.get(tid)
+            if ref and ref.result and ref.result.status.is_terminal:
+                cleanup_background_task(tid)
 
         return json.dumps(results, ensure_ascii=False, indent=2)
     finally:

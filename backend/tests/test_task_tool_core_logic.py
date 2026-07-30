@@ -3,6 +3,9 @@
 import asyncio
 import importlib
 import inspect
+import json
+import sys
+from datetime import datetime
 from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -11,6 +14,7 @@ from deerflow.subagents.config import SubagentConfig
 
 # Use module import so tests can patch the exact symbols referenced inside task_tool().
 task_tool_module = importlib.import_module("deerflow.tools.builtins.task_tool")
+wait_for_tasks_module = importlib.import_module("deerflow.tools.builtins.wait_for_tasks")
 
 
 class FakeSubagentStatus(Enum):
@@ -545,3 +549,255 @@ def test_subagent_usage_cache_is_skipped_when_token_usage_is_disabled(monkeypatc
     )
 
     assert task_tool_module.pop_cached_subagent_usage("tc-disabled-cache") is None
+
+
+# ---------------------------------------------------------------------------
+# wait_for_tasks tests
+# ---------------------------------------------------------------------------
+
+
+def _run_wait_for_tasks(**kwargs) -> str:
+    """Execute wait_for_tasks across LangChain sync/async wrapper variants."""
+    coroutine = getattr(wait_for_tasks_module.wait_for_tasks, "coroutine", None)
+    if coroutine is not None:
+        return asyncio.run(coroutine(**kwargs))
+    return wait_for_tasks_module.wait_for_tasks.func(**kwargs)
+
+
+def _wire_wait_for_tasks_mocks(monkeypatch):
+    """Patch symbols so wait_for_tasks can run without real infra.
+
+    The conftest pre-mocks ``deerflow.subagents.executor`` as a MagicMock to
+    break a circular import. ``wait_for_tasks`` imports ``SubagentStatus`` and
+    ``cleanup_background_task`` from it inside the function body, so we must
+    patch the mock module's attributes for the function to pick up real
+    behaviour.
+    """
+    executor_mock = sys.modules.get("deerflow.subagents.executor")
+    if executor_mock is not None:
+        monkeypatch.setattr(executor_mock, "SubagentStatus", FakeSubagentStatus)
+        monkeypatch.setattr(executor_mock, "cleanup_background_task", _cleanup_background_task)
+    monkeypatch.setattr(wait_for_tasks_module, "get_stream_writer", lambda: lambda _e: None)
+
+
+def _cleanup_background_task(task_id: str) -> None:
+    """Mimic the real cleanup_background_task using the real agent_registry."""
+    from deerflow.subagents.agent_registry import agent_registry
+
+    ref = agent_registry.get(task_id)
+    if ref is None or ref.result is None:
+        return
+    if ref.result.status.is_terminal:
+        agent_registry.remove(task_id)
+
+
+def _make_wait_agent_ref(
+    task_id: str,
+    status: FakeSubagentStatus,
+    *,
+    thread_id: str = "thread-1",
+    result_val: str | None = None,
+    error_val: str | None = None,
+    timeout_seconds: int = 10,
+):
+    """Create an AgentRef for wait_for_tasks tests."""
+    from deerflow.subagents.agent_registry import AgentRef
+
+    config = SubagentConfig(
+        name="general-purpose",
+        description="test",
+        system_prompt="test",
+        max_turns=50,
+        timeout_seconds=timeout_seconds,
+    )
+    result = SimpleNamespace(
+        status=status,
+        result=result_val,
+        error=error_val,
+    )
+    return AgentRef(
+        task_id=task_id,
+        thread_id=thread_id,
+        trace_id="trace-1",
+        subagent_type="general-purpose",
+        status=status,
+        config=config,
+        executor=None,
+        result=result,
+        description="test task",
+        created_at=datetime.now(),
+    )
+
+
+def _clean_registry():
+    """Remove all entries from the agent_registry."""
+    from deerflow.subagents.agent_registry import agent_registry
+
+    for ref in list(agent_registry.list_all()):
+        agent_registry.remove(ref.task_id)
+
+
+def test_wait_for_tasks_polls_through_interrupted(monkeypatch):
+    """wait_for_tasks must NOT return immediately for INTERRUPTED status."""
+    from deerflow.subagents.agent_registry import agent_registry
+
+    _clean_registry()
+    try:
+        task_id = "wft-polls-interrupted"
+        ref = _make_wait_agent_ref(task_id, FakeSubagentStatus.INTERRUPTED)
+        agent_registry.register(ref)
+
+        _wire_wait_for_tasks_mocks(monkeypatch)
+
+        poll_count = 0
+
+        async def counting_sleep(_seconds):
+            nonlocal poll_count
+            poll_count += 1
+            r = agent_registry.get(task_id)
+            if r and r.status == FakeSubagentStatus.INTERRUPTED:
+                r.status = FakeSubagentStatus.COMPLETED
+                r.result.status = FakeSubagentStatus.COMPLETED
+                r.result.result = "done"
+
+        monkeypatch.setattr(wait_for_tasks_module, "asyncio", SimpleNamespace(sleep=counting_sleep))
+
+        result_str = _run_wait_for_tasks(
+            task_ids=[task_id],
+            tool_call_id="tc-polls",
+            runtime=_make_runtime(),
+        )
+
+        assert poll_count >= 1, "wait_for_tasks should poll (sleep) at least once for INTERRUPTED"
+        results = json.loads(result_str)
+        assert results[task_id]["status"] == "completed"
+    finally:
+        _clean_registry()
+
+
+def test_wait_for_tasks_suspends_timeout_during_interrupted(monkeypatch):
+    """wait_for_tasks must not advance timeout counter while INTERRUPTED."""
+    from deerflow.subagents.agent_registry import agent_registry
+
+    _clean_registry()
+    try:
+        task_id = "wft-suspend-timeout"
+        ref = _make_wait_agent_ref(task_id, FakeSubagentStatus.INTERRUPTED, timeout_seconds=0)
+        agent_registry.register(ref)
+
+        _wire_wait_for_tasks_mocks(monkeypatch)
+        monkeypatch.setattr(wait_for_tasks_module, "DEFAULT_TIMEOUT_SECONDS", 1)
+        monkeypatch.setattr(wait_for_tasks_module, "_TIMEOUT_BUFFER_SECONDS", 0)
+        monkeypatch.setattr(wait_for_tasks_module, "DEFAULT_POLL_SECONDS", 1)
+
+        poll_count = 0
+
+        async def counting_sleep(_seconds):
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count >= 3:
+                r = agent_registry.get(task_id)
+                if r and r.status == FakeSubagentStatus.INTERRUPTED:
+                    r.status = FakeSubagentStatus.COMPLETED
+                    r.result.status = FakeSubagentStatus.COMPLETED
+                    r.result.result = "done"
+
+        monkeypatch.setattr(wait_for_tasks_module, "asyncio", SimpleNamespace(sleep=counting_sleep))
+
+        result_str = _run_wait_for_tasks(
+            task_ids=[task_id],
+            tool_call_id="tc-suspend",
+            runtime=_make_runtime(),
+        )
+
+        assert poll_count >= 3, f"wait_for_tasks should poll 3+ times with suspended timeout, got {poll_count}"
+        results = json.loads(result_str)
+        assert results[task_id]["status"] == "completed"
+    finally:
+        _clean_registry()
+
+
+def test_wait_for_tasks_returns_for_idle(monkeypatch):
+    """wait_for_tasks must return immediately for IDLE status."""
+    from deerflow.subagents.agent_registry import agent_registry
+
+    _clean_registry()
+    try:
+        task_id = "wft-idle"
+        ref = _make_wait_agent_ref(task_id, FakeSubagentStatus.IDLE, result_val="idle-result")
+        agent_registry.register(ref)
+
+        _wire_wait_for_tasks_mocks(monkeypatch)
+
+        sleep_called = False
+
+        async def tracking_sleep(_seconds):
+            nonlocal sleep_called
+            sleep_called = True
+
+        monkeypatch.setattr(wait_for_tasks_module, "asyncio", SimpleNamespace(sleep=tracking_sleep))
+
+        result_str = _run_wait_for_tasks(
+            task_ids=[task_id],
+            tool_call_id="tc-idle",
+            runtime=_make_runtime(),
+        )
+
+        assert not sleep_called, "wait_for_tasks should return immediately for IDLE (no sleep)"
+        results = json.loads(result_str)
+        assert results[task_id]["status"] == "idle"
+        assert results[task_id]["result"] == "idle-result"
+    finally:
+        _clean_registry()
+
+
+def test_wait_for_tasks_no_duplicate_lifecycle_events(monkeypatch):
+    """wait_for_tasks must NOT emit subagent:lifecycle events (executor is sole emitter)."""
+    from deerflow.subagents.agent_registry import agent_registry
+    from deerflow.subagents.event_bus import event_bus
+
+    _clean_registry()
+    try:
+        task_id = "wft-no-emit"
+        ref = _make_wait_agent_ref(task_id, FakeSubagentStatus.COMPLETED, result_val="done")
+        agent_registry.register(ref)
+
+        _wire_wait_for_tasks_mocks(monkeypatch)
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:lifecycle", lambda payload: events.append(payload))
+        try:
+            _run_wait_for_tasks(
+                task_ids=[task_id],
+                tool_call_id="tc-no-emit",
+                runtime=_make_runtime(),
+            )
+        finally:
+            unsub()
+
+        assert len(events) == 0, f"wait_for_tasks should not emit lifecycle events, got: {events}"
+    finally:
+        _clean_registry()
+
+
+def test_wait_for_tasks_cleans_up_terminal_tasks(monkeypatch):
+    """wait_for_tasks must call cleanup_background_task for terminal tasks after returning."""
+    from deerflow.subagents.agent_registry import agent_registry
+
+    _clean_registry()
+    try:
+        task_id = "wft-cleanup"
+        ref = _make_wait_agent_ref(task_id, FakeSubagentStatus.COMPLETED, result_val="done")
+        agent_registry.register(ref)
+
+        _wire_wait_for_tasks_mocks(monkeypatch)
+
+        _run_wait_for_tasks(
+            task_ids=[task_id],
+            tool_call_id="tc-cleanup",
+            runtime=_make_runtime(),
+        )
+
+        assert agent_registry.get(task_id) is None, "Terminal task should be cleaned up from registry"
+    finally:
+        _clean_registry()
