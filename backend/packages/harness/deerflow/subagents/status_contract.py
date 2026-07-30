@@ -33,17 +33,24 @@ SubagentStatusValue = Literal[
     "cancelled",
     "timed_out",
     "polling_timed_out",
+    "idle",
+    "interrupted",
 ]
 
 #: Enumeration of every value ``subagent_status`` may take. Mirrors the
 #: ``valid_status_values`` array in the shared fixture; the contract test
-#: pins them against each other.
+#: pins them against each other. ``idle`` / ``interrupted`` are non-terminal
+#: states (stopped-but-resident / stopped-but-resumable); they are never
+#: produced by :func:`extract_subagent_status` (no terminal text prefix)
+#: but are valid stamps the frontend's structured-status reader accepts.
 SUBAGENT_STATUS_VALUES: tuple[SubagentStatusValue, ...] = (
     "completed",
     "failed",
     "cancelled",
     "timed_out",
     "polling_timed_out",
+    "idle",
+    "interrupted",
 )
 
 # Prefix table — ordered most-specific-first because some prefixes are

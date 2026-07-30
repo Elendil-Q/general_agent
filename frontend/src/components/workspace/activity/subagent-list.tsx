@@ -4,6 +4,7 @@ import {
   CheckCircleIcon,
   ClockIcon,
   Loader2Icon,
+  MessageCircleQuestionIcon,
   PauseCircleIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -21,6 +22,8 @@ function statusIcon(status: Subtask["status"]) {
       return <ClockIcon className="size-3.5 text-red-500" />;
     case "idle":
       return <PauseCircleIcon className="size-3.5 text-yellow-500" />;
+    case "interrupted":
+      return <MessageCircleQuestionIcon className="size-3.5 text-yellow-500" />;
     case "in_progress":
     default:
       return <Loader2Icon className="size-3.5 animate-spin" />;

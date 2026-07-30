@@ -76,3 +76,24 @@ def test_make_subagent_additional_kwargs_omits_blank_error():
 def test_make_subagent_additional_kwargs_rejects_unknown_status():
     with pytest.raises(ValueError, match="invalid subagent status"):
         make_subagent_additional_kwargs("garbage")  # type: ignore[arg-type]
+
+
+def test_make_subagent_additional_kwargs_accepts_non_terminal_states():
+    """``idle`` / ``interrupted`` are valid stamps (non-terminal states a
+    keep_alive or paused subagent parks in) even though no text prefix maps
+    to them."""
+    assert make_subagent_additional_kwargs("idle") == {SUBAGENT_STATUS_KEY: "idle"}
+    assert make_subagent_additional_kwargs("interrupted") == {SUBAGENT_STATUS_KEY: "interrupted"}
+
+
+def test_extract_subagent_status_never_yields_non_terminal_states():
+    """The text-prefix table only carries terminal outcomes; ``idle`` /
+    ``interrupted`` must come from structured stamps, never from parsing."""
+    for text in (
+        "Task Succeeded. Result: ok",
+        "Task failed. Error: boom",
+        "Task cancelled by user.",
+        "Task timed out. Error: 900 seconds",
+        "Task polling timed out after 15 minutes",
+    ):
+        assert extract_subagent_status(text) not in ("idle", "interrupted")

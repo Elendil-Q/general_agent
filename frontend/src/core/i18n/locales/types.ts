@@ -307,6 +307,7 @@ export interface Translations {
     completed: string;
     failed: string;
     idle: string;
+    interrupted: string;
     expired: string;
     background: string;
   };

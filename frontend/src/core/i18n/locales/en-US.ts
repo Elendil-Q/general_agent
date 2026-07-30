@@ -393,6 +393,7 @@ export const enUS: Translations = {
     completed: "Subtask completed",
     failed: "Subtask failed",
     idle: "Dormant, awaiting follow-up",
+    interrupted: "Interrupted, awaiting input",
     expired: "Subtask expired",
     background: "Running in background",
   },

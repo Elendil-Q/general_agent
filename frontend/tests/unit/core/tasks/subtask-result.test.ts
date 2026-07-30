@@ -12,7 +12,9 @@ import {
   isTransientWaitForTasksStatus,
   mapWaitForTasksStatus,
   parseSubtaskResult,
+  shouldKeepPreviousSubtaskStatus,
 } from "@/core/tasks/subtask-result";
+import type { Subtask } from "@/core/tasks/types";
 
 interface ContractCase {
   name: string;
@@ -271,9 +273,9 @@ describe("mapWaitForTasksStatus", () => {
       expect(result).toEqual({ status: "idle" });
     });
 
-    it("applies interrupted as idle", () => {
+    it("applies interrupted as interrupted", () => {
       const result = mapWaitForTasksStatus("interrupted", true);
-      expect(result).toEqual({ status: "idle" });
+      expect(result).toEqual({ status: "interrupted" });
     });
 
     it("applies running as in_progress", () => {
@@ -305,6 +307,212 @@ describe("mapWaitForTasksStatus", () => {
       error: "warning",
     });
   });
+
+  describe("when turn is not loading but the task went live this session (seenLive)", () => {
+    // Turn ended in a live session: the IDLE/INTERRUPTED subagent may still
+    // be resident server-side (TTL / resume), so its real state must show.
+    // The cold-open folding (commit 8b7f6953) is keyed on seenLive=false.
+    it("keeps idle as idle", () => {
+      const result = mapWaitForTasksStatus(
+        "idle",
+        false,
+        "task output",
+        undefined,
+        true,
+      );
+      expect(result).toEqual({ status: "idle", result: "task output" });
+    });
+
+    it("keeps interrupted as interrupted", () => {
+      const result = mapWaitForTasksStatus(
+        "interrupted",
+        false,
+        undefined,
+        "paused",
+        true,
+      );
+      expect(result).toEqual({ status: "interrupted", error: "paused" });
+    });
+
+    it("applies running / pending as in_progress with seenLive", () => {
+      // Live session: a detached task that is still running must keep
+      // showing as running — the transient skip only applies to cold-opened
+      // history (seenLive=false).
+      for (const status of ["running", "pending"]) {
+        const result = mapWaitForTasksStatus(
+          status,
+          false,
+          undefined,
+          undefined,
+          true,
+        );
+        expect(result).toEqual({ status: "in_progress" });
+      }
+    });
+
+    it("still applies terminal statuses with seenLive", () => {
+      const result = mapWaitForTasksStatus(
+        "completed",
+        false,
+        "done",
+        undefined,
+        true,
+      );
+      expect(result).toEqual({ status: "completed", result: "done" });
+    });
+  });
+
+  describe("when a backend subagent mirror is present (hasMirror)", () => {
+    // With the ThreadState `subagents` channel the mirror owns transient
+    // truth; stale wait_for_tasks JSON must not stomp it, so transient
+    // statuses are skipped instead of folded to completed.
+    it("skips idle instead of folding to completed", () => {
+      const result = mapWaitForTasksStatus(
+        "idle",
+        false,
+        "task output",
+        undefined,
+        false,
+        true,
+      );
+      expect(result).toBeNull();
+    });
+
+    it("skips interrupted instead of folding to completed", () => {
+      const result = mapWaitForTasksStatus(
+        "interrupted",
+        false,
+        undefined,
+        "paused",
+        false,
+        true,
+      );
+      expect(result).toBeNull();
+    });
+
+    it("skips running / pending", () => {
+      for (const status of ["running", "pending"]) {
+        const result = mapWaitForTasksStatus(
+          status,
+          false,
+          undefined,
+          undefined,
+          false,
+          true,
+        );
+        expect(result).toBeNull();
+      }
+    });
+
+    it("skips transient statuses even with seenLive", () => {
+      const result = mapWaitForTasksStatus(
+        "idle",
+        false,
+        "task output",
+        undefined,
+        true,
+        true,
+      );
+      expect(result).toBeNull();
+    });
+
+    it("still applies terminal statuses", () => {
+      expect(
+        mapWaitForTasksStatus(
+          "completed",
+          false,
+          "done",
+          undefined,
+          false,
+          true,
+        ),
+      ).toEqual({ status: "completed", result: "done" });
+      expect(
+        mapWaitForTasksStatus("failed", false, undefined, "oops", false, true),
+      ).toEqual({ status: "failed", error: "oops" });
+    });
+
+    it("applies transient statuses as-is while the turn is loading", () => {
+      const result = mapWaitForTasksStatus(
+        "idle",
+        true,
+        undefined,
+        undefined,
+        false,
+        true,
+      );
+      expect(result).toEqual({ status: "idle" });
+    });
+  });
+});
+
+describe("shouldKeepPreviousSubtaskStatus", () => {
+  const makePrevious = (
+    status: Subtask["status"],
+    ttlExpired?: boolean,
+  ): Subtask =>
+    ({
+      id: "task-1",
+      status,
+      subagent_type: "general-purpose",
+      description: "d",
+      prompt: "p",
+      ...(ttlExpired ? { ttlExpired: true } : {}),
+    }) as Subtask;
+
+  it("in_progress never stomps a terminal previous status", () => {
+    for (const terminal of ["completed", "failed", "expired"] as const) {
+      expect(
+        shouldKeepPreviousSubtaskStatus(
+          { status: "in_progress" },
+          makePrevious(terminal),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("non-terminal updates never stomp a ttlExpired previous status", () => {
+    for (const incoming of ["in_progress", "idle", "interrupted"] as const) {
+      expect(
+        shouldKeepPreviousSubtaskStatus(
+          { status: incoming },
+          makePrevious("completed", true),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("interrupted may replace a completed status that was not TTL-expired", () => {
+    // Turn ended → JSON folding wrote completed; a live task_interrupted
+    // replay must still be able to correct it when no TTL expiry happened.
+    expect(
+      shouldKeepPreviousSubtaskStatus(
+        { status: "interrupted" },
+        makePrevious("completed"),
+      ),
+    ).toBe(false);
+  });
+
+  it("terminal updates always apply", () => {
+    expect(
+      shouldKeepPreviousSubtaskStatus(
+        { status: "completed" },
+        makePrevious("idle"),
+      ),
+    ).toBe(false);
+    expect(
+      shouldKeepPreviousSubtaskStatus(
+        { status: "failed" },
+        makePrevious("completed"),
+      ),
+    ).toBe(false);
+  });
+
+  it("applies freely when there is no previous task", () => {
+    expect(
+      shouldKeepPreviousSubtaskStatus({ status: "in_progress" }, undefined),
+    ).toBe(false);
+  });
 });
 
 /**
@@ -333,6 +541,19 @@ describe("parseSubtaskResult — structured additional_kwargs (preferred path)",
       });
       expect(parsed.status).toBe("failed");
     }
+  });
+
+  it("maps structured idle / interrupted to the matching card states", () => {
+    expect(
+      parseSubtaskResult("anything at all", {
+        [SUBAGENT_STATUS_KEY]: "idle",
+      }).status,
+    ).toBe("idle");
+    expect(
+      parseSubtaskResult("anything at all", {
+        [SUBAGENT_STATUS_KEY]: "interrupted",
+      }).status,
+    ).toBe("interrupted");
   });
 
   it("uses subagent_error when supplied", () => {
@@ -451,4 +672,16 @@ describe("parseSubtaskResult — shared contract fixture", () => {
       expect(parsed.status).toBe(expectedCardStatus(c.expected_status));
     });
   }
+
+  it("every valid_status_values entry is handled by the structured-status path", () => {
+    // Contract drift guard: the backend enum and the frontend's
+    // STRUCTURED_STATUS_TO_SUBTASK must stay in sync — an unmapped value
+    // falls back to prefix parsing and lands on in_progress.
+    for (const value of CONTRACT.valid_status_values) {
+      const parsed = parseSubtaskResult("anything at all", {
+        [SUBAGENT_STATUS_KEY]: value,
+      });
+      expect(parsed.status).not.toBe("in_progress");
+    }
+  });
 });

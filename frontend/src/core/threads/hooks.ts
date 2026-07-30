@@ -968,6 +968,9 @@ export function useThreadStream({
           task_id: string;
           interrupts: Array<{ value: unknown; id: string }>;
         };
+        // Mark the subtask as interrupted regardless of interrupt kind so the
+        // activity bar / card reflect the paused state (not "completed").
+        updateSubtask({ id: e.task_id, status: "interrupted", live: true });
         // A subagent paused on ask_clarification: its interrupt value is a
         // ClarificationInterruptRequest. Latch it as a serial form. Ignore
         // non-clarification interrupts (handled elsewhere) and any task_id the

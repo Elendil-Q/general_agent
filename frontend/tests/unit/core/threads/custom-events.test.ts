@@ -46,7 +46,7 @@ describe("handleCustomEvent", () => {
       );
       expect(result).toBe(true);
       expect(ctx.updateSubtaskCalls).toEqual([
-        { id: "task-1", status: "idle" },
+        { id: "task-1", status: "idle", live: true },
       ]);
     });
 
@@ -67,7 +67,7 @@ describe("handleCustomEvent", () => {
       );
       expect(result).toBe(true);
       expect(ctx.updateSubtaskCalls).toEqual([
-        { id: "task-2", status: "in_progress" },
+        { id: "task-2", status: "in_progress", live: true },
       ]);
     });
 
@@ -162,7 +162,32 @@ describe("handleCustomEvent", () => {
       );
       expect(result).toBe(true);
       expect(ctx.updateSubtaskCalls).toEqual([
-        { id: "task-5", latestMessage: msg },
+        { id: "task-5", latestMessage: msg, live: true },
+      ]);
+    });
+
+    it("carries the full serialized AIMessage with tool_calls", () => {
+      const ctx = makeCtx();
+      const msg = {
+        id: "msg-2",
+        type: "ai" as const,
+        content: "Second response",
+        tool_calls: [
+          {
+            name: "bash",
+            args: { command: "ls" },
+            id: "tc-1",
+            type: "tool_call" as const,
+          },
+        ],
+      };
+      const result = handleCustomEvent(
+        { type: "task_progress", task_id: "task-5", message: msg },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-5", latestMessage: msg, live: true },
       ]);
     });
   });
@@ -177,8 +202,18 @@ describe("handleCustomEvent", () => {
       );
       expect(result).toBe(true);
       expect(ctx.updateSubtaskCalls).toEqual([
-        { id: "task-6", latestMessage: msg },
+        { id: "task-6", latestMessage: msg, live: true },
       ]);
+    });
+
+    it("does not overwrite latestMessage when message is absent", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_running", task_id: "task-6" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([{ id: "task-6", live: true }]);
     });
   });
 

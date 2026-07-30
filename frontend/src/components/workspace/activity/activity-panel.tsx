@@ -20,6 +20,7 @@ export function ActivityPanel() {
     (task) =>
       task.status === "in_progress" ||
       task.status === "idle" ||
+      task.status === "interrupted" ||
       task.status === "completed" ||
       task.status === "failed",
   );

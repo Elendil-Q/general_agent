@@ -31,7 +31,10 @@ export function LeftPanelProvider({ children }: { children: ReactNode }) {
 
   const hasTodos = (thread.values.todos?.length ?? 0) > 0;
   const hasActiveSubagents = Object.values(tasks).some(
-    (task) => task.status === "in_progress" || task.status === "idle",
+    (task) =>
+      task.status === "in_progress" ||
+      task.status === "idle" ||
+      task.status === "interrupted",
   );
   const shouldBeOpen = hasTodos || hasActiveSubagents;
 

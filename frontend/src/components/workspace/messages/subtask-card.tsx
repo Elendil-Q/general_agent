@@ -4,6 +4,7 @@ import {
   ClipboardListIcon,
   ClockIcon,
   Loader2Icon,
+  MessageCircleQuestionIcon,
   PauseCircleIcon,
   XCircleIcon,
 } from "lucide-react";
@@ -51,6 +52,8 @@ export function SubtaskCard({
       return <ClockIcon className="size-3 text-red-500" />;
     } else if (task.status === "idle") {
       return <PauseCircleIcon className="size-3 text-yellow-500" />;
+    } else if (task.status === "interrupted") {
+      return <MessageCircleQuestionIcon className="size-3 text-yellow-500" />;
     } else if (task.status === "in_progress") {
       return task.detached ? (
         <ClockIcon className="size-3" />

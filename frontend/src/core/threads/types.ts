@@ -2,11 +2,33 @@ import type { Message, Thread } from "@langchain/langgraph-sdk";
 
 import type { Todo } from "../todos";
 
+/**
+ * One entry of the backend ``ThreadState.subagents`` channel — the persisted
+ * mirror of the in-memory subagent registry, written by
+ * ``SubagentContextMiddleware.abefore_model`` on every lead model call.
+ * ``idle_expires_at`` / ``updated_at`` are epoch seconds.
+ */
+export interface SubagentMirrorEntry {
+  task_id: string;
+  subagent_type: string;
+  status:
+    | "pending"
+    | "running"
+    | "idle"
+    | "interrupted"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  idle_expires_at?: number | null;
+  updated_at: number;
+}
+
 export interface AgentThreadState extends Record<string, unknown> {
   title: string;
   messages: Message[];
   artifacts?: string[];
   todos?: Todo[];
+  subagents?: Record<string, SubagentMirrorEntry> | null;
 }
 
 export interface AgentThreadContext extends Record<string, unknown> {

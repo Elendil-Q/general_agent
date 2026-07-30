@@ -440,7 +440,7 @@ cleanup_background_task(task_id)
   └─ INTERRUPTED / IDLE → 不删除（等待 resume / follow_up）
 ```
 
-执行器（`SubagentExecutor`）是**唯一的事件发射源**。在 `_aexecute` / `_aresume` / `_acontinue` 的 astream 循环中直接 emit `subagent:lifecycle`（`started`/`running`/`completed`/`failed`/`cancelled`/`timed_out`/`interrupted`/`idle`/`revived`/`expired`）和 `subagent:progress`（含 `message` / `message_index` / `total_messages` 内容）。事件通过 `EventBus` → `SSEBridge` → lead run 的 LangGraph stream writer → 前端。
+执行器（`SubagentExecutor`）是**唯一的事件发射源**。在 `_aexecute` / `_aresume` / `_acontinue` 的 astream 循环中直接 emit `subagent:lifecycle`（`started`/`running`/`completed`/`failed`/`cancelled`/`timed_out`/`interrupted`/`idle`/`revived`/`expired`）和 `subagent:progress`（`message` 为精简的序列化 AIMessage dict `{id, type: "ai", content, tool_calls}`，另含 `message_index` / `total_messages`）。事件通过 `EventBus` → `SSEBridge` → lead run 的 LangGraph stream writer → 前端。
 
 ## 中间件链
 

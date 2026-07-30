@@ -377,6 +377,7 @@ export const zhCN: Translations = {
     completed: "子任务已完成",
     failed: "子任务失败",
     idle: "休眠中，等待后续指令",
+    interrupted: "已中断，等待输入",
     expired: "子任务已过期",
     background: "后台运行中",
   },

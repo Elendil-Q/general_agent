@@ -24,9 +24,13 @@ export function handleCustomEvent(
     const e = event as {
       type: "task_running";
       task_id: string;
-      message: AIMessage;
+      message?: AIMessage;
     };
-    ctx.updateSubtask({ id: e.task_id, latestMessage: e.message });
+    ctx.updateSubtask({
+      id: e.task_id,
+      ...(e.message !== undefined ? { latestMessage: e.message } : {}),
+      live: true,
+    });
     return true;
   }
 
@@ -36,7 +40,7 @@ export function handleCustomEvent(
     typeof (event as { task_id: unknown }).task_id === "string"
   ) {
     const e = event as { type: "task_idle"; task_id: string };
-    ctx.updateSubtask({ id: e.task_id, status: "idle" });
+    ctx.updateSubtask({ id: e.task_id, status: "idle", live: true });
     return true;
   }
 
@@ -46,7 +50,7 @@ export function handleCustomEvent(
     typeof (event as { task_id: unknown }).task_id === "string"
   ) {
     const e = event as { type: "task_revived"; task_id: string };
-    ctx.updateSubtask({ id: e.task_id, status: "in_progress" });
+    ctx.updateSubtask({ id: e.task_id, status: "in_progress", live: true });
     return true;
   }
 
@@ -184,7 +188,7 @@ export function handleCustomEvent(
       task_id: string;
       message: AIMessage;
     };
-    ctx.updateSubtask({ id: e.task_id, latestMessage: e.message });
+    ctx.updateSubtask({ id: e.task_id, latestMessage: e.message, live: true });
     return true;
   }
 

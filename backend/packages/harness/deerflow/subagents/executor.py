@@ -230,6 +230,25 @@ class SubagentResult:
             self.status = SubagentStatus.IDLE
             return True
 
+    def try_revive(self) -> bool:
+        """Transition an IDLE subagent back to RUNNING for a ``follow_up``.
+
+        Clears the idle marker, any stale terminal/interrupt payload fields,
+        and the cooperative cancel flag so the continuation run starts clean.
+        Only valid from IDLE; any other status refuses.
+        """
+        with self._state_lock:
+            if self.status is not SubagentStatus.IDLE:
+                return False
+            self.idle_since = None
+            self.completed_at = None
+            self.error = None
+            self.interrupted_at = None
+            self.interrupts = None
+            self.status = SubagentStatus.RUNNING
+            self.cancel_event.clear()
+            return True
+
 
 # Thread pool for background task scheduling and orchestration
 _scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-scheduler-")
@@ -1097,17 +1116,22 @@ the same skill directory only when needed during execution.
                                     },
                                 )
                                 break
-                            # Per-message progress: the SSE bridge coalesces
-                            # these into ~10fps; a 150ms throttle is
-                            # unnecessary here because one tick == one LLM
-                            # response.
+                            # Per-message progress: send the serialized AI
+                            # message (id/type/content/tool_calls) so the
+                            # frontend SubtaskCard can render live tool-call
+                            # progress via ``explainLastToolCall``.
                             event_bus.emit(
                                 "subagent:progress",
                                 {
                                     "task_id": result.task_id or "",
                                     "thread_id": self.thread_id or "",
                                     "status": result.status.value,
-                                    "message": message_dict.get("content", ""),
+                                    "message": {
+                                        "id": message_dict.get("id"),
+                                        "type": "ai",
+                                        "content": message_dict.get("content", ""),
+                                        "tool_calls": message_dict.get("tool_calls", []),
+                                    },
                                     "message_index": len(ai_messages),
                                     "total_messages": len(ai_messages),
                                 },
@@ -1139,6 +1163,9 @@ the same skill directory only when needed during execution.
                     subagent_thread_id=self.subagent_thread_id,
                     token_usage_records=collector.snapshot_records(),
                 )
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(result.task_id or "", SubagentStatus.INTERRUPTED)
                 event_bus.emit(
                     "subagent:lifecycle",
                     {
@@ -1487,6 +1514,9 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
                 event_bus.emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
@@ -1500,6 +1530,9 @@ the same skill directory only when needed during execution.
                         error="Cancelled by user",
                         token_usage_records=collector.snapshot_records(),
                     )
+                    from deerflow.subagents.agent_registry import agent_registry
+
+                    agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
                     event_bus.emit(
                         "subagent:lifecycle",
                         {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
@@ -1532,7 +1565,12 @@ the same skill directory only when needed during execution.
                                     "task_id": result.task_id or "",
                                     "thread_id": self.thread_id or "",
                                     "status": result.status.value,
-                                    "message": message_dict.get("content", ""),
+                                    "message": {
+                                        "id": message_dict.get("id"),
+                                        "type": "ai",
+                                        "content": message_dict.get("content", ""),
+                                        "tool_calls": message_dict.get("tool_calls", []),
+                                    },
                                     "message_index": len(ai_messages),
                                     "total_messages": len(ai_messages),
                                 },
@@ -1544,6 +1582,9 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
                 event_bus.emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
@@ -1556,6 +1597,9 @@ the same skill directory only when needed during execution.
                     subagent_thread_id=self.subagent_thread_id,
                     token_usage_records=collector.snapshot_records(),
                 )
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(result.task_id or "", SubagentStatus.INTERRUPTED)
                 event_bus.emit(
                     "subagent:lifecycle",
                     {
@@ -1570,20 +1614,50 @@ the same skill directory only when needed during execution.
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} completed after resume")
             token_usage_records = collector.snapshot_records()
             final_result = self._extract_final_result(final_state)
-            result.try_set_terminal(
-                SubagentStatus.COMPLETED,
-                result=final_result,
-                token_usage_records=token_usage_records,
-            )
-            event_bus.emit(
-                "subagent:lifecycle",
-                {
-                    "event": "completed",
-                    "task_id": result.task_id or "",
-                    "thread_id": self.thread_id or "",
-                    "result": result.result,
-                },
-            )
+
+            # ``keep_alive`` parks the resumed subagent as IDLE (same as
+            # ``_aexecute``/``_acontinue``) so a later ``follow_up`` can
+            # revive it; the registry mirror must be updated in both branches
+            # or ``wait_for_tasks`` would poll forever.
+            if self.config.keep_alive:
+                result.result = final_result
+                if result.try_set_idle():
+                    from deerflow.subagents.agent_registry import agent_registry
+
+                    agent_registry.update_status(
+                        result.task_id or "",
+                        SubagentStatus.IDLE,
+                        idle_since=result.idle_since,
+                    )
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {
+                            "event": "idle",
+                            "task_id": result.task_id or "",
+                            "thread_id": self.thread_id or "",
+                        },
+                    )
+                    from deerflow.subagents.lifecycle import lifecycle_manager
+
+                    lifecycle_manager.adopt(result.task_id or "")
+            else:
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(result.task_id or "", SubagentStatus.COMPLETED)
+                result.try_set_terminal(
+                    SubagentStatus.COMPLETED,
+                    result=final_result,
+                    token_usage_records=token_usage_records,
+                )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "completed",
+                        "task_id": result.task_id or "",
+                        "thread_id": self.thread_id or "",
+                        "result": result.result,
+                    },
+                )
 
         except Exception as e:
             logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} resume failed")
@@ -1592,6 +1666,9 @@ the same skill directory only when needed during execution.
                 error=str(e),
                 token_usage_records=(collector.snapshot_records() if collector is not None else None),
             )
+            from deerflow.subagents.agent_registry import agent_registry
+
+            agent_registry.update_status(result.task_id or "", SubagentStatus.FAILED)
             event_bus.emit(
                 "subagent:lifecycle",
                 {
@@ -1698,18 +1775,33 @@ the same skill directory only when needed during execution.
         Called by the ``follow_up`` tool.  The caller MUST ensure the
         subagent is IDLE before calling (the tool checks via ``agent_registry``).
 
+        When the task is registered in ``agent_registry`` (the normal
+        ``execute_async`` path), the REGISTERED result holder is revived in
+        place so interrupt/resume observers (the resume endpoint,
+        ``wait_for_tasks``, ``get_subagent_interrupt``) see the live state,
+        and the registry mirror flips to RUNNING. Direct callers without a
+        registry entry (tests, embedded use) get a fresh holder as before.
+
         Args:
             prompt: The new human prompt to feed to the subagent.
             task_id: The task_id of the IDLE subagent to revive.
 
             SubagentResult with the continuation outcome.
         """
+        from deerflow.subagents.agent_registry import agent_registry
 
-        result_holder = SubagentResult(
-            task_id=task_id,
-            trace_id=self.trace_id,
-            status=SubagentStatus.RUNNING,
-        )
+        ref = agent_registry.get(task_id)
+        if ref is not None and ref.result is not None:
+            result_holder = ref.result
+            if not result_holder.try_revive():
+                raise RuntimeError(f"Subagent task {task_id} is not idle (status={result_holder.status.value}); cannot continue")
+            agent_registry.update_status(task_id, SubagentStatus.RUNNING)
+        else:
+            result_holder = SubagentResult(
+                task_id=task_id,
+                trace_id=self.trace_id,
+                status=SubagentStatus.RUNNING,
+            )
 
         try:
             loop = asyncio.get_running_loop()
@@ -1719,6 +1811,61 @@ the same skill directory only when needed during execution.
         if loop is not None and loop.is_running():
             return self._continue_in_isolated_loop(prompt, task_id, result_holder)
         return asyncio.run(self._acontinue(prompt, task_id, result_holder))
+
+    def continue_async(self, prompt: str, task_id: str) -> str:
+        """Revive an IDLE background subagent with a follow-up prompt. Return the task ID immediately.
+
+        Fire-and-forget counterpart of ``continue_with_prompt`` (mirrors
+        ``resume_async``): validates and revives the registered holder
+        synchronously so misuse fails fast, then schedules ``_acontinue`` on
+        the scheduler pool. ``wait_for_tasks`` is the blocking collector for
+        the outcome.
+
+        Args:
+            prompt: The new human prompt to feed to the subagent.
+            task_id: The task_id of the IDLE subagent to revive.
+
+        Returns:
+            Task ID that can be used to check status later.
+        """
+        from deerflow.subagents.agent_registry import agent_registry
+
+        ref = agent_registry.get(task_id)
+        if ref is None or ref.result is None:
+            raise KeyError(f"Unknown subagent task {task_id}")
+        result_holder = ref.result
+        if not result_holder.try_revive():
+            raise RuntimeError(f"Subagent task {task_id} is not idle (status={result_holder.status.value}); cannot continue")
+        result_holder.started_at = datetime.now()
+
+        logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} reviving with follow-up prompt, task_id={task_id}, timeout={self.config.timeout_seconds}s")
+
+        parent_context = copy_context()
+
+        def run_task():
+            agent_registry.update_status(task_id, SubagentStatus.RUNNING)
+
+            try:
+                execution_future = _submit_to_isolated_loop_in_context(
+                    parent_context,
+                    lambda: self._acontinue(prompt, task_id, result_holder),
+                )
+                try:
+                    execution_future.result(timeout=self.config.timeout_seconds)
+                except FuturesTimeoutError:
+                    logger.error(f"[trace={self.trace_id}] Subagent {self.config.name} follow-up timed out after {self.config.timeout_seconds}s")
+                    result_holder.cancel_event.set()
+                    result_holder.try_set_terminal(
+                        SubagentStatus.TIMED_OUT,
+                        error=f"Follow-up timed out after {self.config.timeout_seconds} seconds",
+                    )
+                    execution_future.cancel()
+            except Exception as e:
+                logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} follow-up failed")
+                result_holder.try_set_terminal(SubagentStatus.FAILED, error=str(e))
+
+        _scheduler_pool.submit(run_task)
+        return task_id
 
     def _continue_in_isolated_loop(self, prompt: str, task_id: str, result_holder: SubagentResult) -> SubagentResult:
         """Run ``_acontinue`` on the persistent isolated event loop."""
@@ -1839,6 +1986,9 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(task_id, SubagentStatus.CANCELLED)
                 event_bus.emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": task_id, "thread_id": self.thread_id or ""},
@@ -1888,7 +2038,12 @@ the same skill directory only when needed during execution.
                                     "task_id": task_id,
                                     "thread_id": self.thread_id or "",
                                     "status": result.status.value,
-                                    "message": message_dict.get("content", ""),
+                                    "message": {
+                                        "id": message_dict.get("id"),
+                                        "type": "ai",
+                                        "content": message_dict.get("content", ""),
+                                        "tool_calls": message_dict.get("tool_calls", []),
+                                    },
                                     "message_index": len(ai_messages),
                                     "total_messages": len(ai_messages),
                                 },
@@ -1935,6 +2090,9 @@ the same skill directory only when needed during execution.
                     subagent_thread_id=self.subagent_thread_id,
                     token_usage_records=collector.snapshot_records(),
                 )
+                from deerflow.subagents.agent_registry import agent_registry
+
+                agent_registry.update_status(task_id, SubagentStatus.INTERRUPTED)
                 event_bus.emit(
                     "subagent:lifecycle",
                     {
@@ -2001,6 +2159,9 @@ the same skill directory only when needed during execution.
                 error=str(e),
                 token_usage_records=(collector.snapshot_records() if collector is not None else None),
             )
+            from deerflow.subagents.agent_registry import agent_registry
+
+            agent_registry.update_status(task_id, SubagentStatus.FAILED)
             event_bus.emit(
                 "subagent:lifecycle",
                 {

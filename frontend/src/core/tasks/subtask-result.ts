@@ -26,10 +26,10 @@ export const SUBAGENT_ERROR_KEY = "subagent_error";
 /**
  * Map from the backend ``subagent_status`` value to the frontend
  * {@link SubtaskStatus} enum. The frontend collapses ``cancelled`` /
- * ``timed_out`` / ``polling_timed_out`` into ``failed`` because the
- * subtask card only renders three pill states. The richer backend
+ * ``timed_out`` / ``polling_timed_out`` into ``failed``; the richer backend
  * vocabulary still survives on ``error`` for tooling that wants the
- * detail.
+ * detail. ``idle`` / ``interrupted`` map to their own non-terminal card
+ * states.
  */
 const STRUCTURED_STATUS_TO_SUBTASK: Record<string, SubtaskStatus> = {
   completed: "completed",
@@ -37,6 +37,8 @@ const STRUCTURED_STATUS_TO_SUBTASK: Record<string, SubtaskStatus> = {
   cancelled: "failed",
   timed_out: "failed",
   polling_timed_out: "failed",
+  idle: "idle",
+  interrupted: "interrupted",
 };
 
 /**
@@ -160,14 +162,26 @@ export function isTransientWaitForTasksStatus(status: string): boolean {
  *
  * Returns ``null`` when the entry should be skipped entirely.
  *
- * When the turn is **not loading** (restart, turn ended, conversation
- * switch to a completed thread):
- * - ``idle`` / ``interrupted`` → mapped to ``completed``. The subagent
- *   finished its work and is parked for a potential ``follow_up``,
- *   which is effectively completed from the user's perspective. This
- *   prevents detached tasks (whose ``task`` tool result is
- *   ``"Task spawned."`` → ``in_progress``) from showing as a spinning
- *   loader after the turn ends.
+ * When the turn is **not loading** (turn ended, restart, conversation
+ * switch to a completed thread) the behaviour depends on ``hasMirror`` and
+ * ``seenLive``:
+ * - ``hasMirror`` true (the thread state carries the ``subagents`` mirror
+ *   channel): all transient statuses are **skipped** (``null``). The mirror
+ *   owns the last-known transient truth — it is written on every model call
+ *   and survives restarts — so stale ``wait_for_tasks`` JSON must neither
+ *   fold ``idle`` / ``interrupted`` to ``completed`` nor regress a
+ *   mirror-set status.
+ * - ``hasMirror`` falsy and ``seenLive`` falsy (legacy cold-opened history;
+ *   the task never received a live SSE event this session): ``idle`` /
+ *   ``interrupted`` are folded to ``completed``. The parked subagent has
+ *   almost certainly been reaped by the server-side TTL, so "dormant" would
+ *   be a lie — this is the fix from commit 8b7f6953 and also prevents
+ *   detached tasks (whose ``task`` tool result is ``"Task spawned."`` →
+ *   ``in_progress``) from showing as a spinning loader after reload.
+ * - ``seenLive`` true (the task went IDLE/INTERRUPTED in this live
+ *   session): the status is kept as-is. The subagent may still be
+ *   resident and follow-up-able; the ``task_expired`` SSE event flips
+ *   it to ``completed`` when the TTL fires.
  * - ``running`` / ``pending`` → **skipped** (``null``). A detached task
  *   may genuinely still be running, and we have no way to confirm
  *   completion from stale JSON alone.
@@ -180,8 +194,17 @@ export function mapWaitForTasksStatus(
   isCurrentTurnLoading: boolean,
   result?: string,
   error?: string,
+  seenLive?: boolean,
+  hasMirror?: boolean,
 ): SubtaskResultUpdate | null {
-  if (!isCurrentTurnLoading) {
+  if (
+    !isCurrentTurnLoading &&
+    hasMirror &&
+    isTransientWaitForTasksStatus(status)
+  ) {
+    return null;
+  }
+  if (!isCurrentTurnLoading && !seenLive) {
     if (status === "idle" || status === "interrupted") {
       return {
         status: "completed",
@@ -196,11 +219,13 @@ export function mapWaitForTasksStatus(
   const mappedStatus: SubtaskStatus =
     status === "completed"
       ? "completed"
-      : status === "idle" || status === "interrupted"
+      : status === "idle"
         ? "idle"
-        : status === "pending" || status === "running"
-          ? "in_progress"
-          : "failed";
+        : status === "interrupted"
+          ? "interrupted"
+          : status === "pending" || status === "running"
+            ? "in_progress"
+            : "failed";
   return {
     status: mappedStatus,
     ...(result ? { result } : {}),
@@ -280,4 +305,39 @@ function readStructuredStatus(
     result.error = rawError;
   }
   return result;
+}
+
+/**
+ * Decide whether an incoming subtask update must keep the previous status
+ * instead of applying its own. Pure helper extracted from
+ * `useUpdateSubtask` (`core/tasks/context.tsx`) so the guard is unit-testable.
+ *
+ * Two protections:
+ * - an ``in_progress`` update must not stomp a terminal status
+ *   (``completed`` / ``failed`` / ``expired``) — MessageList writes the
+ *   pending tool-call state before parsing the matching ToolMessage in the
+ *   same render, and keeping the terminal result stable avoids a
+ *   notification loop;
+ * - any non-terminal update (``in_progress`` / ``idle`` / ``interrupted``)
+ *   must not stomp a task whose TTL already expired — the backend
+ *   ``task_expired`` SSE event set ``ttlExpired`` + a terminal status, and
+ *   stale ``wait_for_tasks`` JSON arriving later would otherwise revive it.
+ */
+export function shouldKeepPreviousSubtaskStatus(
+  incoming: { status?: SubtaskStatus },
+  previous: Subtask | undefined,
+): boolean {
+  const previousStatus = previous?.status;
+  const isTerminalPrevious =
+    previousStatus === "completed" ||
+    previousStatus === "failed" ||
+    previousStatus === "expired";
+  const isNonTerminalIncoming =
+    incoming.status === "in_progress" ||
+    incoming.status === "idle" ||
+    incoming.status === "interrupted";
+  return (
+    (incoming.status === "in_progress" && isTerminalPrevious) ||
+    (isNonTerminalIncoming && previous?.ttlExpired === true)
+  );
 }

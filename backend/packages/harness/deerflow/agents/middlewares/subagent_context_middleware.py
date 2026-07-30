@@ -1,14 +1,18 @@
 """Consolidated subagent-awareness middleware for the lead agent.
 
 Injects real-time subagent status into the lead model's context (via
-``wrap_model_call``) and enforces concurrent-subagent limits + pending-task
-guard (via ``after_model``). Absorbs SubagentLimitMiddleware and
+``wrap_model_call``), enforces concurrent-subagent limits + pending-task guard
+(via ``after_model``), and mirrors subagent status into the persisted
+``ThreadState.subagents`` channel (via ``before_model``) so the frontend can
+reconstruct true status on cold open. Absorbs SubagentLimitMiddleware and
 PendingTaskGuardMiddleware.
 """
 
 from __future__ import annotations
 
-from typing import Any, override
+import logging
+import time
+from typing import Annotated, Any, override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
@@ -17,7 +21,10 @@ from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.runtime import Runtime
 
 from deerflow.agents.middlewares.tool_call_metadata import clone_ai_message_with_tool_calls
+from deerflow.agents.thread_state import SubagentState, merge_subagents
 from deerflow.subagents.executor import MAX_CONCURRENT_SUBAGENTS, SubagentStatus
+
+logger = logging.getLogger(__name__)
 
 _MAX_REMINDERS = 3
 MIN_SUBAGENT_LIMIT = 2
@@ -80,17 +87,53 @@ class SubagentStatusMessage(SystemMessage):
         )
 
 
-class SubagentContextMiddleware(AgentMiddleware[AgentState]):
+class SubagentContextState(AgentState):
+    """Compatible with the `ThreadState` schema."""
+
+    subagents: Annotated[dict[str, SubagentState] | None, merge_subagents]
+
+
+class SubagentContextMiddleware(AgentMiddleware[SubagentContextState]):
     """Injects subagent status into lead context and enforces limits + guard.
 
     Args:
         max_concurrent: Maximum concurrent subagent calls (clamped [2,4]).
     """
 
+    state_schema = SubagentContextState
+
     def __init__(self, max_concurrent: int = MAX_CONCURRENT_SUBAGENTS) -> None:
         super().__init__()
         self.max_concurrent = _clamp_subagent_limit(max_concurrent)
         self._count = 0
+
+    @override
+    async def abefore_model(self, state: SubagentContextState, runtime: Runtime) -> dict[str, Any] | None:
+        """Mirror the AgentRegistry snapshot into the persisted subagents channel.
+
+        Reconciles entries gone from the registry (TTL reaped or process
+        restart): last-status idle -> completed; running/pending/interrupted ->
+        expired. Returns None when nothing changed.
+        """
+        thread_id = runtime.context.get("thread_id") if runtime.context else None
+        if not thread_id:
+            return None
+
+        try:
+            from deerflow.subagents.agent_registry import agent_registry
+
+            refs = agent_registry.list_by_thread(thread_id)
+        except Exception:
+            logger.warning("Failed to read subagent registry; skipping mirror sync", exc_info=True)
+            return None
+
+        from deerflow.subagents.lifecycle import DEFAULT_TTL_SECONDS
+        from deerflow.subagents.state_mirror import build_subagents_snapshot
+
+        snapshot = build_subagents_snapshot(refs, state.get("subagents"), now=time.time(), ttl_seconds=DEFAULT_TTL_SECONDS)
+        if snapshot is None:
+            return None
+        return {"subagents": snapshot}
 
     @override
     async def awrap_model_call(self, request: ModelRequest, handler) -> Any:

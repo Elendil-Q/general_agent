@@ -2839,13 +2839,14 @@ class TestAexecuteEventEmission:
 
     @pytest.mark.anyio
     async def test_aexecute_progress_enriched_with_message_content(self, classes, base_config, mock_agent, msg):
-        """_aexecute progress events must carry message content, index, and total."""
+        """_aexecute progress events must carry a serialized AIMessage, index, and total."""
         from deerflow.subagents.event_bus import event_bus
 
         SubagentExecutor = classes["SubagentExecutor"]
 
         m1 = msg.ai("First response", "msg-1")
         m2 = msg.ai("Second response", "msg-2")
+        m2.tool_calls = [{"name": "bash", "args": {"command": "ls"}, "id": "tc-1", "type": "tool_call"}]
         chunk1 = {"messages": [msg.human("Task"), m1]}
         chunk2 = {"messages": [msg.human("Task"), m1, m2]}
         mock_agent.astream = lambda *args, **kwargs: async_iterator([chunk1, chunk2])
@@ -2864,18 +2865,21 @@ class TestAexecuteEventEmission:
         finally:
             unsub()
 
-        # Per-message progress events (enriched with message content)
+        # Per-message progress events (enriched with serialized AIMessage)
         progress_events = [e for e in events if "status" in e]
         assert len(progress_events) >= 2
         first = progress_events[0]
         assert "message" in first
         assert "message_index" in first
         assert "total_messages" in first
-        assert first["message"] == "First response"
+        assert first["message"] == {"id": "msg-1", "type": "ai", "content": "First response", "tool_calls": []}
         assert first["message_index"] == 1
         assert first["total_messages"] == 1
         second = progress_events[1]
-        assert second["message"] == "Second response"
+        assert second["message"]["id"] == "msg-2"
+        assert second["message"]["type"] == "ai"
+        assert second["message"]["content"] == "Second response"
+        assert second["message"]["tool_calls"] == [{"name": "bash", "args": {"command": "ls"}, "id": "tc-1", "type": "tool_call"}]
         assert second["message_index"] == 2
         assert second["total_messages"] == 2
 
@@ -2972,11 +2976,11 @@ class TestAresumeEventEmission:
         assert "message" in first
         assert "message_index" in first
         assert "total_messages" in first
-        assert first["message"] == "First response"
+        assert first["message"] == {"id": "msg-1", "type": "ai", "content": "First response", "tool_calls": []}
         assert first["message_index"] == 1
         assert first["total_messages"] == 1
         second = progress_events[1]
-        assert second["message"] == "Second response"
+        assert second["message"] == {"id": "msg-2", "type": "ai", "content": "Second response", "tool_calls": []}
         assert second["message_index"] == 2
         assert second["total_messages"] == 2
 
@@ -3173,11 +3177,11 @@ class TestAcontinueEventEmission:
         assert "message" in first
         assert "message_index" in first
         assert "total_messages" in first
-        assert first["message"] == "First response"
+        assert first["message"] == {"id": "msg-1", "type": "ai", "content": "First response", "tool_calls": []}
         assert first["message_index"] == 1
         assert first["total_messages"] == 1
         second = progress_events[1]
-        assert second["message"] == "Second response"
+        assert second["message"] == {"id": "msg-2", "type": "ai", "content": "Second response", "tool_calls": []}
         assert second["message_index"] == 2
         assert second["total_messages"] == 2
 

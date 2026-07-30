@@ -108,6 +108,32 @@ def merge_promoted(existing: PromotedTools | None, new: PromotedTools | None) ->
     }
 
 
+class SubagentState(TypedDict):
+    """Persisted mirror of one subagent's status (AgentRegistry is the runtime authority).
+
+    status vocabulary: pending/running/idle/interrupted/completed/failed/expired
+    (cancelled/timed_out collapse to failed; expired is written by reconcile for
+    non-terminal tasks whose registry entry vanished).
+    """
+
+    task_id: str
+    subagent_type: str
+    status: str
+    idle_expires_at: NotRequired[float | None]
+    updated_at: float
+
+
+def merge_subagents(existing: dict[str, SubagentState] | None, new: dict[str, SubagentState] | None) -> dict[str, SubagentState] | None:
+    """Reducer for the subagents mirror - snapshot-replace semantics.
+
+    The AgentRegistry is the single authority; the mirror is always written as a
+    full reconciled snapshot. `new` None means the node didn't touch the mirror.
+    """
+    if new is None:
+        return existing
+    return new
+
+
 class ThreadState(AgentState):
     sandbox: SandboxStateField
     thread_data: NotRequired[ThreadDataState | None]
@@ -117,3 +143,4 @@ class ThreadState(AgentState):
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]  # image_path -> {base64, mime_type}
     promoted: Annotated[PromotedTools | None, merge_promoted]
+    subagents: Annotated[dict[str, SubagentState] | None, merge_subagents]

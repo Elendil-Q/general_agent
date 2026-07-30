@@ -34,7 +34,12 @@ import {
 } from "@/core/messages/utils";
 import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import type { Subtask } from "@/core/tasks";
-import { useUpdateSubtask } from "@/core/tasks/context";
+import {
+  useSubagentMirrorSync,
+  useSubtaskContext,
+  useUpdateSubtask,
+} from "@/core/tasks/context";
+import { hasSubagentMirror } from "@/core/tasks/mirror";
 import {
   derivePendingSubtaskStatus,
   mapWaitForTasksStatus,
@@ -235,6 +240,8 @@ export function MessageList({
   }, [groupedMessages]);
   const rehypePlugins = useRehypeSplitWordsIntoSpans(thread.isLoading);
   const updateSubtask = useUpdateSubtask();
+  const { tasks: liveSubtasks } = useSubtaskContext();
+  useSubagentMirrorSync(thread.values.subagents);
   const allTaskToolCallIds = useMemo(
     () => collectTaskToolCallIds(messages),
     [messages],
@@ -552,6 +559,8 @@ export function MessageList({
                             groupIsLoading,
                             info.result,
                             info.error,
+                            liveSubtasks[origTaskId]?.live === true,
+                            hasSubagentMirror(thread.values.subagents),
                           );
                           if (update) {
                             updateSubtask({

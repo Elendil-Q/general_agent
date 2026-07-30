@@ -1,6 +1,5 @@
 """Follow-up tool for reviving IDLE subagents."""
 
-import asyncio
 import logging
 from typing import Annotated
 
@@ -19,19 +18,26 @@ async def follow_up(
     tool_call_id: Annotated[str, InjectedToolCallId],
     runtime: Runtime,
 ) -> str:
-    """Continue a completed (IDLE) subagent with a follow-up prompt.
+    """Send a follow-up prompt to an IDLE subagent and revive it in the background.
 
     Use this tool when you want to give additional instructions or ask a
     follow-up question to a subagent that has finished its initial task
     and is waiting for further input (IDLE state).
+
+    This tool is fire-and-forget (like ``task``): it revives the subagent
+    and returns immediately WITHOUT the result. Call
+    ``wait_for_tasks([task_id])`` afterwards to wait for the subagent and
+    collect its response. Do not assume the subagent has finished when this
+    tool returns.
 
     Args:
         task_id: The task ID of the subagent to follow up with.
         prompt: The new prompt or instruction for the subagent.
 
     Returns:
-        A summary of the follow-up result: the subagent's response, or
-        an error message if the subagent is not idle or has expired.
+        A confirmation that the follow-up started (the subagent keeps
+        running in the background), or an error message if the subagent is
+        not idle or has expired.
     """
     from deerflow.subagents.agent_registry import agent_registry
     from deerflow.subagents.executor import SubagentStatus
@@ -55,32 +61,19 @@ async def follow_up(
     # ``SubagentExecutor._acontinue`` (the canonical point, fires for
     # both the tool and direct callers). Do not re-emit here; the writer
     # registered below routes that event to this lead run's SSE stream.
+    # No matching unregister: the revived subagent is still active, and
+    # ``sse_bridge.unregister_writer`` keeps writers alive while any
+    # non-terminal subagent remains; ``wait_for_tasks``/``task`` manage
+    # the writer lifecycle for the collecting run.
     thread_id = runtime.context.get("thread_id") if runtime.context else None
     writer = get_stream_writer()
     if thread_id:
         sse_bridge.register_writer(thread_id, writer)
 
-    try:
-        # Block on the continuation — sync call, dispatched via the executor's
-        # internal event-loop logic (mirrors executor.execute()).
-        result = await asyncio.to_thread(executor.continue_with_prompt, prompt, task_id)
+    # Fire-and-forget: revive the subagent in the background. The
+    # continuation mutates the REGISTERED result holder, so a subsequent
+    # interrupt is resumable via the resume endpoint, and wait_for_tasks
+    # collects the outcome from the registry mirror.
+    executor.continue_async(prompt, task_id)
 
-        if result.status == SubagentStatus.COMPLETED:
-            return f"Follow-up completed. Result: {result.result}"
-        elif result.status == SubagentStatus.FAILED:
-            return f"Follow-up failed: {result.error}"
-        elif result.status == SubagentStatus.CANCELLED:
-            return f"Follow-up was cancelled: {result.error}"
-        elif result.status == SubagentStatus.TIMED_OUT:
-            return f"Follow-up timed out: {result.error}"
-        elif result.status == SubagentStatus.IDLE:
-            # keep_alive=True: subagent is idle again
-            lifecycle_manager.adopt(task_id)
-            return f"Follow-up completed. Subagent {task_id} is idle again, awaiting further follow-up."
-        elif result.status == SubagentStatus.INTERRUPTED:
-            return f"Follow-up paused: the subagent {task_id} is awaiting human input. Use the resume mechanism to continue."
-        else:
-            return f"Follow-up ended with status: {result.status.value}"
-    finally:
-        if thread_id:
-            sse_bridge.unregister_writer(thread_id)
+    return f"Follow-up started for subagent {task_id}; it is running in the background. Call wait_for_tasks([{task_id!r}]) to wait for it and collect its response."
