@@ -2,10 +2,10 @@
 
 ``get_stream_writer()`` is scoped to one lead run; the EventBus is
 process-global. This bridge holds a ``thread_id -> writer`` map: lead-run
-tools (``task(detached=False)`` / ``wait_for_tasks`` / ``follow_up``)
-register their writer on entry and unregister on exit. Events with no
-registered writer are dropped from SSE (their state is already in the
-Registry, so no result is lost).
+tools (``task()`` / ``wait_for_tasks`` / ``follow_up``) register their
+writer on entry and unregister on exit. Events with no registered writer
+are dropped from SSE (their state is already in the Registry, so no result
+is lost).
 """
 
 from __future__ import annotations
@@ -49,13 +49,15 @@ class SSEBridge:
             self._writers[thread_id] = writer
 
     def unregister_writer(self, thread_id: str) -> None:
-        # Check for IDLE subagents outside the SSE lock to avoid nested
-        # locks. If any IDLE subagents remain, keep the writer alive so
-        # the lifecycle manager's TTL-expiry event can reach the frontend.
+        # Check for active subagents outside the SSE lock to avoid nested
+        # locks. If any non-terminal subagents remain (RUNNING / INTERRUPTED
+        # / IDLE), keep the writer alive so their lifecycle events can reach
+        # the frontend.
         from deerflow.subagents.agent_registry import agent_registry
 
-        if agent_registry.list_idle(thread_id):
-            return
+        refs = agent_registry.list_by_thread(thread_id)
+        if any(not ref.status.is_terminal for ref in refs):
+            return  # keep writer alive for active subagents
         with self._lock:
             self._writers.pop(thread_id, None)
 

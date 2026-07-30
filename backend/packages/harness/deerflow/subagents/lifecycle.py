@@ -83,8 +83,8 @@ class SubagentLifecycleManager:
 
         # Release the SSE writer now that this subagent is COMPLETED. The
         # writer was kept alive (see sse_bridge.unregister_writer) so the
-        # expired event could reach the frontend. If no other IDLE subagents
-        # remain for this thread, the writer is finally released.
+        # expired event could reach the frontend. If no other non-terminal
+        # subagents remain for this thread, the writer is finally released.
         if thread_id:
             from deerflow.subagents.sse_bridge import sse_bridge
 
