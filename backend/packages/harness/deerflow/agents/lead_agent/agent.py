@@ -36,9 +36,6 @@ from deerflow.agents.middlewares.memory_middleware import MemoryMiddleware
 from deerflow.agents.middlewares.safety_finish_reason_middleware import (
     SafetyFinishReasonMiddleware,
 )
-from deerflow.agents.middlewares.subagent_limit_middleware import (
-    SubagentLimitMiddleware,
-)
 from deerflow.agents.middlewares.summarization_middleware import (
     BeforeSummarizationHook,
     DeerFlowSummarizationMiddleware,
@@ -424,17 +421,14 @@ def build_middlewares(
 
     middlewares.append(SystemMessageCoalescingMiddleware())
 
-    # Add SubagentLimitMiddleware to truncate excess parallel task calls
     subagent_enabled = cfg.get("subagent_enabled", False)
     if subagent_enabled:
         max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
-        middlewares.append(SubagentLimitMiddleware(max_concurrent=max_concurrent_subagents))
-
-        from deerflow.agents.middlewares.pending_task_guard_middleware import (
-            PendingTaskGuardMiddleware,
+        from deerflow.agents.middlewares.subagent_context_middleware import (
+            SubagentContextMiddleware,
         )
 
-        middlewares.append(PendingTaskGuardMiddleware())
+        middlewares.append(SubagentContextMiddleware(max_concurrent=max_concurrent_subagents))
 
     # LoopDetectionMiddleware — detect and break repetitive tool call loops
     loop_detection_config = resolved_app_config.loop_detection

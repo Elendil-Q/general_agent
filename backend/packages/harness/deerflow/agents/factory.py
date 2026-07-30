@@ -172,7 +172,7 @@ def _assemble_from_features(
       8.   TitleMiddleware (auto_title feature)
       9.   MemoryMiddleware (memory feature)
       10.  ViewImageMiddleware (vision feature)
-      11.  SubagentLimitMiddleware (subagent feature)
+      11.  SubagentContextMiddleware (subagent feature)
       12.  LoopDetectionMiddleware (loop_detection feature)
       13.  ClarificationMiddleware (always last)
 
@@ -265,9 +265,9 @@ def _assemble_from_features(
         if isinstance(feat.subagent, AgentMiddleware):
             chain.append(feat.subagent)
         else:
-            from deerflow.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
+            from deerflow.agents.middlewares.subagent_context_middleware import SubagentContextMiddleware
 
-            chain.append(SubagentLimitMiddleware())
+            chain.append(SubagentContextMiddleware())
         from deerflow.tools.builtins import task_tool
 
         extra_tools.append(task_tool)

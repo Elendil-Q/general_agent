@@ -803,7 +803,7 @@ def test_full_chain_order(mock_create_agent):
         "TitleMiddleware",
         "MemoryMiddleware",
         "ViewImageMiddleware",
-        "SubagentLimitMiddleware",
+        "SubagentContextMiddleware",
         "LoopDetectionMiddleware",
         "ClarificationMiddleware",
     ]

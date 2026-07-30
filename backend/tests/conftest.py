@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 #       -> deerflow.agents.thread_state
 #         -> deerflow.agents.__init__
 #           -> lead_agent.agent
-#             -> subagent_limit_middleware
+#             -> subagent_context_middleware
 #               -> deerflow.subagents.executor  <-- circular!
 #
 # By injecting a mock for deerflow.subagents.executor *before* any test module
