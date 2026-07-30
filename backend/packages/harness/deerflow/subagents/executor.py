@@ -1851,6 +1851,10 @@ the same skill directory only when needed during execution.
                         error="Cancelled by user",
                         token_usage_records=collector.snapshot_records(),
                     )
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {"event": "cancelled", "task_id": task_id, "thread_id": self.thread_id or ""},
+                    )
                     return result
 
                 final_state = chunk
@@ -1874,6 +1878,17 @@ the same skill directory only when needed during execution.
                             ai_messages.append(message_dict)
                             if message_id:
                                 seen_message_ids.add(message_id)
+                            event_bus.emit(
+                                "subagent:progress",
+                                {
+                                    "task_id": task_id,
+                                    "thread_id": self.thread_id or "",
+                                    "status": result.status.value,
+                                    "message": message_dict.get("content", ""),
+                                    "message_index": len(ai_messages),
+                                    "total_messages": len(ai_messages),
+                                },
+                            )
                         budget.tick()
                         if budget.at_hard_limit():
                             from deerflow.subagents.agent_registry import agent_registry
@@ -1882,6 +1897,15 @@ the same skill directory only when needed during execution.
                             result.try_set_terminal(
                                 SubagentStatus.FAILED,
                                 error="request budget exceeded",
+                            )
+                            event_bus.emit(
+                                "subagent:lifecycle",
+                                {
+                                    "event": "failed",
+                                    "task_id": task_id,
+                                    "thread_id": self.thread_id or "",
+                                    "error": "request budget exceeded",
+                                },
                             )
                             return result
 
@@ -1894,6 +1918,10 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {"event": "cancelled", "task_id": task_id, "thread_id": self.thread_id or ""},
+                )
                 return result
 
             if interrupts:
@@ -1902,6 +1930,15 @@ the same skill directory only when needed during execution.
                     interrupts=serialize_lc_object(interrupts),
                     subagent_thread_id=self.subagent_thread_id,
                     token_usage_records=collector.snapshot_records(),
+                )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "interrupted",
+                        "task_id": task_id,
+                        "thread_id": self.thread_id or "",
+                        "interrupts": serialize_lc_object(interrupts),
+                    },
                 )
                 return result
 
@@ -1959,6 +1996,15 @@ the same skill directory only when needed during execution.
                 SubagentStatus.FAILED,
                 error=str(e),
                 token_usage_records=(collector.snapshot_records() if collector is not None else None),
+            )
+            event_bus.emit(
+                "subagent:lifecycle",
+                {
+                    "event": "failed",
+                    "task_id": task_id,
+                    "thread_id": self.thread_id or "",
+                    "error": str(e),
+                },
             )
 
         return result
