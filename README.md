@@ -645,6 +645,8 @@ The lead agent can spawn sub-agents on the fly — each with its own scoped cont
 
 This is how DeerFlow handles tasks that take minutes to hours: a research task might fan out into a dozen sub-agents, each exploring a different angle, then converge into a single report — or a website — or a slide deck with generated visuals. One harness, many hands.
 
+Curious what a sub-agent actually did? Click it in the activity panel to open its full conversation — a read-only, chat-style view that stays live while the sub-agent runs and persists after it finishes, with a back button returning to the chat.
+
 ### Sandbox & File System
 
 DeerFlow doesn't just *talk* about doing things. It has its own computer.

@@ -608,6 +608,14 @@ export interface Translations {
     subagents: string;
   };
 
+  // Subagent conversation view
+  subagentConversation: {
+    loading: string;
+    notFound: string;
+    loadFailed: string;
+    empty: string;
+  };
+
   // Left panel toggle (activity + files)
   leftPanel: {
     show: string;

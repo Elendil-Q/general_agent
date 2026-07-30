@@ -8,6 +8,7 @@ import {
   PauseCircleIcon,
   XCircleIcon,
 } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
 
 import type { Subtask } from "@/core/tasks/types";
 import { cn } from "@/lib/utils";
@@ -31,9 +32,13 @@ function statusIcon(status: Subtask["status"]) {
 }
 
 export function SubagentList({ tasks }: { tasks: Subtask[] }) {
+  const router = useRouter();
+  const { thread_id: threadId } = useParams<{ thread_id: string }>();
+
   const handleClick = (taskId: string) => {
-    const element = document.querySelector(`[data-task-id="${taskId}"]`);
-    element?.scrollIntoView({ behavior: "smooth", block: "center" });
+    router.push(
+      `/workspace/chats/${encodeURIComponent(threadId)}/subagents/${encodeURIComponent(taskId)}`,
+    );
   };
 
   return (

@@ -976,6 +976,72 @@ async def delete_chain_progress(thread_id: str, chain_name: str, request: Reques
 # ---------------------------------------------------------------------------
 
 
+async def _subagent_mirror_entry(request: Request, thread_id: str, task_id: str) -> dict | None:
+    """Read the persisted subagent-state mirror for one task, degrading to None.
+
+    The mirror lives in the thread checkpoint's ``subagents`` channel
+    (``SubagentContextMiddleware.abefore_model``); any failure or missing
+    piece (no checkpointer, no checkpoint, no channel, no entry) must not
+    fail the read-only endpoint — persisted events alone justify a 200.
+    """
+    checkpointer = getattr(request.app.state, "checkpointer", None)
+    if checkpointer is None:
+        return None
+    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    try:
+        checkpoint_tuple = await checkpointer.aget_tuple(config)
+    except Exception:
+        logger.warning("Failed to read checkpoint for subagent mirror thread %s", thread_id, exc_info=True)
+        return None
+    if checkpoint_tuple is None:
+        return None
+    checkpoint = getattr(checkpoint_tuple, "checkpoint", {}) or {}
+    channel_values = checkpoint.get("channel_values", {}) if isinstance(checkpoint, dict) else {}
+    subagents = channel_values.get("subagents", {}) if isinstance(channel_values, dict) else {}
+    if not isinstance(subagents, dict):
+        return None
+    entry = subagents.get(task_id)
+    return entry if isinstance(entry, dict) else None
+
+
+@router.get("/{thread_id}/subagents/{task_id}/messages")
+@require_permission("runs", "read", owner_check=True)
+async def list_subagent_messages(thread_id: str, task_id: str, request: Request) -> dict:
+    """Return the persisted conversation history + metadata for one subagent task.
+
+    ``messages`` are the ``subagent_message`` events stored for the task (seq
+    ascending, event dicts verbatim). ``subagent_type`` / ``description`` come
+    from the first event's metadata, falling back to the state mirror;
+    ``status`` comes from the mirror only (None when no mirror entry exists,
+    e.g. after a restart with a memory checkpointer). 404 only when neither
+    persisted events nor a mirror entry exist for the task.
+    """
+    event_store = get_run_event_store(request)
+    messages = await event_store.list_subagent_messages(thread_id, task_id)
+    mirror_entry = await _subagent_mirror_entry(request, thread_id, task_id)
+
+    if not messages and mirror_entry is None:
+        raise HTTPException(status_code=404, detail=f"Subagent task {task_id} not found for thread {thread_id}")
+
+    subagent_type = ""
+    description = ""
+    if messages:
+        first_metadata = messages[0].get("metadata") or {}
+        subagent_type = first_metadata.get("subagent_type") or ""
+        description = first_metadata.get("description") or ""
+    if not subagent_type and mirror_entry is not None:
+        subagent_type = mirror_entry.get("subagent_type") or ""
+
+    return {
+        "task_id": task_id,
+        "thread_id": thread_id,
+        "subagent_type": subagent_type,
+        "description": description,
+        "status": mirror_entry.get("status") if mirror_entry is not None else None,
+        "messages": messages,
+    }
+
+
 @router.post("/{thread_id}/subagents/{task_id}/resume")
 @require_permission("runs", "create", owner_check=True, require_existing=True)
 async def resume_subagent(

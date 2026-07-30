@@ -193,6 +193,12 @@ class JsonlRunEventStore(RunEventStore):
         else:
             return filtered[-limit:] if len(filtered) > limit else filtered
 
+    async def list_subagent_messages(self, thread_id, task_id):
+        # Subagent messages may span multiple runs of the thread, so scan all
+        # run files like ``list_messages`` does (offloaded — blocking I/O).
+        all_events = await asyncio.to_thread(self._read_thread_events, thread_id)
+        return [e for e in all_events if e.get("category") == "subagent_message" and e.get("metadata", {}).get("task_id") == task_id]
+
     async def count_messages(self, thread_id):
         all_events = await asyncio.to_thread(self._read_thread_events, thread_id)
         return sum(1 for e in all_events if e.get("category") == "message")

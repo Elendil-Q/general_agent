@@ -132,6 +132,11 @@ class MemoryRunEventStore(RunEventStore):
             return window[:limit]
         return window[-limit:]
 
+    async def list_subagent_messages(self, thread_id, task_id):
+        # ``_events`` is append-only in seq order, so the filtered view stays ascending.
+        events = self._events.get(thread_id, [])
+        return [e for e in events if e["category"] == "subagent_message" and e["metadata"].get("task_id") == task_id]
+
     async def count_messages(self, thread_id):
         return len(self._messages.get(thread_id, []))
 

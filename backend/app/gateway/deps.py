@@ -209,6 +209,14 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         app.state.run_events_config = run_events_config
         app.state.run_event_store = make_run_event_store(run_events_config)
 
+        # Bridge subagent:message events (emitted on the isolated subagent
+        # loop thread) into the run event store bound to this main loop.
+        unsubscribe_subagent_messages: Callable[[], None] | None = None
+        if app.state.run_event_store is not None:
+            from deerflow.subagents.message_persistence import subagent_message_persister
+
+            unsubscribe_subagent_messages = subagent_message_persister.bind(loop=asyncio.get_running_loop(), event_store=app.state.run_event_store)
+
         # RunManager with store backing for persistence
         app.state.run_manager = RunManager(store=app.state.run_store)
         if getattr(config.database, "backend", None) == "sqlite":
@@ -225,6 +233,8 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         try:
             yield
         finally:
+            if unsubscribe_subagent_messages is not None:
+                unsubscribe_subagent_messages()
             # Drain in-flight run tasks BEFORE the AsyncExitStack tears down the
             # checkpointer (and its connection pool). A run still mid-graph would
             # otherwise leak into asyncio.run() shutdown, where langgraph's

@@ -714,6 +714,14 @@ export const enUS: Translations = {
     subagents: "Subagents",
   },
 
+  // Subagent conversation view
+  subagentConversation: {
+    loading: "Loading subagent conversation…",
+    notFound: "Subagent task not found",
+    loadFailed: "Failed to load the subagent conversation",
+    empty: "No messages yet",
+  },
+
   // Left panel toggle (activity + files)
   leftPanel: {
     show: "Show activity & files",

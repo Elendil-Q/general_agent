@@ -65,8 +65,9 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 
 1. User input → thread hooks (`core/threads/hooks.ts`) → LangGraph SDK streaming
 2. Stream events update thread state (messages, artifacts, todos). Subagent status rides two channels: live `custom` SSE events (`task_started`/`task_idle`/… → `core/threads/custom-events.ts`) as real-time increments, and the persisted `ThreadState.subagents` mirror channel (`values` mode → `useSubagentMirrorSync` in `core/tasks/context.tsx`, pure helpers in `core/tasks/mirror.ts`) as the restart/cold-open baseline — with a local IDLE-TTL timer (`idle_expires_at`) covering the `task_expired` event that the backend cannot deliver once the lead run's stream has closed
-3. TanStack Query manages server state; localStorage stores user settings
-4. Components subscribe to thread state and render updates
+3. The read-only subagent conversation view at `/workspace/chats/[thread_id]/subagents/[task_id]` (entered by clicking a task in `SubagentList`) loads persisted history via `useSubagentMessages` (`core/tasks/subagent-messages.ts`, backed by `GET /api/threads/{thread_id}/subagents/{task_id}/messages`) and merges the live `task_progress` snapshot from the subtask store by message id (`mergeSubagentLiveMessage`), freezing once the task is terminal
+4. TanStack Query manages server state; localStorage stores user settings
+5. Components subscribe to thread state and render updates
 
 ### Key Patterns
 

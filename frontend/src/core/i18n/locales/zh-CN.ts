@@ -686,6 +686,14 @@ export const zhCN: Translations = {
     subagents: "子代理",
   },
 
+  // Subagent conversation view
+  subagentConversation: {
+    loading: "正在加载子代理对话…",
+    notFound: "未找到子代理任务",
+    loadFailed: "加载子代理对话失败",
+    empty: "暂无消息",
+  },
+
   // Left panel toggle (activity + files)
   leftPanel: {
     show: "显示活动与文件",

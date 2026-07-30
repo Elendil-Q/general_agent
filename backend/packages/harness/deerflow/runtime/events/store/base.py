@@ -23,6 +23,8 @@ class RunEventStore(abc.ABC):
     3. list_messages() only returns category="message" events
     4. list_events() returns all events for the specified run
     5. Returned dicts match the RunEvent field structure
+    6. list_subagent_messages() only returns events matching both
+       category="subagent_message" and metadata["task_id"] == task_id
     """
 
     @abc.abstractmethod
@@ -94,6 +96,18 @@ class RunEventStore(abc.ABC):
         - after_seq: return the first ``limit`` records with seq > after_seq (ascending)
         - before_seq: return the last ``limit`` records with seq < before_seq (ascending)
         - neither: return the latest ``limit`` records (ascending)
+        """
+
+    @abc.abstractmethod
+    async def list_subagent_messages(
+        self,
+        thread_id: str,
+        task_id: str,
+    ) -> list[dict]:
+        """Return subagent conversation messages (category="subagent_message")
+        for a thread + task_id, ordered by seq ascending.
+
+        Filters on category == "subagent_message" AND metadata["task_id"] == task_id.
         """
 
     @abc.abstractmethod

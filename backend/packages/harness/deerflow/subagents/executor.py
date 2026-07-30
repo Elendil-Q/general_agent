@@ -18,7 +18,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from langchain.tools import BaseTool
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -466,6 +466,14 @@ class SubagentExecutor:
         # the lead agent. Without this the subagent always falls back to free.
         self.clarification_interrupt_enabled = clarification_interrupt_enabled
 
+        # Persistence-event dedup, scoped to the executor instance: execute /
+        # resume / continue all run on this same instance, and resumed runs
+        # re-yield checkpoint history in values snapshots. Keying the seen set
+        # on the instance (not per method) guarantees each AI/Tool message is
+        # persisted exactly once across the subagent's whole lifetime.
+        self._persisted_message_ids: set[str] = set()
+        self._persisted_idless_message_dicts: list[dict[str, Any]] = []
+
         # Independent thread identity for the subagent's own checkpointer. The
         # parent thread_id stays in effect for sandbox/file isolation (context);
         # this one keys the subagent checkpoint so interrupt/resume state is
@@ -874,6 +882,35 @@ the same skill directory only when needed during execution.
             state["thread_data"] = self.thread_data
         return state, self.tools, None
 
+    def _emit_subagent_message(self, task_id: str, message_dict: dict[str, Any]) -> None:
+        """Emit a ``subagent:message`` persistence event for a fresh AI/Tool message.
+
+        Deduped against the instance-level seen sets so a message is emitted at
+        most once across the executor's lifetime — execute / resume / continue
+        share one instance, and resumed runs re-yield checkpoint history in
+        their values snapshots. Id-less messages can't be keyed; they fall back
+        to a full-dict compare (same rule as the ``ai_messages`` capture).
+        """
+        message_id = message_dict.get("id")
+        if message_id:
+            if message_id in self._persisted_message_ids:
+                return
+            self._persisted_message_ids.add(message_id)
+        else:
+            if message_dict in self._persisted_idless_message_dicts:
+                return
+            self._persisted_idless_message_dicts.append(message_dict)
+        event_bus.emit(
+            "subagent:message",
+            {
+                "task_id": task_id,
+                "thread_id": self.thread_id or "",
+                "run_id": self.run_id or "",
+                "subagent_type": self.config.name,
+                "message": message_dict,
+            },
+        )
+
     async def _aexecute(self, task: str, result_holder: SubagentResult | None = None) -> SubagentResult:
         """Execute a task asynchronously.
 
@@ -1059,83 +1096,103 @@ the same skill directory only when needed during execution.
                     if chunk_interrupts:
                         interrupts = chunk_interrupts
 
-                # Extract AI messages from the current state
+                # Extract AI/Tool messages from the current state. A single
+                # values snapshot may carry several fresh messages in its tail
+                # (e.g. a ToolNode producing N parallel ToolMessages in one
+                # super-step), so walk the whole snapshot and emit every fresh
+                # AI/Tool message in order — not just the trailing one.
                 messages = chunk.get("messages", [])
                 if messages:
-                    last_message = messages[-1]
-                    # Check if this is a new AI message
-                    if isinstance(last_message, AIMessage):
-                        # Convert message to dict for serialization
-                        message_dict = last_message.model_dump()
-                        # Only add if it's not already in the list (avoid duplicates)
-                        # Check by comparing message IDs if available, otherwise compare full dict
-                        message_id = message_dict.get("id")
-                        if message_id:
-                            is_duplicate = message_id in seen_message_ids
-                        else:
-                            # id-less messages can't be keyed; fall back to a full-dict compare
-                            is_duplicate = message_dict in ai_messages
-
-                        if not is_duplicate:
-                            ai_messages.append(message_dict)
+                    last_index = len(messages) - 1
+                    for index, message in enumerate(messages):
+                        if isinstance(message, ToolMessage):
+                            # Tool results are persisted (but not accumulated into
+                            # ``ai_messages``) so the subagent conversation view can
+                            # render the full exchange.
+                            self._emit_subagent_message(result.task_id or "", message.model_dump())
+                        # Check if this is a new AI message
+                        elif isinstance(message, AIMessage):
+                            # Convert message to dict for serialization
+                            message_dict = message.model_dump()
+                            # Only add if it's not already in the list (avoid duplicates)
+                            # Check by comparing message IDs if available, otherwise compare full dict
+                            message_id = message_dict.get("id")
                             if message_id:
-                                seen_message_ids.add(message_id)
-                            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(ai_messages)}")
-                            # One tick per fresh LLM response. ``BudgetMonitor.tick``
-                            # emits the soft/hard ``subagent:budget`` events
-                            # itself; we only need to honor the hard-limit
-                            # termination by breaking the astream loop.
-                            budget.tick()
-                            if budget.at_hard_limit():
-                                from deerflow.subagents.agent_registry import agent_registry
+                                is_duplicate = message_id in seen_message_ids
+                            else:
+                                # id-less messages can't be keyed; fall back to a full-dict compare
+                                is_duplicate = message_dict in ai_messages
 
-                                agent_registry.update_status(result.task_id or "", SubagentStatus.FAILED)
-                                result.try_set_terminal(
-                                    SubagentStatus.FAILED,
-                                    error="request budget exceeded",
-                                )
-                                # Surface a progress event so observers see the
-                                # terminal status at least once before the run
-                                # ends. Tokens/model are omitted; per-LLM usage
-                                # arrives via the token-collector.
+                            if not is_duplicate:
+                                ai_messages.append(message_dict)
+                                if message_id:
+                                    seen_message_ids.add(message_id)
+                                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(ai_messages)}")
+                                self._emit_subagent_message(result.task_id or "", message_dict)
+                                # Progress/budget semantics stay tied to the
+                                # trailing message, exactly as before.
+                                if index != last_index:
+                                    continue
+                                # One tick per fresh LLM response. ``BudgetMonitor.tick``
+                                # emits the soft/hard ``subagent:budget`` events
+                                # itself; we only need to honor the hard-limit
+                                # termination by breaking the astream loop.
+                                budget.tick()
+                                if budget.at_hard_limit():
+                                    from deerflow.subagents.agent_registry import agent_registry
+
+                                    agent_registry.update_status(result.task_id or "", SubagentStatus.FAILED)
+                                    result.try_set_terminal(
+                                        SubagentStatus.FAILED,
+                                        error="request budget exceeded",
+                                    )
+                                    # Surface a progress event so observers see the
+                                    # terminal status at least once before the run
+                                    # ends. Tokens/model are omitted; per-LLM usage
+                                    # arrives via the token-collector.
+                                    event_bus.emit(
+                                        "subagent:progress",
+                                        {
+                                            "task_id": result.task_id or "",
+                                            "thread_id": self.thread_id or "",
+                                            "status": result.status.value,
+                                        },
+                                    )
+                                    event_bus.emit(
+                                        "subagent:lifecycle",
+                                        {
+                                            "event": "failed",
+                                            "task_id": result.task_id or "",
+                                            "thread_id": self.thread_id or "",
+                                            "error": "request budget exceeded",
+                                        },
+                                    )
+                                    break
+                                # Per-message progress: send the serialized AI
+                                # message (id/type/content/tool_calls) so the
+                                # frontend SubtaskCard can render live tool-call
+                                # progress via ``explainLastToolCall``.
                                 event_bus.emit(
                                     "subagent:progress",
                                     {
                                         "task_id": result.task_id or "",
                                         "thread_id": self.thread_id or "",
                                         "status": result.status.value,
+                                        "message": {
+                                            "id": message_dict.get("id"),
+                                            "type": "ai",
+                                            "content": message_dict.get("content", ""),
+                                            "tool_calls": message_dict.get("tool_calls", []),
+                                        },
+                                        "message_index": len(ai_messages),
+                                        "total_messages": len(ai_messages),
                                     },
                                 )
-                                event_bus.emit(
-                                    "subagent:lifecycle",
-                                    {
-                                        "event": "failed",
-                                        "task_id": result.task_id or "",
-                                        "thread_id": self.thread_id or "",
-                                        "error": "request budget exceeded",
-                                    },
-                                )
-                                break
-                            # Per-message progress: send the serialized AI
-                            # message (id/type/content/tool_calls) so the
-                            # frontend SubtaskCard can render live tool-call
-                            # progress via ``explainLastToolCall``.
-                            event_bus.emit(
-                                "subagent:progress",
-                                {
-                                    "task_id": result.task_id or "",
-                                    "thread_id": self.thread_id or "",
-                                    "status": result.status.value,
-                                    "message": {
-                                        "id": message_dict.get("id"),
-                                        "type": "ai",
-                                        "content": message_dict.get("content", ""),
-                                        "tool_calls": message_dict.get("tool_calls", []),
-                                    },
-                                    "message_index": len(ai_messages),
-                                    "total_messages": len(ai_messages),
-                                },
-                            )
+
+                # The hard-limit branch above only breaks out of the per-message
+                # loop; honor it at the astream level too.
+                if budget.at_hard_limit():
+                    break
 
             # Stream ended. Determine why: cancel takes precedence over an
             # interrupt (an explicit user stop wins over a pause), then an
@@ -1547,34 +1604,42 @@ the same skill directory only when needed during execution.
 
                 messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
                 if messages:
-                    last_message = messages[-1]
-                    if isinstance(last_message, AIMessage):
-                        message_dict = last_message.model_dump()
-                        message_id = message_dict.get("id")
-                        if message_id:
-                            is_duplicate = message_id in seen_message_ids
-                        else:
-                            is_duplicate = message_dict in ai_messages
-                        if not is_duplicate:
-                            ai_messages.append(message_dict)
+                    last_index = len(messages) - 1
+                    for index, message in enumerate(messages):
+                        if isinstance(message, ToolMessage):
+                            self._emit_subagent_message(result.task_id or "", message.model_dump())
+                        elif isinstance(message, AIMessage):
+                            message_dict = message.model_dump()
+                            message_id = message_dict.get("id")
                             if message_id:
-                                seen_message_ids.add(message_id)
-                            event_bus.emit(
-                                "subagent:progress",
-                                {
-                                    "task_id": result.task_id or "",
-                                    "thread_id": self.thread_id or "",
-                                    "status": result.status.value,
-                                    "message": {
-                                        "id": message_dict.get("id"),
-                                        "type": "ai",
-                                        "content": message_dict.get("content", ""),
-                                        "tool_calls": message_dict.get("tool_calls", []),
+                                is_duplicate = message_id in seen_message_ids
+                            else:
+                                is_duplicate = message_dict in ai_messages
+                            if not is_duplicate:
+                                ai_messages.append(message_dict)
+                                if message_id:
+                                    seen_message_ids.add(message_id)
+                                self._emit_subagent_message(result.task_id or "", message_dict)
+                                # Progress semantics stay tied to the trailing
+                                # message, exactly as before.
+                                if index != last_index:
+                                    continue
+                                event_bus.emit(
+                                    "subagent:progress",
+                                    {
+                                        "task_id": result.task_id or "",
+                                        "thread_id": self.thread_id or "",
+                                        "status": result.status.value,
+                                        "message": {
+                                            "id": message_dict.get("id"),
+                                            "type": "ai",
+                                            "content": message_dict.get("content", ""),
+                                            "tool_calls": message_dict.get("tool_calls", []),
+                                        },
+                                        "message_index": len(ai_messages),
+                                        "total_messages": len(ai_messages),
                                     },
-                                    "message_index": len(ai_messages),
-                                    "total_messages": len(ai_messages),
-                                },
-                            )
+                                )
 
             if result.cancel_event.is_set():
                 result.try_set_terminal(
@@ -2020,53 +2085,63 @@ the same skill directory only when needed during execution.
 
                 messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
                 if messages:
-                    last_message = messages[-1]
-                    if isinstance(last_message, AIMessage):
-                        message_dict = last_message.model_dump()
-                        message_id = message_dict.get("id")
-                        if message_id:
-                            is_duplicate = message_id in seen_message_ids
-                        else:
-                            is_duplicate = message_dict in ai_messages
-                        if not is_duplicate:
-                            ai_messages.append(message_dict)
+                    last_index = len(messages) - 1
+                    for index, message in enumerate(messages):
+                        if isinstance(message, ToolMessage):
+                            self._emit_subagent_message(task_id, message.model_dump())
+                        elif isinstance(message, AIMessage):
+                            message_dict = message.model_dump()
+                            message_id = message_dict.get("id")
                             if message_id:
-                                seen_message_ids.add(message_id)
-                            event_bus.emit(
-                                "subagent:progress",
-                                {
-                                    "task_id": task_id,
-                                    "thread_id": self.thread_id or "",
-                                    "status": result.status.value,
-                                    "message": {
-                                        "id": message_dict.get("id"),
-                                        "type": "ai",
-                                        "content": message_dict.get("content", ""),
-                                        "tool_calls": message_dict.get("tool_calls", []),
+                                is_duplicate = message_id in seen_message_ids
+                            else:
+                                is_duplicate = message_dict in ai_messages
+                            if not is_duplicate:
+                                ai_messages.append(message_dict)
+                                if message_id:
+                                    seen_message_ids.add(message_id)
+                                self._emit_subagent_message(task_id, message_dict)
+                                # Progress semantics stay tied to the trailing
+                                # message, exactly as before.
+                                if index != last_index:
+                                    continue
+                                event_bus.emit(
+                                    "subagent:progress",
+                                    {
+                                        "task_id": task_id,
+                                        "thread_id": self.thread_id or "",
+                                        "status": result.status.value,
+                                        "message": {
+                                            "id": message_dict.get("id"),
+                                            "type": "ai",
+                                            "content": message_dict.get("content", ""),
+                                            "tool_calls": message_dict.get("tool_calls", []),
+                                        },
+                                        "message_index": len(ai_messages),
+                                        "total_messages": len(ai_messages),
                                     },
-                                    "message_index": len(ai_messages),
-                                    "total_messages": len(ai_messages),
-                                },
-                            )
-                        budget.tick()
-                        if budget.at_hard_limit():
-                            from deerflow.subagents.agent_registry import agent_registry
+                                )
+                            if index != last_index:
+                                continue
+                            budget.tick()
+                            if budget.at_hard_limit():
+                                from deerflow.subagents.agent_registry import agent_registry
 
-                            agent_registry.update_status(task_id, SubagentStatus.FAILED)
-                            result.try_set_terminal(
-                                SubagentStatus.FAILED,
-                                error="request budget exceeded",
-                            )
-                            event_bus.emit(
-                                "subagent:lifecycle",
-                                {
-                                    "event": "failed",
-                                    "task_id": task_id,
-                                    "thread_id": self.thread_id or "",
-                                    "error": "request budget exceeded",
-                                },
-                            )
-                            return result
+                                agent_registry.update_status(task_id, SubagentStatus.FAILED)
+                                result.try_set_terminal(
+                                    SubagentStatus.FAILED,
+                                    error="request budget exceeded",
+                                )
+                                event_bus.emit(
+                                    "subagent:lifecycle",
+                                    {
+                                        "event": "failed",
+                                        "task_id": task_id,
+                                        "thread_id": self.thread_id or "",
+                                        "error": "request budget exceeded",
+                                    },
+                                )
+                                return result
 
             if result.cancel_event.is_set():
                 from deerflow.subagents.agent_registry import agent_registry

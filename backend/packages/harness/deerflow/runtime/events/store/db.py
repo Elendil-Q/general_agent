@@ -264,6 +264,20 @@ class DbRunEventStore(RunEventStore):
                 rows = list(result.scalars())
                 return [self._row_to_dict(r) for r in reversed(rows)]
 
+    async def list_subagent_messages(self, thread_id, task_id):
+        stmt = (
+            select(RunEventRow)
+            .where(
+                RunEventRow.thread_id == thread_id,
+                RunEventRow.category == "subagent_message",
+                RunEventRow.event_metadata["task_id"].as_string() == task_id,
+            )
+            .order_by(RunEventRow.seq.asc())
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            return [self._row_to_dict(r) for r in result.scalars()]
+
     async def count_messages(
         self,
         thread_id,

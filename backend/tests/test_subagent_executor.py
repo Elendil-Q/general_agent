@@ -3383,3 +3383,194 @@ class TestAcontinueEventEmission:
         assert failed_events[0]["task_id"] == "continue-task"
         assert failed_events[0]["thread_id"] == "test-thread"
         assert "Agent error on continue" in failed_events[0]["error"]
+
+
+class TestSubagentMessageEmission:
+    """Verify the executor emits ``subagent:message`` persistence events.
+
+    Every fresh AIMessage and ToolMessage must be emitted exactly once, in
+    arrival order, with the parent thread/run identity and the subagent type.
+    The dedup state lives on the executor instance so resume/continue runs
+    (which share the instance) never re-emit checkpoint history.
+    """
+
+    @pytest.mark.anyio
+    async def test_aexecute_emits_ai_and_tool_messages_in_order(self, classes, base_config, mock_agent, msg):
+        from langchain_core.messages import ToolMessage
+
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        ai1 = msg.ai("calling a tool", "msg-1")
+        tool_msg = ToolMessage(content="ls output", tool_call_id="tc-1", id="tm-1")
+        ai2 = msg.ai("final answer", "msg-2")
+        chunks = [
+            {"messages": [msg.human("Task"), ai1]},
+            {"messages": [msg.human("Task"), ai1, tool_msg]},
+            # Re-yielded trailing snapshot: must not re-emit the tool message.
+            {"messages": [msg.human("Task"), ai1, tool_msg]},
+            {"messages": [msg.human("Task"), ai1, tool_msg, ai2]},
+        ]
+        mock_agent.astream = lambda *args, **kwargs: async_iterator(chunks)
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+            run_id="run-1",
+        )
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:message", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                result = await executor._aexecute("Task")
+        finally:
+            unsub()
+
+        assert [e["message"]["id"] for e in events] == ["msg-1", "tm-1", "msg-2"]
+        first = events[0]
+        assert first["task_id"] == result.task_id
+        assert first["thread_id"] == "test-thread"
+        assert first["run_id"] == "run-1"
+        assert first["subagent_type"] == "test-agent"
+        assert first["message"] == ai1.model_dump()
+        assert events[1]["message"] == tool_msg.model_dump()
+        assert events[1]["message"]["type"] == "tool"
+        assert events[2]["message"] == ai2.model_dump()
+
+    @pytest.mark.anyio
+    async def test_aexecute_emits_parallel_tool_messages_from_single_snapshot(self, classes, base_config, mock_agent, msg):
+        """A ToolNode producing N parallel ToolMessages in one super-step
+        yields a single values snapshot whose tail holds the AI message plus
+        all N tool results; every one of them must be emitted (not just the
+        trailing message), and ``ai_messages`` gains only the AI message."""
+        from langchain_core.messages import ToolMessage
+
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        ai1 = msg.ai("calling two tools", "msg-1")
+        tool1 = ToolMessage(content="ls output", tool_call_id="tc-1", id="tm-1")
+        tool2 = ToolMessage(content="pwd output", tool_call_id="tc-2", id="tm-2")
+        chunks = [
+            {"messages": [msg.human("Task"), ai1, tool1, tool2]},
+        ]
+        mock_agent.astream = lambda *args, **kwargs: async_iterator(chunks)
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+            run_id="run-1",
+        )
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:message", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                result = await executor._aexecute("Task")
+        finally:
+            unsub()
+
+        assert [e["message"]["id"] for e in events] == ["msg-1", "tm-1", "tm-2"]
+        assert [m["id"] for m in result.ai_messages] == ["msg-1"]
+
+    @pytest.mark.anyio
+    async def test_aresume_emits_new_messages_without_repeating_history(self, classes, base_config, mock_agent, msg):
+        """A resumed run re-yields checkpoint history in values snapshots; only
+        genuinely new messages may be emitted (no duplicates in the store)."""
+        from langchain_core.messages import ToolMessage
+
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+        SubagentResult = classes["SubagentResult"]
+
+        ai1 = msg.ai("calling a tool", "msg-1")
+        tool_msg = ToolMessage(content="ls output", tool_call_id="tc-1", id="tm-1")
+        run1_chunks = [
+            {"messages": [msg.human("Task"), ai1]},
+            {"messages": [msg.human("Task"), ai1, tool_msg]},
+        ]
+        mock_agent.astream = lambda *args, **kwargs: async_iterator(run1_chunks)
+
+        executor = SubagentExecutor(config=base_config, tools=[], thread_id="test-thread", run_id="run-1")
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:message", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                run1_result = await executor._aexecute("Task")
+
+            # Build an interrupted holder seeded with the run-1 AI messages,
+            # then resume with a snapshot that re-yields the old tool message
+            # plus one new AI message.
+            holder = SubagentResult(task_id=run1_result.task_id, trace_id="test-trace", status=classes["SubagentStatus"].RUNNING)
+            holder.ai_messages = list(run1_result.ai_messages)
+            holder.try_set_interrupted(
+                interrupts=[{"value": "q", "id": "i1"}],
+                subagent_thread_id=executor.subagent_thread_id,
+            )
+            ai2 = msg.ai("resumed answer", "msg-2")
+            resume_chunks = [
+                # Re-yielded checkpoint history: old AI + old Tool trailing
+                # messages must be deduped, not re-emitted.
+                {"messages": [msg.human("Task"), ai1]},
+                {"messages": [msg.human("Task"), ai1, tool_msg]},
+                {"messages": [msg.human("Task"), ai1, tool_msg, ai2]},
+            ]
+            mock_agent.astream = lambda *args, **kwargs: async_iterator(resume_chunks)
+
+            await executor._aresume("yes proceed", result_holder=holder)
+        finally:
+            unsub()
+
+        assert [e["message"]["id"] for e in events] == ["msg-1", "tm-1", "msg-2"]
+
+    @pytest.mark.anyio
+    async def test_acontinue_emits_new_messages_without_repeating_history(self, classes, base_config, mock_agent, msg):
+        """Follow-up runs share the executor instance; old messages must not be
+        re-emitted when they re-appear as trailing snapshot messages."""
+        from langchain_core.messages import ToolMessage
+
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+        SubagentResult = classes["SubagentResult"]
+        SubagentStatus = classes["SubagentStatus"]
+
+        ai1 = msg.ai("first answer", "msg-1")
+        tool_msg = ToolMessage(content="tool output", tool_call_id="tc-1", id="tm-1")
+        run1_chunks = [
+            # Single super-step snapshot: the fresh AI message and the fresh
+            # tool message must both be emitted, in snapshot order.
+            {"messages": [msg.human("Task"), ai1, tool_msg]},
+        ]
+        mock_agent.astream = lambda *args, **kwargs: async_iterator(run1_chunks)
+
+        executor = SubagentExecutor(config=base_config, tools=[], thread_id="test-thread", run_id="run-1")
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:message", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                await executor._aexecute("Task")
+
+            holder = SubagentResult(task_id="continue-task", trace_id="test-trace", status=SubagentStatus.RUNNING)
+            ai2 = msg.ai("follow-up answer", "msg-2")
+            continue_chunks = [
+                # Re-yielded history tail (middleware-only state update): the
+                # old tool message must be deduped, not re-emitted.
+                {"messages": [msg.human("Task"), ai1, tool_msg]},
+                {"messages": [msg.human("Task"), ai1, tool_msg, msg.human("follow up"), ai2]},
+            ]
+            mock_agent.astream = lambda *args, **kwargs: async_iterator(continue_chunks)
+
+            await executor._acontinue("follow up", "continue-task", holder)
+        finally:
+            unsub()
+
+        assert [e["message"]["id"] for e in events] == ["msg-1", "tm-1", "msg-2"]
