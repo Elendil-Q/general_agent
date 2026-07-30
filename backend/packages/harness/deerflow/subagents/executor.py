@@ -1024,6 +1024,10 @@ the same skill directory only when needed during execution.
                         error="Cancelled by user",
                         token_usage_records=collector.snapshot_records(),
                     )
+                    event_bus.emit(
+                        "subagent:lifecycle",
+                        {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
+                    )
                     return result
 
                 final_state = chunk
@@ -1083,6 +1087,15 @@ the same skill directory only when needed during execution.
                                         "status": result.status.value,
                                     },
                                 )
+                                event_bus.emit(
+                                    "subagent:lifecycle",
+                                    {
+                                        "event": "failed",
+                                        "task_id": result.task_id or "",
+                                        "thread_id": self.thread_id or "",
+                                        "error": "request budget exceeded",
+                                    },
+                                )
                                 break
                             # Per-message progress: the SSE bridge coalesces
                             # these into ~10fps; a 150ms throttle is
@@ -1094,6 +1107,9 @@ the same skill directory only when needed during execution.
                                     "task_id": result.task_id or "",
                                     "thread_id": self.thread_id or "",
                                     "status": result.status.value,
+                                    "message": message_dict.get("content", ""),
+                                    "message_index": len(ai_messages),
+                                    "total_messages": len(ai_messages),
                                 },
                             )
 
@@ -1110,6 +1126,10 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
+                )
                 return result
 
             if interrupts:
@@ -1118,6 +1138,15 @@ the same skill directory only when needed during execution.
                     interrupts=serialize_lc_object(interrupts),
                     subagent_thread_id=self.subagent_thread_id,
                     token_usage_records=collector.snapshot_records(),
+                )
+                event_bus.emit(
+                    "subagent:lifecycle",
+                    {
+                        "event": "interrupted",
+                        "task_id": result.task_id or "",
+                        "thread_id": self.thread_id or "",
+                        "interrupts": serialize_lc_object(interrupts),
+                    },
                 )
                 return result
 

@@ -2691,3 +2691,190 @@ class TestSubagentGuardrailAttribution:
         from langchain_core.messages import HumanMessage
 
         return ({"messages": [HumanMessage(content=task)]}, [], None)
+
+
+# -----------------------------------------------------------------------------
+# Event Emission Tests (lifecycle + progress enrichment)
+# -----------------------------------------------------------------------------
+
+
+class TestAexecuteEventEmission:
+    """Verify _aexecute emits the correct lifecycle and progress events via event_bus."""
+
+    @pytest.mark.anyio
+    async def test_aexecute_emits_interrupted_lifecycle_event(self, classes, base_config, mock_agent, msg):
+        """_aexecute must emit subagent:lifecycle interrupted when __interrupt__ is detected."""
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+        SubagentStatus = classes["SubagentStatus"]
+
+        interrupt_value = {"value": "need user input"}
+        chunk = {
+            "__interrupt__": [interrupt_value],
+            "messages": [msg.human("Task"), msg.ai("Partial", "msg-1")],
+        }
+        mock_agent.astream = lambda *args, **kwargs: async_iterator([chunk])
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+        )
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:lifecycle", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                result = await executor._aexecute("Task")
+        finally:
+            unsub()
+
+        assert result.status == SubagentStatus.INTERRUPTED
+        interrupted_events = [e for e in events if e.get("event") == "interrupted"]
+        assert len(interrupted_events) == 1
+        assert interrupted_events[0]["task_id"] == result.task_id
+        assert interrupted_events[0]["thread_id"] == "test-thread"
+        assert "interrupts" in interrupted_events[0]
+
+    @pytest.mark.anyio
+    async def test_aexecute_emits_cancelled_lifecycle_event(self, classes, base_config, msg):
+        """_aexecute must emit subagent:lifecycle cancelled when cancelled mid-stream."""
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+        SubagentResult = classes["SubagentResult"]
+        SubagentStatus = classes["SubagentStatus"]
+
+        cancel_event = threading.Event()
+
+        async def mock_astream(*args, **kwargs):
+            yield {"messages": [msg.human("Task"), msg.ai("Partial", "msg-1")]}
+            cancel_event.set()
+            yield {"messages": [msg.human("Task"), msg.ai("Should not appear", "msg-2")]}
+
+        mock_agent = MagicMock()
+        mock_agent.astream = mock_astream
+
+        result_holder = SubagentResult(
+            task_id="cancel-event",
+            trace_id="test-trace",
+            status=SubagentStatus.RUNNING,
+            started_at=datetime.now(),
+        )
+        result_holder.cancel_event = cancel_event
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+        )
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:lifecycle", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                result = await executor._aexecute("Task", result_holder=result_holder)
+        finally:
+            unsub()
+
+        assert result.status == SubagentStatus.CANCELLED
+        cancelled_events = [e for e in events if e.get("event") == "cancelled"]
+        assert len(cancelled_events) == 1
+        assert cancelled_events[0]["task_id"] == "cancel-event"
+        assert cancelled_events[0]["thread_id"] == "test-thread"
+
+    @pytest.mark.anyio
+    async def test_aexecute_emits_budget_failed_lifecycle_event(self, classes, msg):
+        """_aexecute must emit subagent:lifecycle failed when request budget is exceeded."""
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+        SubagentConfig = classes["SubagentConfig"]
+        SubagentStatus = classes["SubagentStatus"]
+
+        # max_requests=2 -> soft=2, hard=ceil(2*1.5)=3
+        config = SubagentConfig(
+            name="budget-agent",
+            description="Budget test agent",
+            system_prompt="You are a test agent.",
+            max_turns=10,
+            timeout_seconds=60,
+            max_requests=2,
+        )
+
+        m1 = msg.ai("first", "msg-1")
+        m2 = msg.ai("second", "msg-2")
+        m3 = msg.ai("third", "msg-3")
+        chunks = [
+            {"messages": [msg.human("Task"), m1]},
+            {"messages": [msg.human("Task"), m1, m2]},
+            {"messages": [msg.human("Task"), m1, m2, m3]},
+        ]
+        mock_agent = MagicMock()
+        mock_agent.astream = lambda *args, **kwargs: async_iterator(chunks)
+
+        executor = SubagentExecutor(
+            config=config,
+            tools=[],
+            thread_id="test-thread",
+        )
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:lifecycle", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                result = await executor._aexecute("Task")
+        finally:
+            unsub()
+
+        assert result.status == SubagentStatus.FAILED
+        assert result.error == "request budget exceeded"
+        failed_events = [e for e in events if e.get("event") == "failed"]
+        assert len(failed_events) >= 1
+        budget_failed = [e for e in failed_events if e.get("error") == "request budget exceeded"]
+        assert len(budget_failed) == 1
+        assert budget_failed[0]["task_id"] == result.task_id
+        assert budget_failed[0]["thread_id"] == "test-thread"
+
+    @pytest.mark.anyio
+    async def test_aexecute_progress_enriched_with_message_content(self, classes, base_config, mock_agent, msg):
+        """_aexecute progress events must carry message content, index, and total."""
+        from deerflow.subagents.event_bus import event_bus
+
+        SubagentExecutor = classes["SubagentExecutor"]
+
+        m1 = msg.ai("First response", "msg-1")
+        m2 = msg.ai("Second response", "msg-2")
+        chunk1 = {"messages": [msg.human("Task"), m1]}
+        chunk2 = {"messages": [msg.human("Task"), m1, m2]}
+        mock_agent.astream = lambda *args, **kwargs: async_iterator([chunk1, chunk2])
+
+        executor = SubagentExecutor(
+            config=base_config,
+            tools=[],
+            thread_id="test-thread",
+        )
+
+        events: list[dict] = []
+        unsub = event_bus.on("subagent:progress", lambda p: events.append(p))
+        try:
+            with patch.object(executor, "_create_agent", return_value=mock_agent):
+                await executor._aexecute("Task")
+        finally:
+            unsub()
+
+        # Per-message progress events (enriched with message content)
+        progress_events = [e for e in events if "status" in e]
+        assert len(progress_events) >= 2
+        first = progress_events[0]
+        assert "message" in first
+        assert "message_index" in first
+        assert "total_messages" in first
+        assert first["message"] == "First response"
+        assert first["message_index"] == 1
+        assert first["total_messages"] == 1
+        second = progress_events[1]
+        assert second["message"] == "Second response"
+        assert second["message_index"] == 2
+        assert second["total_messages"] == 2
