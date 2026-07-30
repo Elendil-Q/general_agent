@@ -231,16 +231,6 @@ class SubagentResult:
             return True
 
 
-# Global storage for background task results
-_background_tasks: dict[str, SubagentResult] = {}
-_background_tasks_lock = threading.Lock()
-
-# Executors keyed by task_id, kept resident so an INTERRUPTED subagent can be
-# resumed later via ``resume_background_subagent``. Removed only when the task
-# reaches a truly terminal state (see ``cleanup_background_task``). Guarded by
-# ``_background_tasks_lock`` to stay in sync with the result registry.
-_subagent_executors: dict[str, SubagentExecutor] = {}
-
 # Thread pool for background task scheduling and orchestration
 _scheduler_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="subagent-scheduler-")
 
@@ -1312,15 +1302,7 @@ the same skill directory only when needed during execution.
 
         logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution, task_id={task_id}, timeout={self.config.timeout_seconds}s")
 
-        with _background_tasks_lock:
-            _background_tasks[task_id] = result
-            # Keep the executor resident so an INTERRUPTED subagent can be resumed
-            # in-place (same agent + checkpointer + subagent_thread_id).
-            _subagent_executors[task_id] = self
-
         # Register in the process-level AgentRegistry (authoritative state).
-        # The dict writes above remain for backward compatibility with
-        # ``resume_async`` and legacy callers that read them directly.
         from deerflow.subagents.agent_registry import AgentRef, agent_registry
 
         agent_registry.register(
@@ -1342,20 +1324,10 @@ the same skill directory only when needed during execution.
 
         # Submit to scheduler pool
         def run_task():
-            with _background_tasks_lock:
-                _background_tasks[task_id].status = SubagentStatus.RUNNING
-                _background_tasks[task_id].started_at = datetime.now()
-                result_holder = _background_tasks[task_id]
-            # Propagate the RUNNING transition to the registry and announce it
-            # on the EventBus so the SSE bridge / observers can react in
-            # real time. The dict write above remains for backward
-            # compatibility with legacy callers (resume_async, etc.).
-            # Lazy import: ``agent_registry`` imports this module for
-            # ``SubagentExecutor`` typing, so an eager top-level import
-            # would re-enter this still-initializing module.
             from deerflow.subagents.agent_registry import agent_registry
 
             agent_registry.update_status(task_id, SubagentStatus.RUNNING)
+            result_holder = result  # use the already-created result object
             event_bus.emit(
                 "subagent:lifecycle",
                 {"event": "started", "task_id": task_id, "thread_id": self.thread_id or ""},
@@ -1391,9 +1363,7 @@ the same skill directory only when needed during execution.
                     execution_future.cancel()
             except Exception as e:
                 logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
-                with _background_tasks_lock:
-                    task_result = _background_tasks[task_id]
-                task_result.try_set_terminal(SubagentStatus.FAILED, error=str(e))
+                result.try_set_terminal(SubagentStatus.FAILED, error=str(e))
                 event_bus.emit(
                     "subagent:lifecycle",
                     {
@@ -1910,58 +1880,42 @@ the same skill directory only when needed during execution.
         return result
 
     def resume_async(self, resume_value: Any, task_id: str) -> str:
-        """Resume an INTERRUPTED background subagent.
+        """Resume an INTERRUPTED background subagent."""
+        from deerflow.subagents.agent_registry import agent_registry
 
-        Mirrors ``execute_async``: transitions the result INTERRUPTED->RUNNING,
-        submits ``_aresume`` to the persistent isolated loop, and returns the
-        ``task_id`` so the caller can poll the same ``SubagentResult`` for the
-        resumed run's progress.
-
-        Args:
-            resume_value: The value to feed back to ``interrupt()`` via
-                ``Command(resume=...)``.
-            task_id: The task_id of the interrupted subagent.
-
-        Returns:
-            The same ``task_id``.
-        """
-        with _background_tasks_lock:
-            result_holder = _background_tasks.get(task_id)
-            if result_holder is None:
-                raise KeyError(f"Unknown subagent task {task_id}")
-            if not result_holder.try_resume():
-                raise RuntimeError(f"Subagent task {task_id} is not interrupted (status={result_holder.status.value}); cannot resume")
-            result_holder.started_at = datetime.now()
+        ref = agent_registry.get(task_id)
+        if ref is None or ref.result is None:
+            raise KeyError(f"Unknown subagent task {task_id}")
+        result_holder = ref.result
+        if not result_holder.try_resume():
+            raise RuntimeError(f"Subagent task {task_id} is not interrupted (status={result_holder.status.value}); cannot resume")
+        result_holder.started_at = datetime.now()
 
         logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} resuming, task_id={task_id}, timeout={self.config.timeout_seconds}s")
 
         parent_context = copy_context()
 
         def run_task():
-            with _background_tasks_lock:
-                _background_tasks[task_id].status = SubagentStatus.RUNNING
+            agent_registry.update_status(task_id, SubagentStatus.RUNNING)
 
             try:
                 execution_future = _submit_to_isolated_loop_in_context(
                     parent_context,
-                    lambda: self._aresume(resume_value, _background_tasks[task_id]),
+                    lambda: self._aresume(resume_value, result_holder),
                 )
                 try:
                     execution_future.result(timeout=self.config.timeout_seconds)
                 except FuturesTimeoutError:
                     logger.error(f"[trace={self.trace_id}] Subagent {self.config.name} resume timed out after {self.config.timeout_seconds}s")
-                    with _background_tasks_lock:
-                        holder = _background_tasks[task_id]
-                    holder.cancel_event.set()
-                    holder.try_set_terminal(
+                    result_holder.cancel_event.set()
+                    result_holder.try_set_terminal(
                         SubagentStatus.TIMED_OUT,
                         error=f"Resume timed out after {self.config.timeout_seconds} seconds",
                     )
                     execution_future.cancel()
             except Exception as e:
                 logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} resume failed")
-                with _background_tasks_lock:
-                    _background_tasks[task_id].try_set_terminal(SubagentStatus.FAILED, error=str(e))
+                result_holder.try_set_terminal(SubagentStatus.FAILED, error=str(e))
 
         _scheduler_pool.submit(run_task)
         return task_id
@@ -1971,140 +1925,66 @@ MAX_CONCURRENT_SUBAGENTS = 3
 
 
 def request_cancel_background_task(task_id: str) -> None:
-    """Signal a running background task to stop.
-
-    Sets the cancel_event on the task, which is checked cooperatively
-    by ``_aexecute`` during ``agent.astream()`` iteration.  This allows
-    subagent threads — which cannot be force-killed via ``Future.cancel()``
-    — to stop at the next iteration boundary.
-
-    Args:
-        task_id: The task ID to cancel.
-    """
+    """Signal a running background task to stop."""
     from deerflow.subagents.agent_registry import agent_registry
 
     ref = agent_registry.get(task_id)
     result = ref.result if ref is not None else None
-    if result is None:
-        with _background_tasks_lock:
-            result = _background_tasks.get(task_id)
     if result is not None:
         result.cancel_event.set()
         logger.info("Requested cancellation for background task %s", task_id)
 
 
 def get_background_task_result(task_id: str) -> SubagentResult | None:
-    """Get the result of a background task.
-
-    Args:
-        task_id: The task ID returned by execute_async.
-
-    Returns:
-        SubagentResult if found, None otherwise.
-    """
+    """Get the result of a background task."""
     from deerflow.subagents.agent_registry import agent_registry
 
     ref = agent_registry.get(task_id)
-    if ref is not None:
-        return ref.result
-    with _background_tasks_lock:
-        return _background_tasks.get(task_id)
+    return ref.result if ref is not None else None
 
 
 def list_background_tasks() -> list[SubagentResult]:
-    """List all background tasks.
-
-    Returns:
-        List of all SubagentResult instances.
-    """
+    """List all background tasks."""
     from deerflow.subagents.agent_registry import agent_registry
 
-    # Registry is authoritative; merge in any legacy dict entries not yet migrated.
-    merged: dict[str, SubagentResult] = {}
-    for ref in agent_registry.list_all():
-        if ref.result is not None:
-            merged[ref.task_id] = ref.result
-    with _background_tasks_lock:
-        for tid, result in _background_tasks.items():
-            if tid not in merged:
-                merged[tid] = result
-    return list(merged.values())
+    return [ref.result for ref in agent_registry.list_all() if ref.result is not None]
 
 
 def cleanup_background_task(task_id: str) -> None:
-    """Remove a completed task from background tasks.
+    """Remove a completed task from the registry.
 
-    Should be called by task_tool after it finishes polling and returns the result.
-    This prevents memory leaks from accumulated completed tasks.
-
-    Only removes tasks that are in a truly terminal state
-    (COMPLETED/FAILED/CANCELLED/TIMED_OUT) to avoid race conditions with the
-    background executor still updating the task entry, and to keep
-    INTERRUPTED subagents resident for a later resume.
-
-    Args:
-        task_id: The task ID to remove.
+    Only removes tasks in a truly terminal state to avoid race conditions
+    with the background executor. INTERRUPTED and IDLE tasks stay resident.
     """
     from deerflow.subagents.agent_registry import agent_registry
 
-    # Resolve the result from the registry first, then fall back to the legacy dict.
     ref = agent_registry.get(task_id)
-    result = ref.result if ref is not None else None
-    if result is None:
-        with _background_tasks_lock:
-            result = _background_tasks.get(task_id)
-    if result is None:
-        logger.debug("Requested cleanup for unknown background task %s", task_id)
+    if ref is None or ref.result is None:
         return
-
-    # Only clean up tasks that are truly terminal. INTERRUPTED is NOT
-    # terminal - the task is paused and must stay resident (result +
-    # executor) so ``resume_background_subagent`` can resume it. Do not
-    # key off ``completed_at`` alone: an interrupted task never sets it,
-    # but a future field change must not accidentally make cleanup greedy.
-    if result.status.is_terminal:
+    if ref.result.status.is_terminal:
         agent_registry.remove(task_id)
-        with _background_tasks_lock:
-            _background_tasks.pop(task_id, None)
-            _subagent_executors.pop(task_id, None)
-        logger.debug("Cleaned up background task: %s", task_id)
     else:
         logger.debug(
             "Skipping cleanup for non-terminal background task %s (status=%s)",
             task_id,
-            (result.status.value if hasattr(result.status, "value") else result.status),
+            ref.result.status.value,
         )
 
 
 def get_subagent_executor(task_id: str) -> SubagentExecutor | None:
-    """Return the resident executor for a background task, if any.
-
-    Returns ``None`` for unknown or already-cleaned-up tasks. The executor is
-    kept resident specifically so an INTERRUPTED subagent can be resumed.
-    """
+    """Return the resident executor for a background task, if any."""
     from deerflow.subagents.agent_registry import agent_registry
 
     ref = agent_registry.get(task_id)
-    if ref is not None:
-        return ref.executor
-    with _background_tasks_lock:
-        return _subagent_executors.get(task_id)
+    return ref.executor if ref is not None else None
 
 
 def get_subagent_interrupt(task_id: str) -> dict[str, Any] | None:
-    """Return interrupt metadata for a paused subagent, or ``None`` if not paused.
-
-    Used by the resume endpoint to (a) verify the task is actually interrupted
-    and (b) surface the interrupt question to the caller. Returns ``None`` when
-    the task is unknown or not in the INTERRUPTED state.
-    """
+    """Return interrupt metadata for a paused subagent, or None."""
     from deerflow.subagents.agent_registry import agent_registry
 
     ref = agent_registry.get(task_id)
     result = ref.result if ref is not None else None
-    if result is None:
-        with _background_tasks_lock:
-            result = _background_tasks.get(task_id)
     if result is None or result.status is not SubagentStatus.INTERRUPTED:
         return None
     return {
@@ -2116,31 +1996,12 @@ def get_subagent_interrupt(task_id: str) -> dict[str, Any] | None:
 
 
 def resume_background_subagent(task_id: str, resume_value: Any) -> str:
-    """Resume an INTERRUPTED background subagent by ``task_id``.
-
-    Looks up the resident executor and delegates to
-    ``SubagentExecutor.resume_async``. The caller polls the same
-    ``SubagentResult`` (via ``get_background_task_result``) for the resumed
-    run's progress.
-
-    Raises:
-        KeyError: Unknown task_id.
-        RuntimeError: The task is not currently INTERRUPTED.
-
-    Returns:
-        The same ``task_id``.
-    """
+    """Resume an INTERRUPTED background subagent by task_id."""
     from deerflow.subagents.agent_registry import agent_registry
 
     ref = agent_registry.get(task_id)
-    executor = ref.executor if ref is not None else None
-    result = ref.result if ref is not None else None
-    if executor is None or result is None:
-        with _background_tasks_lock:
-            executor = _subagent_executors.get(task_id)
-            result = _background_tasks.get(task_id)
-    if executor is None or result is None:
+    if ref is None or ref.executor is None or ref.result is None:
         raise KeyError(f"Unknown subagent task {task_id}")
-    if result.status is not SubagentStatus.INTERRUPTED:
-        raise RuntimeError(f"Subagent task {task_id} is not interrupted (status={result.status.value}); cannot resume")
-    return executor.resume_async(resume_value, task_id)
+    if ref.result.status is not SubagentStatus.INTERRUPTED:
+        raise RuntimeError(f"Subagent task {task_id} is not interrupted (status={ref.result.status.value}); cannot resume")
+    return ref.executor.resume_async(resume_value, task_id)

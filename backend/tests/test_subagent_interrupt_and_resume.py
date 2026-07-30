@@ -12,6 +12,7 @@ break the circular import that conftest.py works around.
 """
 
 import sys
+from datetime import datetime
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -62,11 +63,13 @@ def _setup_executor_classes():
 
     from langchain_core.messages import AIMessage, HumanMessage
 
+    from deerflow.subagents.agent_registry import AgentRef, agent_registry
     from deerflow.subagents.config import SubagentConfig
     from deerflow.subagents.executor import SubagentExecutor, SubagentResult, SubagentStatus
 
     executor_module = sys.modules["deerflow.subagents.executor"]
     executor_module.get_app_config = _default_app_config
+    agent_registry._refs.clear()
 
     classes = {
         "AIMessage": AIMessage,
@@ -76,6 +79,8 @@ def _setup_executor_classes():
         "SubagentResult": SubagentResult,
         "SubagentStatus": SubagentStatus,
         "executor_module": executor_module,
+        "agent_registry": agent_registry,
+        "AgentRef": AgentRef,
     }
     yield classes
 
@@ -242,19 +247,32 @@ class TestResume:
         classes = _setup_executor_classes
         SubagentStatus = classes["SubagentStatus"]
         executor_module = classes["executor_module"]
+        agent_registry = classes["agent_registry"]
+        AgentRef = classes["AgentRef"]
 
         executor = classes["SubagentExecutor"](config=_base_config(classes), tools=[], thread_id="parent", task_id="call_1")
         result = classes["SubagentResult"](task_id="call_1", trace_id="tr", status=SubagentStatus.RUNNING)
-        executor_module._background_tasks["call_1"] = result
-        executor_module._subagent_executors["call_1"] = executor
+        agent_registry.register(
+            AgentRef(
+                task_id="call_1",
+                thread_id="parent",
+                trace_id="tr",
+                subagent_type="test-agent",
+                status=SubagentStatus.RUNNING,
+                config=_base_config(classes),
+                executor=executor,
+                result=result,
+                description="test",
+                created_at=datetime.now(),
+            )
+        )
 
         # RUNNING -> refuse
         with pytest.raises(RuntimeError):
             executor_module.resume_background_subagent("call_1", "answer")
 
         # Unknown task -> KeyError
-        executor_module._background_tasks.pop("call_1", None)
-        executor_module._subagent_executors.pop("call_1", None)
+        agent_registry.remove("call_1")
         with pytest.raises(KeyError):
             executor_module.resume_background_subagent("missing", "answer")
 
@@ -262,10 +280,25 @@ class TestResume:
         classes = _setup_executor_classes
         SubagentStatus = classes["SubagentStatus"]
         executor_module = classes["executor_module"]
+        agent_registry = classes["agent_registry"]
+        AgentRef = classes["AgentRef"]
 
         # RUNNING -> None
         running = classes["SubagentResult"](task_id="t", trace_id="tr", status=SubagentStatus.RUNNING)
-        executor_module._background_tasks["t"] = running
+        agent_registry.register(
+            AgentRef(
+                task_id="t",
+                thread_id="th",
+                trace_id="tr",
+                subagent_type="test-agent",
+                status=SubagentStatus.RUNNING,
+                config=_base_config(classes),
+                executor=None,
+                result=running,
+                description="test",
+                created_at=datetime.now(),
+            )
+        )
         assert executor_module.get_subagent_interrupt("t") is None
 
         # INTERRUPTED -> metadata
@@ -279,7 +312,7 @@ class TestResume:
         # Unknown -> None
         assert executor_module.get_subagent_interrupt("nope") is None
 
-        executor_module._background_tasks.pop("t", None)
+        agent_registry.remove("t")
 
 
 @pytest.mark.anyio

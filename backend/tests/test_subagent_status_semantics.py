@@ -6,6 +6,7 @@ test the real implementation in isolation (same pattern as test_subagent_executo
 """
 
 import sys
+from datetime import datetime
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -49,17 +50,21 @@ def _setup_executor_classes():
     storage_module.get_or_new_skill_storage = lambda **kwargs: SimpleNamespace(load_skills=lambda *, enabled_only: [])
     sys.modules["deerflow.skills.storage"] = storage_module
 
+    from deerflow.subagents.agent_registry import AgentRef, agent_registry
     from deerflow.subagents.config import SubagentConfig  # noqa: F401
     from deerflow.subagents.executor import SubagentExecutor, SubagentResult, SubagentStatus
 
     executor_module = sys.modules["deerflow.subagents.executor"]
     executor_module.get_app_config = _default_app_config
+    agent_registry._refs.clear()
 
     classes = {
         "SubagentExecutor": SubagentExecutor,
         "SubagentResult": SubagentResult,
         "SubagentStatus": SubagentStatus,
         "executor_module": executor_module,
+        "agent_registry": agent_registry,
+        "AgentRef": AgentRef,
     }
     yield classes
 
@@ -157,20 +162,34 @@ class TestCleanupKeepsInterrupted:
         classes = _setup_executor_classes
         SubagentStatus = classes["SubagentStatus"]
         executor_module = classes["executor_module"]
+        agent_registry = classes["agent_registry"]
+        AgentRef = classes["AgentRef"]
         result = _make_result(classes)
         result.try_set_interrupted(interrupts=[{"value": "q"}], subagent_thread_id="sub::t::c")
 
-        executor_module._background_tasks["t1"] = result
-        executor_module._subagent_executors["t1"] = MagicMock()
+        from deerflow.subagents.config import SubagentConfig as _SC
+
+        agent_registry.register(
+            AgentRef(
+                task_id="t1",
+                thread_id="th",
+                trace_id="tr",
+                subagent_type="general-purpose",
+                status=SubagentStatus.INTERRUPTED,
+                config=_SC(name="test", description="d"),
+                executor=MagicMock(),
+                result=result,
+                description="desc",
+                created_at=datetime.now(),
+            )
+        )
 
         executor_module.cleanup_background_task("t1")
 
         # INTERRUPTED must stay resident for resume.
-        assert "t1" in executor_module._background_tasks
-        assert "t1" in executor_module._subagent_executors
+        assert agent_registry.get("t1") is not None
 
         # Cleanup after a real terminal transition removes both.
         result.try_set_terminal(SubagentStatus.COMPLETED, result="done")
         executor_module.cleanup_background_task("t1")
-        assert "t1" not in executor_module._background_tasks
-        assert "t1" not in executor_module._subagent_executors
+        assert agent_registry.get("t1") is None

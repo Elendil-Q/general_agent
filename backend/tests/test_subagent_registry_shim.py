@@ -159,3 +159,89 @@ def test_cleanup_keeps_idle_in_registry():
     result.try_set_idle()
     exec_mod.cleanup_background_task("t1")
     assert agent_registry.get("t1") is not None  # IDLE not cleaned by cleanup
+
+
+def test_get_background_task_result_uses_registry_only(monkeypatch):
+    """get_background_task_result must not fall back to _background_tasks."""
+    from deerflow.subagents.agent_registry import AgentRef, agent_registry
+    from deerflow.subagents.executor import SubagentResult, SubagentStatus, get_background_task_result
+
+    agent_registry._refs.clear()
+    result = SubagentResult(task_id="test-1", trace_id="t", status=SubagentStatus.COMPLETED)
+    agent_registry.register(
+        AgentRef(
+            task_id="test-1",
+            thread_id="th",
+            trace_id="t",
+            subagent_type="general-purpose",
+            status=SubagentStatus.COMPLETED,
+            config=None,
+            executor=None,
+            result=result,
+            description="",
+            created_at=datetime.now(),
+        )
+    )
+    assert get_background_task_result("test-1") is result
+    assert get_background_task_result("nonexistent") is None
+
+
+def test_list_background_tasks_uses_registry_only():
+    """list_background_tasks must not merge from _background_tasks."""
+    from deerflow.subagents.agent_registry import AgentRef, agent_registry
+    from deerflow.subagents.executor import SubagentResult, SubagentStatus, list_background_tasks
+
+    agent_registry._refs.clear()
+    result = SubagentResult(task_id="test-2", trace_id="t", status=SubagentStatus.COMPLETED)
+    agent_registry.register(
+        AgentRef(
+            task_id="test-2",
+            thread_id="th",
+            trace_id="t",
+            subagent_type="general-purpose",
+            status=SubagentStatus.COMPLETED,
+            config=None,
+            executor=None,
+            result=result,
+            description="",
+            created_at=datetime.now(),
+        )
+    )
+    tasks = list_background_tasks()
+    assert len(tasks) == 1
+    assert tasks[0].task_id == "test-2"
+
+
+def test_cleanup_background_task_uses_registry_only():
+    """cleanup_background_task must not touch _background_tasks or _subagent_executors."""
+    from deerflow.subagents.agent_registry import AgentRef, agent_registry
+    from deerflow.subagents.executor import SubagentResult, SubagentStatus, cleanup_background_task
+
+    agent_registry._refs.clear()
+    result = SubagentResult(task_id="test-3", trace_id="t", status=SubagentStatus.COMPLETED)
+    result.try_set_terminal(SubagentStatus.COMPLETED, result="done")
+    agent_registry.register(
+        AgentRef(
+            task_id="test-3",
+            thread_id="th",
+            trace_id="t",
+            subagent_type="general-purpose",
+            status=SubagentStatus.COMPLETED,
+            config=None,
+            executor=None,
+            result=result,
+            description="",
+            created_at=datetime.now(),
+        )
+    )
+    cleanup_background_task("test-3")
+    assert agent_registry.get("test-3") is None
+
+
+def test_background_tasks_dicts_no_longer_exist():
+    """_background_tasks and _subagent_executors must not exist as module attributes."""
+    import deerflow.subagents.executor as executor_module
+
+    assert not hasattr(executor_module, "_background_tasks")
+    assert not hasattr(executor_module, "_background_tasks_lock")
+    assert not hasattr(executor_module, "_subagent_executors")

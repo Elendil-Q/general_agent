@@ -82,6 +82,7 @@ def _setup_executor_classes():
     # Import real classes inside fixture
     from langchain_core.messages import AIMessage, HumanMessage
 
+    from deerflow.subagents.agent_registry import AgentRef, agent_registry
     from deerflow.subagents.config import SubagentConfig
     from deerflow.subagents.executor import (
         SubagentExecutor,
@@ -96,6 +97,7 @@ def _setup_executor_classes():
     # the gitignored config.yaml, and deferral-specific tests override this
     # default explicitly.
     _patch_default_get_app_config(executor_module)
+    agent_registry._refs.clear()
 
     # Store classes in a dict to yield
     classes = {
@@ -105,6 +107,8 @@ def _setup_executor_classes():
         "SubagentExecutor": SubagentExecutor,
         "SubagentResult": SubagentResult,
         "SubagentStatus": SubagentStatus,
+        "agent_registry": agent_registry,
+        "AgentRef": AgentRef,
     }
 
     yield classes
@@ -1734,10 +1738,31 @@ class TestCleanupBackgroundTask:
 
         return _patch_default_get_app_config(importlib.reload(executor))
 
+    def _register(self, classes, task_id, result):
+        """Register a SubagentResult in agent_registry for cleanup tests."""
+        agent_registry = classes["agent_registry"]
+        AgentRef = classes["AgentRef"]
+        SubagentConfig = classes["SubagentConfig"]
+        agent_registry.register(
+            AgentRef(
+                task_id=task_id,
+                thread_id="test-thread",
+                trace_id="test-trace",
+                subagent_type="test-agent",
+                status=result.status,
+                config=SubagentConfig(name="test-agent", description="test"),
+                executor=None,
+                result=result,
+                description="test",
+                created_at=datetime.now(),
+            )
+        )
+
     def test_cleanup_removes_terminal_completed_task(self, executor_module, classes):
         """Test that cleanup removes a COMPLETED task."""
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
 
         # Add a completed task
         task_id = "test-completed-task"
@@ -1748,17 +1773,18 @@ class TestCleanupBackgroundTask:
             result="done",
             completed_at=datetime.now(),
         )
-        executor_module._background_tasks[task_id] = result
+        self._register(classes, task_id, result)
 
         # Cleanup should remove it
         executor_module.cleanup_background_task(task_id)
 
-        assert task_id not in executor_module._background_tasks
+        assert agent_registry.get(task_id) is None
 
     def test_cleanup_removes_terminal_failed_task(self, executor_module, classes):
         """Test that cleanup removes a FAILED task."""
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
 
         task_id = "test-failed-task"
         result = SubagentResult(
@@ -1768,16 +1794,17 @@ class TestCleanupBackgroundTask:
             error="error",
             completed_at=datetime.now(),
         )
-        executor_module._background_tasks[task_id] = result
+        self._register(classes, task_id, result)
 
         executor_module.cleanup_background_task(task_id)
 
-        assert task_id not in executor_module._background_tasks
+        assert agent_registry.get(task_id) is None
 
     def test_cleanup_removes_terminal_timed_out_task(self, executor_module, classes):
         """Test that cleanup removes a TIMED_OUT task."""
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
 
         task_id = "test-timedout-task"
         result = SubagentResult(
@@ -1787,11 +1814,11 @@ class TestCleanupBackgroundTask:
             error="timeout",
             completed_at=datetime.now(),
         )
-        executor_module._background_tasks[task_id] = result
+        self._register(classes, task_id, result)
 
         executor_module.cleanup_background_task(task_id)
 
-        assert task_id not in executor_module._background_tasks
+        assert agent_registry.get(task_id) is None
 
     def test_cleanup_skips_running_task(self, executor_module, classes):
         """Test that cleanup does NOT remove a RUNNING task.
@@ -1801,6 +1828,7 @@ class TestCleanupBackgroundTask:
         """
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
 
         task_id = "test-running-task"
         result = SubagentResult(
@@ -1809,17 +1837,18 @@ class TestCleanupBackgroundTask:
             status=SubagentStatus.RUNNING,
             started_at=datetime.now(),
         )
-        executor_module._background_tasks[task_id] = result
+        self._register(classes, task_id, result)
 
         executor_module.cleanup_background_task(task_id)
 
         # Should still be present because it's RUNNING
-        assert task_id in executor_module._background_tasks
+        assert agent_registry.get(task_id) is not None
 
     def test_cleanup_skips_pending_task(self, executor_module, classes):
         """Test that cleanup does NOT remove a PENDING task."""
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
 
         task_id = "test-pending-task"
         result = SubagentResult(
@@ -1827,11 +1856,11 @@ class TestCleanupBackgroundTask:
             trace_id="test-trace",
             status=SubagentStatus.PENDING,
         )
-        executor_module._background_tasks[task_id] = result
+        self._register(classes, task_id, result)
 
         executor_module.cleanup_background_task(task_id)
 
-        assert task_id in executor_module._background_tasks
+        assert agent_registry.get(task_id) is not None
 
     def test_cleanup_handles_unknown_task_gracefully(self, executor_module):
         """Test that cleanup doesn't raise for unknown task IDs."""
@@ -1839,7 +1868,7 @@ class TestCleanupBackgroundTask:
         executor_module.cleanup_background_task("nonexistent-task")
 
     def test_cleanup_keeps_running_task_even_if_completed_at_set(self, executor_module, classes):
-        """Cleanup keys strictly off ``is_terminal`` — not ``completed_at``.
+        """Cleanup keys strictly off ``is_terminal`` - not ``completed_at``.
 
         INTERRUPTED subagents never set ``completed_at`` but must stay resident
         for resume, so cleanup can no longer treat ``completed_at`` as a done
@@ -1848,6 +1877,7 @@ class TestCleanupBackgroundTask:
         """
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
 
         task_id = "test-completed-at-task"
         result = SubagentResult(
@@ -1856,12 +1886,12 @@ class TestCleanupBackgroundTask:
             status=SubagentStatus.RUNNING,  # Status not terminal
             completed_at=datetime.now(),  # completed_at is set but status wins
         )
-        executor_module._background_tasks[task_id] = result
+        self._register(classes, task_id, result)
 
         executor_module.cleanup_background_task(task_id)
 
         # Kept because status is not terminal; only is_terminal is cleanup-safe.
-        assert task_id in executor_module._background_tasks
+        assert agent_registry.get(task_id) is not None
 
 
 # -----------------------------------------------------------------------------
@@ -1962,6 +1992,9 @@ class TestCooperativeCancellation:
         """Test that request_cancel_background_task sets the cancel_event."""
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
+        AgentRef = classes["AgentRef"]
+        SubagentConfig = classes["SubagentConfig"]
 
         task_id = "test-cancel-event"
         result = SubagentResult(
@@ -1970,7 +2003,20 @@ class TestCooperativeCancellation:
             status=SubagentStatus.RUNNING,
             started_at=datetime.now(),
         )
-        executor_module._background_tasks[task_id] = result
+        agent_registry.register(
+            AgentRef(
+                task_id=task_id,
+                thread_id="test-thread",
+                trace_id="test-trace",
+                subagent_type="test-agent",
+                status=SubagentStatus.RUNNING,
+                config=SubagentConfig(name="test-agent", description="test"),
+                executor=None,
+                result=result,
+                description="test",
+                created_at=datetime.now(),
+            )
+        )
 
         assert not result.cancel_event.is_set()
 
@@ -2023,11 +2069,11 @@ class TestCooperativeCancellation:
         ):
             task_id = executor.execute_async("Task")
 
-        result = executor_module._background_tasks.get(task_id)
+        result = classes["agent_registry"].get(task_id)
         assert result is not None
-        assert result.status == SubagentStatus.COMPLETED
-        assert result.result == "done: Task"
-        assert result.error is None
+        assert result.result.status == SubagentStatus.COMPLETED
+        assert result.result.result == "done: Task"
+        assert result.result.error is None
 
     def test_execute_async_propagates_user_context_to_isolated_loop(self, executor_module, classes, base_config):
         """Regression: background subagent execution must keep request user context."""
@@ -2070,11 +2116,11 @@ class TestCooperativeCancellation:
             reset_current_user(token)
             scheduler.shutdown(wait=False, cancel_futures=True)
 
-        result = executor_module._background_tasks.get(task_id)
+        result = classes["agent_registry"].get(task_id)
         assert result is not None
-        assert result.status == SubagentStatus.COMPLETED
-        assert result.result == "alice"
-        assert result.error is None
+        assert result.result.status == SubagentStatus.COMPLETED
+        assert result.result.result == "alice"
+        assert result.result.error is None
 
     def test_timeout_does_not_overwrite_cancelled(self, executor_module, classes, base_config, msg):
         """Test that the real timeout handler does not overwrite CANCELLED status.
@@ -2132,16 +2178,18 @@ class TestCooperativeCancellation:
 
             # Set CANCELLED on the result before the timeout handler runs.
             # The 50ms timeout will fire while execute() is blocked.
-            with executor_module._background_tasks_lock:
-                executor_module._background_tasks[task_id].status = SubagentStatus.CANCELLED
-                executor_module._background_tasks[task_id].error = "Cancelled by user"
-                executor_module._background_tasks[task_id].completed_at = datetime.now()
+            ref = classes["agent_registry"].get(task_id)
+            ref.result.status = SubagentStatus.CANCELLED
+            ref.result.error = "Cancelled by user"
+            ref.result.completed_at = datetime.now()
 
-            # Wait for run_task to finish — the FuturesTimeoutError handler has
+            # Wait for run_task to finish - the FuturesTimeoutError handler has
             # now executed and (should have) left CANCELLED intact.
             assert run_task_done.wait(timeout=5), "run_task() did not finish"
 
-        result = executor_module._background_tasks.get(task_id)
+        ref = classes["agent_registry"].get(task_id)
+        assert ref is not None
+        result = ref.result
         assert result is not None
         # The RUNNING guard in the FuturesTimeoutError handler must have
         # preserved CANCELLED instead of overwriting with TIMED_OUT.
@@ -2196,7 +2244,8 @@ class TestCooperativeCancellation:
             task_id = executor.execute_async("Task")
             assert first_chunk_seen.wait(timeout=3), "stream did not yield initial chunk"
 
-            result = executor_module._background_tasks[task_id]
+            ref = classes["agent_registry"].get(task_id)
+            result = ref.result
             assert result.cancel_event.wait(timeout=3), "timeout handler did not request cancellation"
             assert result.status.value == SubagentStatus.TIMED_OUT.value
             timed_out_error = result.error
@@ -2205,7 +2254,9 @@ class TestCooperativeCancellation:
             finish_stream.set()
             assert execution_done.wait(timeout=3), "execution worker did not finish"
 
-        result = executor_module._background_tasks.get(task_id)
+        ref = classes["agent_registry"].get(task_id)
+        assert ref is not None
+        result = ref.result
         assert result is not None
         assert result.status.value == SubagentStatus.TIMED_OUT.value
         assert result.result is None
@@ -2216,6 +2267,7 @@ class TestCooperativeCancellation:
         """Test that cleanup removes a CANCELLED task (terminal state)."""
         SubagentResult = classes["SubagentResult"]
         SubagentStatus = classes["SubagentStatus"]
+        agent_registry = classes["agent_registry"]
 
         task_id = "test-cancelled-cleanup"
         result = SubagentResult(
@@ -2225,11 +2277,26 @@ class TestCooperativeCancellation:
             error="Cancelled by user",
             completed_at=datetime.now(),
         )
-        executor_module._background_tasks[task_id] = result
+        SubagentConfig = classes["SubagentConfig"]
+        AgentRef = classes["AgentRef"]
+        agent_registry.register(
+            AgentRef(
+                task_id=task_id,
+                thread_id="test-thread",
+                trace_id="test-trace",
+                subagent_type="test-agent",
+                status=SubagentStatus.CANCELLED,
+                config=SubagentConfig(name="test-agent", description="test"),
+                executor=None,
+                result=result,
+                description="test",
+                created_at=datetime.now(),
+            )
+        )
 
         executor_module.cleanup_background_task(task_id)
 
-        assert task_id not in executor_module._background_tasks
+        assert agent_registry.get(task_id) is None
 
 
 # -----------------------------------------------------------------------------
