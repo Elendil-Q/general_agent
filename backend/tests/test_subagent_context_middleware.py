@@ -79,6 +79,18 @@ def _task_call(task_id="call_1"):
     return {"name": "task", "id": task_id, "args": {"prompt": "do something"}}
 
 
+def _other_call(name="bash", call_id="call_other"):
+    return {"name": name, "id": call_id, "args": {}}
+
+
+def _raw_tool_call(call_id: str, name: str = "task") -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": "{}"},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Test 1: SubagentStatusMessage.from_refs builds correct content
 # ---------------------------------------------------------------------------
@@ -218,6 +230,51 @@ class TestAfterModelLimit:
         result = mw._enforce_limit(msg)
         assert result is None
 
+    def test_after_model_non_task_calls_preserved(self):
+        """Non-task tool calls (bash, read) survive truncation of excess task calls."""
+        mw = SubagentContextMiddleware(max_concurrent=2)
+        msg = AIMessage(
+            content="",
+            tool_calls=[
+                _other_call("bash", "b1"),
+                _task_call("t1"),
+                _task_call("t2"),
+                _task_call("t3"),
+                _other_call("read", "r1"),
+            ],
+        )
+        result = mw._enforce_limit(msg)
+        assert result is not None
+        updated_msg = result["messages"][0]
+        names = [tc["name"] for tc in updated_msg.tool_calls]
+        assert "bash" in names
+        assert "read" in names
+        task_calls = [tc for tc in updated_msg.tool_calls if tc["name"] == "task"]
+        assert len(task_calls) == 2
+
+    def test_after_model_truncation_syncs_raw_provider_tool_calls(self):
+        """Truncation syncs additional_kwargs['tool_calls'] (provider-level metadata)."""
+        mw = SubagentContextMiddleware(max_concurrent=2)
+        msg = AIMessage(
+            content="",
+            tool_calls=[_task_call("t1"), _task_call("t2"), _task_call("t3"), _task_call("t4")],
+            additional_kwargs={
+                "tool_calls": [
+                    _raw_tool_call("t1"),
+                    _raw_tool_call("t2"),
+                    _raw_tool_call("t3"),
+                    _raw_tool_call("t4"),
+                ]
+            },
+            response_metadata={"finish_reason": "tool_calls"},
+        )
+        result = mw._enforce_limit(msg)
+        assert result is not None
+        updated_msg = result["messages"][0]
+        assert [tc["id"] for tc in updated_msg.tool_calls] == ["t1", "t2"]
+        assert [tc["id"] for tc in updated_msg.additional_kwargs["tool_calls"]] == ["t1", "t2"]
+        assert updated_msg.response_metadata["finish_reason"] == "tool_calls"
+
 
 # ---------------------------------------------------------------------------
 # Test 4: after_model guard enforcement (from PendingTaskGuardMiddleware tests)
@@ -275,5 +332,21 @@ class TestAfterModelGuard:
         state = {"messages": [HumanMessage(content="do X"), last]}
         with patch("deerflow.subagents.agent_registry.agent_registry") as mock_reg:
             mock_reg.list_by_thread.return_value = []
+            result = mw._enforce_guard(state, runtime, last)
+        assert result is None
+
+    def test_after_model_guard_no_action_when_tasks_terminal_or_stopped(self):
+        """COMPLETED/IDLE/INTERRUPTED statuses don't trigger the guard (only PENDING/RUNNING)."""
+        mw = SubagentContextMiddleware()
+        runtime = _make_runtime()
+        last = AIMessage(content="I'm done", tool_calls=[])
+        state = {"messages": [HumanMessage(content="do X"), last]}
+        refs = [
+            _make_ref(task_id="t1", status=SubagentStatus.COMPLETED),
+            _make_ref(task_id="t2", status=SubagentStatus.IDLE),
+            _make_ref(task_id="t3", status=SubagentStatus.INTERRUPTED),
+        ]
+        with patch("deerflow.subagents.agent_registry.agent_registry") as mock_reg:
+            mock_reg.list_by_thread.return_value = refs
             result = mw._enforce_guard(state, runtime, last)
         assert result is None
