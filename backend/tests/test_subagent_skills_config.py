@@ -380,22 +380,6 @@ class TestRegistryCustomAgentLookup:
         _reset_subagents_config()
         assert get_subagent_config("nonexistent") is None
 
-    def test_get_available_subagent_names_falls_back_when_subagents_app_config_lacks_sandbox(self, monkeypatch):
-        from deerflow.subagents import registry as registry_module
-        from deerflow.subagents.registry import get_available_subagent_names
-
-        captured: dict[str, tuple] = {}
-
-        def fake_is_host_bash_allowed(*args, **kwargs):
-            captured["args"] = args
-            return True
-
-        monkeypatch.setattr(registry_module, "is_host_bash_allowed", fake_is_host_bash_allowed)
-
-        get_available_subagent_names(app_config=SubagentsAppConfig())
-
-        assert captured["args"] == ()
-
     def test_builtin_takes_priority_over_custom(self):
         """If a custom agent has the same name as a builtin, builtin wins."""
         from deerflow.subagents.builtins import BUILTIN_SUBAGENTS
@@ -467,11 +451,11 @@ class TestRegistrySkillsOverride:
         load_subagents_config_from_dict(
             {
                 "agents": {
-                    "bash": {"skills": []},
+                    "general-purpose": {"skills": []},
                 },
             }
         )
-        config = get_subagent_config("bash")
+        config = get_subagent_config("general-purpose")
         assert config.skills == []
 
     def test_no_skills_override_keeps_default(self):
@@ -511,7 +495,6 @@ class TestRegistryAvailableNames:
         _reset_subagents_config()
         names = get_subagent_names()
         assert "general-purpose" in names
-        assert "bash" in names
 
     def test_includes_custom_names(self):
         from deerflow.subagents.registry import get_subagent_names
@@ -532,7 +515,6 @@ class TestRegistryAvailableNames:
         )
         names = get_subagent_names()
         assert "general-purpose" in names
-        assert "bash" in names
         assert "analysis" in names
         assert "researcher" in names
 
@@ -579,7 +561,6 @@ class TestRegistryListSubagentsWithCustom:
         configs = list_subagents()
         names = {c.name for c in configs}
         assert "general-purpose" in names
-        assert "bash" in names
         assert "analysis" in names
 
     def test_list_custom_agent_has_correct_skills(self):

@@ -25,7 +25,7 @@ def test_build_subagent_section_uses_direct_execution_example(monkeypatch) -> No
     section = prompt_module._build_subagent_section(3)
 
     assert "**general-purpose**" in section
-    assert 'read_file("/mnt/user-data/workspace/README.md")' in section
+    assert "For ANY non-trivial task" in section
 
 
 def test_general_purpose_subagent_prompt_mentions_workspace_relative_paths() -> None:

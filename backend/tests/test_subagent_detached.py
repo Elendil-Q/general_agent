@@ -287,8 +287,8 @@ def test_wait_for_tasks_times_out(monkeypatch, _setup_executor_classes):
 
     monkeypatch.setattr(_module, "get_stream_writer", lambda: lambda event: None)
     monkeypatch.setattr(_module, "DEFAULT_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(_module, "DEFAULT_TIMEOUT_SECONDS", 0)
-    monkeypatch.setattr(_module, "_TIMEOUT_BUFFER_SECONDS", 0)
+    monkeypatch.setattr(_module, "DEFAULT_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(_module, "_TIMEOUT_BUFFER_SECONDS", 1)
 
     tid_done = "tid-wait-done"
     tid_pending = "tid-wait-pending"
@@ -349,12 +349,12 @@ def test_wait_for_tasks_times_out(monkeypatch, _setup_executor_classes):
     assert "timed out" in parsed[tid_pending]["error"]
 
 
-def test_wait_for_tasks_emits_lifecycle_events(monkeypatch, _setup_executor_classes):
-    """``wait_for_tasks`` emits lifecycle events for completed/failed tasks."""
+def test_wait_for_tasks_no_longer_emits_lifecycle_events(monkeypatch, _setup_executor_classes):
+    """``wait_for_tasks`` no longer emits lifecycle events (executor is sole emitter)."""
     import sys
     from datetime import datetime
 
-    from deerflow.subagents.agent_registry import AgentRef
+    from deerflow.subagents.agent_registry import AgentRef, agent_registry
     from deerflow.subagents.event_bus import event_bus
     from deerflow.subagents.executor import SubagentResult, SubagentStatus
     from deerflow.tools.builtins.wait_for_tasks import wait_for_tasks
@@ -408,10 +408,11 @@ def test_wait_for_tasks_emits_lifecycle_events(monkeypatch, _setup_executor_clas
     agent_registry.register(ref_completed)
     agent_registry.register(ref_failed)
 
-    events: list[dict] = []
+    lifecycle_events: list[dict] = []
 
     def capture(payload: dict) -> None:
-        events.append(payload)
+        if payload.get("event") in ("completed", "failed"):
+            lifecycle_events.append(payload)
 
     unsub = event_bus.on("subagent:lifecycle", capture)
     try:
@@ -425,13 +426,4 @@ def test_wait_for_tasks_emits_lifecycle_events(monkeypatch, _setup_executor_clas
     finally:
         unsub()
 
-    completed_events = [e for e in events if e.get("event") == "completed"]
-    failed_events = [e for e in events if e.get("event") == "failed"]
-
-    assert len(completed_events) == 1
-    assert completed_events[0]["task_id"] == tid_completed
-    assert completed_events[0]["result"] == "completed-result"
-
-    assert len(failed_events) == 1
-    assert failed_events[0]["task_id"] == tid_failed
-    assert failed_events[0]["error"] == "task crashed"
+    assert len(lifecycle_events) == 0, f"wait_for_tasks must not emit lifecycle events (executor is sole emitter); got {lifecycle_events}"

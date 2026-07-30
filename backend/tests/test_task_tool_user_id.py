@@ -107,9 +107,7 @@ def _wire_completed_subagent(monkeypatch, captured):
 
     monkeypatch.setattr(task_tool_module, "SubagentStatus", FakeSubagentStatus)
     monkeypatch.setattr(task_tool_module, "SubagentExecutor", DummyExecutor)
-    monkeypatch.setattr(task_tool_module, "get_background_task_result", lambda _: _make_result("done"))
     monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: lambda _e: None)
-    monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
     monkeypatch.setattr("deerflow.tools.get_available_tools", lambda **_kw: ["tool-a"])
 
 
@@ -145,7 +143,8 @@ def test_task_tool_forwards_runtime_context_user_id(monkeypatch):
         tool_call_id="tc-user-id",
     )
 
-    assert output == "Task Succeeded. Result: done"
+    assert "Task spawned." in output
+    assert "tc-user-id" in output
     assert captured["names_user_id"] == "runtime-user-42"
     assert captured["config_user_id"] == "runtime-user-42"
     assert captured["config_name"] == "general-purpose"
@@ -169,7 +168,8 @@ def test_task_tool_forwards_user_id_alongside_app_config(monkeypatch):
         tool_call_id="tc-user-id",
     )
 
-    assert output == "Task Succeeded. Result: done"
+    assert "Task spawned." in output
+    assert "tc-user-id" in output
     assert captured["names_user_id"] == "runtime-user-42"
     assert captured["config_user_id"] == "runtime-user-42"
     assert captured["names_app_config"] is app_config
@@ -198,6 +198,7 @@ def test_task_tool_falls_back_to_contextvar_user_id(monkeypatch):
     finally:
         reset_current_user(token)
 
-    assert output == "Task Succeeded. Result: done"
+    assert "Task spawned." in output
+    assert "tc-user-id" in output
     assert captured["names_user_id"] == "ctxvar-user-7"
     assert captured["config_user_id"] == "ctxvar-user-7"
