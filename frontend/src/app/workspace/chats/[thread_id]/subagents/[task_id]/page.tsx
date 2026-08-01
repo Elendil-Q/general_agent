@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { MessageListItem } from "@/components/workspace/messages/message-list-item";
+import { SubagentMessageList } from "@/components/workspace/messages/subagent-message-list";
 import { useI18n } from "@/core/i18n/hooks";
 import { useSubtask } from "@/core/tasks/context";
 import {
@@ -21,14 +21,18 @@ import {
   type SubagentMessagesResponse,
 } from "@/core/tasks/subagent-messages";
 import { useThreadMetadata } from "@/core/threads/hooks";
+import { useResolvedThreadId } from "@/core/threads/thread-id";
 
 export default function SubagentConversationPage() {
   const { t } = useI18n();
   const router = useRouter();
-  const { thread_id: threadId, task_id: taskId } = useParams<{
+  const { thread_id: threadIdParam, task_id: taskId } = useParams<{
     thread_id: string;
     task_id: string;
   }>();
+  // Route params can be stale ("new") after the chat page swaps the URL via
+  // the native History API; the resolved id follows the real browser path.
+  const threadId = useResolvedThreadId() ?? threadIdParam;
 
   const subtask = useSubtask(taskId);
   const query = useSubagentMessages(threadId, taskId);
@@ -150,13 +154,7 @@ export default function SubagentConversationPage() {
           </div>
         ) : (
           <div className="mx-auto flex w-full max-w-(--container-width-md) flex-col gap-8 px-3 pt-16 pb-10 sm:px-4">
-            {messages.map((message, index) => (
-              <MessageListItem
-                key={message.id ?? index}
-                message={message}
-                threadId={threadId}
-              />
-            ))}
+            <SubagentMessageList messages={messages} threadId={threadId} />
           </div>
         )}
       </main>

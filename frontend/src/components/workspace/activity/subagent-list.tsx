@@ -8,9 +8,10 @@ import {
   PauseCircleIcon,
   XCircleIcon,
 } from "lucide-react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import type { Subtask } from "@/core/tasks/types";
+import { useResolvedThreadId } from "@/core/threads/thread-id";
 import { cn } from "@/lib/utils";
 
 function statusIcon(status: Subtask["status"]) {
@@ -33,9 +34,12 @@ function statusIcon(status: Subtask["status"]) {
 
 export function SubagentList({ tasks }: { tasks: Subtask[] }) {
   const router = useRouter();
-  const { thread_id: threadId } = useParams<{ thread_id: string }>();
+  const threadId = useResolvedThreadId();
 
   const handleClick = (taskId: string) => {
+    if (!threadId) {
+      return;
+    }
     router.push(
       `/workspace/chats/${encodeURIComponent(threadId)}/subagents/${encodeURIComponent(taskId)}`,
     );

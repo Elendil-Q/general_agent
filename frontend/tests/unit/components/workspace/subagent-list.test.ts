@@ -23,11 +23,13 @@ function childrenOf(element: unknown): unknown[] {
 async function loadSubagentList(
   push: ReturnType<typeof rs.fn>,
   params: Record<string, string> = { thread_id: "thread-1" },
+  pathname = `/workspace/chats/${params.thread_id}`,
 ) {
   rs.resetModules();
   rs.doMock("next/navigation", () => ({
     useRouter: () => ({ push }),
     useParams: () => params,
+    usePathname: () => pathname,
   }));
   return import("@/components/workspace/activity/subagent-list");
 }
@@ -73,6 +75,29 @@ describe("SubagentList", () => {
 
     expect(push).toHaveBeenCalledWith(
       "/workspace/chats/thread-xyz/subagents/task-7",
+    );
+  });
+
+  it("uses the real thread id from the pathname when route params are stale", async () => {
+    const push = rs.fn();
+    // New-conversation flow: onStart swaps the URL via the native History
+    // API, leaving useParams stuck on "new" while the pathname carries the
+    // backend-created thread id.
+    const { SubagentList } = await loadSubagentList(
+      push,
+      { thread_id: "new" },
+      "/workspace/chats/thread-real",
+    );
+
+    const element = SubagentList({
+      tasks: [makeSubtask({ id: "task-42" })],
+    }) as unknown as TestElement;
+
+    const button = childrenOf(childrenOf(element)[0])[0] as TestElement;
+    (button.props.onClick as () => void)();
+
+    expect(push).toHaveBeenCalledWith(
+      "/workspace/chats/thread-real/subagents/task-42",
     );
   });
 
