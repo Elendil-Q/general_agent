@@ -5,6 +5,7 @@ import {
   findNextIdleExpiry,
   hasSubagentMirror,
   mapMirrorStatusToSubtask,
+  mirrorEntryToSubtaskUpdate,
   shouldApplyMirrorUpdate,
 } from "@/core/tasks/mirror";
 import type { Subtask } from "@/core/tasks/types";
@@ -178,5 +179,45 @@ describe("findNextIdleExpiry", () => {
     expect(findNextIdleExpiry({}, now)).toBeNull();
     const tasks = { "task-1": makeSubtask({ status: "idle" }) };
     expect(findNextIdleExpiry(tasks, now)).toBeNull();
+  });
+});
+
+describe("mirrorEntryToSubtaskUpdate", () => {
+  it("maps entry fields into a subtask update", () => {
+    const entry = makeEntry({
+      status: "idle",
+      updated_at: 1234,
+      idle_expires_at: 2000,
+    });
+    expect(mirrorEntryToSubtaskUpdate("task-1", entry)).toEqual({
+      id: "task-1",
+      subagent_type: "general-purpose",
+      status: "idle",
+      mirrorUpdatedAt: 1234,
+      idleExpiresAt: 2000 * 1000,
+      parent_task_id: null,
+    });
+  });
+
+  it("passes parent_task_id through for nested tasks", () => {
+    const entry = makeEntry({ parent_task_id: "parent-1" });
+    expect(mirrorEntryToSubtaskUpdate("nested-1", entry)).toMatchObject({
+      id: "nested-1",
+      parent_task_id: "parent-1",
+    });
+  });
+
+  it("defaults parent_task_id to null when absent", () => {
+    const entry = makeEntry();
+    expect(
+      mirrorEntryToSubtaskUpdate("task-1", entry).parent_task_id,
+    ).toBeNull();
+  });
+
+  it("omits idleExpiresAt when the entry has none", () => {
+    const entry = makeEntry({ idle_expires_at: null });
+    expect(mirrorEntryToSubtaskUpdate("task-1", entry)).not.toHaveProperty(
+      "idleExpiresAt",
+    );
   });
 });

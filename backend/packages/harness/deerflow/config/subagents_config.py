@@ -91,6 +91,10 @@ class CustomSubagentConfig(BaseModel):
         default=False,
         description="When True, a COMPLETED subagent transitions to IDLE instead of being cleaned up, so a later follow_up(task_id, prompt) can revive it with full context.",
     )
+    allow_subagents: bool = Field(
+        default=False,
+        description="When True, this subagent may itself spawn nested subagents via the task tool (lifts the default task denial, subject to the global MAX_SUBAGENT_DEPTH limit). Nested tasks are hidden from the frontend activity panel.",
+    )
     workflow: str | None = Field(
         default=None,
         description='"module.path:object" reference to a LangGraph workflow factory '

@@ -121,6 +121,10 @@ class SubagentState(TypedDict):
     status: str
     idle_expires_at: NotRequired[float | None]
     updated_at: float
+    # Lineage: None for lead-spawned tasks; the parent's task_id for nested
+    # subagents (subagents spawned by another subagent). The frontend activity
+    # panel hides entries with a non-null parent_task_id.
+    parent_task_id: NotRequired[str | None]
 
 
 def merge_subagents(existing: dict[str, SubagentState] | None, new: dict[str, SubagentState] | None) -> dict[str, SubagentState] | None:

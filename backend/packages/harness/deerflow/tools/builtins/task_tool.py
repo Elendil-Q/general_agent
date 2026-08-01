@@ -15,7 +15,7 @@ from deerflow.subagents import SubagentExecutor, get_available_subagent_names, g
 from deerflow.subagents.agent_registry import agent_registry
 from deerflow.subagents.config import resolve_subagent_model_name
 from deerflow.subagents.event_bus import event_bus
-from deerflow.subagents.executor import SubagentStatus
+from deerflow.subagents.executor import MAX_CONCURRENT_SUBAGENTS, SubagentStatus
 from deerflow.subagents.sse_bridge import sse_bridge
 from deerflow.tools.types import Runtime
 
@@ -221,6 +221,19 @@ async def task_tool(
     # free goto=END path. Mirrors the lead agent's context flag.
     clarification_interrupt_enabled = parent_context.get("clarification_interrupt_enabled")
 
+    # Nested-subagent lineage + permission gate. The spawning subagent's
+    # executor marks the runtime context (``is_subagent``/``subagent_task_id``/
+    # ``subagent_depth``/``nested_subagents_allowed``); the lead agent's context
+    # has none of these, so lead spawns keep parent_task_id=None, depth=1.
+    is_subagent = bool(parent_context.get("is_subagent"))
+    nested_permitted = is_subagent and bool(parent_context.get("nested_subagents_allowed"))
+    if is_subagent and not nested_permitted:
+        return "Error: Nesting is not permitted for this subagent (the subagent type does not allow spawning subagents, or the maximum nesting depth has been reached)."
+    parent_task_id = parent_context.get("subagent_task_id") if is_subagent else None
+    depth = int(parent_context.get("subagent_depth") or 0) + 1
+    if parent_task_id and agent_registry.count_active_children(parent_task_id) >= MAX_CONCURRENT_SUBAGENTS:
+        return f"Error: Concurrent nested subagent limit reached — {MAX_CONCURRENT_SUBAGENTS} children of task {parent_task_id} are still active. Wait for one to finish before spawning more."
+
     parent_available_skills = metadata.get("available_skills")
     if parent_available_skills is not None:
         overrides["skills"] = _merge_skill_allowlists(list(parent_available_skills), config.skills)
@@ -239,11 +252,13 @@ async def task_tool(
         resolved_app_config = get_app_config()
     effective_model = resolve_subagent_model_name(config, parent_model, app_config=resolved_app_config)
 
-    # Subagents should not have subagent tools enabled (prevent recursive nesting)
+    # Subagents only get subagent tools when they are explicitly permitted to
+    # nest (config opt-in + below MAX_SUBAGENT_DEPTH); the lead agent gets them
+    # via its own subagent_enabled flag, not through this path.
     available_tools_kwargs = {
         "model_name": effective_model,
         "groups": parent_tool_groups,
-        "subagent_enabled": False,
+        "subagent_enabled": nested_permitted,
     }
     if resolved_app_config is not None:
         available_tools_kwargs["app_config"] = resolved_app_config
@@ -268,6 +283,8 @@ async def task_tool(
         # derive a deterministic, API-addressable subagent_thread_id so an
         # interrupted subagent can be resumed by task_id.
         "task_id": tool_call_id,
+        "parent_task_id": parent_task_id,
+        "depth": depth,
     }
     if resolved_app_config is not None:
         executor_kwargs["app_config"] = resolved_app_config
@@ -293,13 +310,18 @@ async def task_tool(
                 result=None,
                 description=description,
                 created_at=datetime.now(UTC),
+                parent_task_id=parent_task_id,
+                depth=depth,
             )
         )
 
     # Always register SSE writer so subagent events reach the frontend
-    # from the moment it is spawned.
-    writer = get_stream_writer()
-    sse_bridge.register_writer(thread_id, writer)
+    # from the moment it is spawned. A NESTED run must not register: its
+    # writer would overwrite the lead run's writer in the bridge (keyed by
+    # thread_id); nested events already route through the lead's writer.
+    if not is_subagent:
+        writer = get_stream_writer()
+        sse_bridge.register_writer(thread_id, writer)
 
     event_bus.emit(
         "subagent:lifecycle",
@@ -308,6 +330,8 @@ async def task_tool(
             "task_id": task_id,
             "thread_id": thread_id,
             "description": description,
+            "parent_task_id": parent_task_id,
+            "depth": depth,
         },
     )
 

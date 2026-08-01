@@ -310,6 +310,7 @@ export interface Translations {
     interrupted: string;
     expired: string;
     background: string;
+    delegating: (subagentType: string, description: string) => string;
   };
 
   // Wait for Tasks

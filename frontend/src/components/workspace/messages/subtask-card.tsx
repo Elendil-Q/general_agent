@@ -22,6 +22,7 @@ import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import { streamdownPluginsWithWordAnimation } from "@/core/streamdown";
 import { SafeStreamdown } from "@/core/streamdown/components";
 import { useSubtask } from "@/core/tasks/context";
+import { getNestedDelegations } from "@/core/tasks/nested";
 import { explainLastToolCall } from "@/core/tools/utils";
 import { cn } from "@/lib/utils";
 
@@ -155,6 +156,17 @@ export function SubtaskCard({
                 {explainLastToolCall(task.latestMessage, t)}
               </ChainOfThoughtStep>
             )}
+          {task.status === "in_progress" &&
+            getNestedDelegations(task.latestMessage).map((delegation) => (
+              <ChainOfThoughtStep
+                key={`${delegation.subagent_type}:${delegation.description}`}
+                label={t.subtasks.delegating(
+                  delegation.subagent_type,
+                  delegation.description,
+                )}
+                icon={<Loader2Icon className="size-4 animate-spin" />}
+              ></ChainOfThoughtStep>
+            ))}
           {task.status === "completed" && (
             <>
               <ChainOfThoughtStep

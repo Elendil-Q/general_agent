@@ -47,6 +47,7 @@ def _entry_from_ref(ref, now: float, ttl_seconds: float) -> dict:
         "status": status,
         "idle_expires_at": idle_expires_at,
         "updated_at": now,
+        "parent_task_id": getattr(ref, "parent_task_id", None),
     }
 
 

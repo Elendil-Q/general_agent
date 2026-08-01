@@ -378,4 +378,58 @@ describe("handleCustomEvent", () => {
       expect(ctx.toastCalls).toHaveLength(0);
     });
   });
+
+  describe("nested task events (parent_task_id set)", () => {
+    it("swallows task_running without touching the store", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        {
+          type: "task_running",
+          task_id: "nested-1",
+          parent_task_id: "parent-1",
+          message: { id: "m1", type: "ai", content: "hi" },
+        },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toHaveLength(0);
+    });
+
+    it("swallows task_completed without touching the store", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        {
+          type: "task_completed",
+          task_id: "nested-1",
+          parent_task_id: "parent-1",
+          result: "done",
+        },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toHaveLength(0);
+    });
+
+    it("swallows task_idle without touching the store", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_idle", task_id: "nested-1", parent_task_id: "p" },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toHaveLength(0);
+    });
+
+    it("still processes lead events where parent_task_id is null", () => {
+      const ctx = makeCtx();
+      const result = handleCustomEvent(
+        { type: "task_idle", task_id: "task-1", parent_task_id: null },
+        ctx,
+      );
+      expect(result).toBe(true);
+      expect(ctx.updateSubtaskCalls).toEqual([
+        { id: "task-1", status: "idle", live: true },
+      ]);
+    });
+  });
 });

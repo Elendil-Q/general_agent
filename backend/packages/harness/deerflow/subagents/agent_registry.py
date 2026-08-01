@@ -31,6 +31,11 @@ class AgentRef:
     description: str
     created_at: datetime
     idle_since: datetime | None = None
+    # Lineage: lead-spawned tasks have parent_task_id=None and depth=1; a
+    # nested subagent (spawned by another subagent) records its parent's
+    # task_id and depth = parent depth + 1.
+    parent_task_id: str | None = None
+    depth: int = 1
 
 
 class AgentRegistry:
@@ -60,6 +65,11 @@ class AgentRegistry:
     def list_all(self) -> list[AgentRef]:
         with self._lock:
             return list(self._refs.values())
+
+    def count_active_children(self, parent_task_id: str) -> int:
+        """Count non-terminal subagents spawned by the given parent task."""
+        with self._lock:
+            return sum(1 for r in self._refs.values() if r.parent_task_id == parent_task_id and not r.status.is_terminal)
 
     def update_status(self, task_id: str, status: SubagentStatus, **fields) -> AgentRef | None:
         with self._lock:

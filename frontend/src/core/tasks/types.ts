@@ -27,6 +27,11 @@ export interface Subtask {
    */
   idleExpiresAt?: number;
   /**
+   * Set for nested subagents (spawned by another subagent); null/absent for
+   * lead-thread tasks. Nested tasks are hidden from the activity panel.
+   */
+  parent_task_id?: string | null;
+  /**
    * ``updated_at`` (epoch seconds) of the last applied mirror entry.
    * Out-of-order / older mirror snapshots are skipped so they cannot
    * regress a fresher status.

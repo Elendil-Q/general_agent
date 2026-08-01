@@ -40,6 +40,28 @@ export function mapMirrorStatusToSubtask(
 }
 
 /**
+ * Map a mirror entry to the {@link Subtask} partial update applied by
+ * ``useSubagentMirrorSync``. ``idle_expires_at`` (epoch seconds) becomes
+ * ``idleExpiresAt`` (epoch milliseconds); ``parent_task_id`` defaults to
+ * null for lead tasks.
+ */
+export function mirrorEntryToSubtaskUpdate(
+  taskId: string,
+  entry: SubagentMirrorEntry,
+): Partial<Subtask> & { id: string } {
+  return {
+    id: taskId,
+    subagent_type: entry.subagent_type,
+    status: mapMirrorStatusToSubtask(entry.status),
+    mirrorUpdatedAt: entry.updated_at,
+    parent_task_id: entry.parent_task_id ?? null,
+    ...(entry.idle_expires_at != null
+      ? { idleExpiresAt: entry.idle_expires_at * 1000 }
+      : {}),
+  };
+}
+
+/**
  * Guard against out-of-order mirror snapshots: apply an entry only when it
  * is at least as new as the last mirror update already applied to the task.
  */

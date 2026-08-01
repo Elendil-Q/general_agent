@@ -7,6 +7,7 @@ import { useThread } from "@/components/workspace/messages/context";
 import { TodoList } from "@/components/workspace/todo-list";
 import { useI18n } from "@/core/i18n/hooks";
 import { useSubtaskContext } from "@/core/tasks/context";
+import { isLeadSubtask } from "@/core/tasks/nested";
 
 import { SubagentList } from "./subagent-list";
 
@@ -18,11 +19,12 @@ export function ActivityPanel() {
   const todos = thread.values.todos ?? [];
   const activeTasks = Object.values(tasks).filter(
     (task) =>
-      task.status === "in_progress" ||
-      task.status === "idle" ||
-      task.status === "interrupted" ||
-      task.status === "completed" ||
-      task.status === "failed",
+      isLeadSubtask(task) &&
+      (task.status === "in_progress" ||
+        task.status === "idle" ||
+        task.status === "interrupted" ||
+        task.status === "completed" ||
+        task.status === "failed"),
   );
 
   return (

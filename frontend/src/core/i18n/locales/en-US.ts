@@ -396,6 +396,8 @@ export const enUS: Translations = {
     interrupted: "Interrupted, awaiting input",
     expired: "Subtask expired",
     background: "Running in background",
+    delegating: (subagentType: string, description: string) =>
+      `Delegating subtask [${subagentType}] ${description}`,
   },
 
   waitForTasks: {

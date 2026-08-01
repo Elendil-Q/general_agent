@@ -55,6 +55,7 @@ def _build_custom_subagent_config(name: str, *, app_config: Any | None = None) -
             max_turns=custom.max_turns,
             timeout_seconds=custom.timeout_seconds,
             keep_alive=custom.keep_alive,
+            allow_subagents=custom.allow_subagents,
             workflow=custom.workflow,
         )
 

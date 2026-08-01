@@ -48,6 +48,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Bound once so ``SubagentExecutor._emit`` keeps a direct reference even though
+# every other call site in this module goes through ``self._emit``.
+_raw_bus_emit = event_bus.emit
+
 
 _previous_shutdown_isolated_subagent_loop = globals().get("_shutdown_isolated_subagent_loop")
 if callable(_previous_shutdown_isolated_subagent_loop):
@@ -407,6 +411,8 @@ class SubagentExecutor:
         clarification_interrupt_enabled: bool | None = None,
         task_id: str | None = None,
         checkpointer: Any | None = None,
+        parent_task_id: str | None = None,
+        depth: int = 1,
     ):
         """Initialize the executor.
 
@@ -437,8 +443,16 @@ class SubagentExecutor:
                 parent/Gateway checkpointer (cross-loop async savers break on the
                 isolated subagent loop). The saver is what makes
                 ``interrupt()``/``Command(resume=...)`` work.
+            parent_task_id: Lineage — the task_id of the subagent that spawned
+                this one (None for lead-spawned tasks). Carried into the registry,
+                all event payloads, and the state mirror.
+            depth: Nesting depth — 1 for lead-spawned subagents, parent depth + 1
+                for nested ones. Bounded by ``MAX_SUBAGENT_DEPTH``.
         """
         self.config = config
+        self.parent_task_id = parent_task_id
+        self.depth = depth
+        self.task_id = task_id
         self.app_config = app_config
         self.parent_model = parent_model
         # Resolve eagerly only when it does not require loading config.yaml; otherwise defer
@@ -491,10 +505,17 @@ class SubagentExecutor:
         # checkpointer instance against the existing checkpoint.
         self._agent: Any | None = None
 
+        # ``allow_subagents=True`` lifts the default ``disallowed_tools=["task"]``
+        # denial so a nesting-capable subagent keeps the task tool; an explicit
+        # ``task`` entry combined with allow_subagents is treated as the default
+        # and also lifted (allow_subagents wins — document your intent via the flag).
+        disallowed = config.disallowed_tools
+        if config.allow_subagents and disallowed:
+            disallowed = [name for name in disallowed if name != "task"] or None
         self._base_tools = _filter_tools(
             tools,
             config.tools,
-            config.disallowed_tools,
+            disallowed,
         )
 
         # Load exclusive tools (not inherited from parent)
@@ -864,6 +885,39 @@ the same skill directory only when needed during execution.
 
         return state, final_tools, deferred_setup
 
+    def _emit(self, channel: str, payload: dict) -> None:
+        """Emit a bus event with lineage fields injected.
+
+        Every subagent event carries ``parent_task_id``/``depth`` so consumers
+        (SSE bridge, frontend activity panel, state mirror) can distinguish
+        nested tasks from lead-spawned ones.
+        """
+        _raw_bus_emit(channel, {"parent_task_id": self.parent_task_id, "depth": self.depth, **payload})
+
+    def _apply_runtime_context(self, context: dict[str, Any]) -> None:
+        """Populate the runtime ``context`` passed to the subagent's astream.
+
+        Besides guardrail attribution and the clarification gate, this exposes
+        the lineage a nested ``task()`` call needs: its own task_id/depth and
+        whether it may itself spawn nested subagents (config opt-in AND below
+        ``MAX_SUBAGENT_DEPTH``).
+        """
+        context["user_id"] = self.user_id
+        context["user_role"] = self.user_role
+        context["oauth_provider"] = self.oauth_provider
+        context["oauth_id"] = self.oauth_id
+        context["run_id"] = self.run_id
+        context["is_subagent"] = True
+        context["subagent_task_id"] = self.task_id
+        context["subagent_depth"] = self.depth
+        context["nested_subagents_allowed"] = bool(self.config.allow_subagents) and self.depth < MAX_SUBAGENT_DEPTH
+        # Forward the structured-clarification gate so the subagent's
+        # ClarificationMiddleware takes the same path (interrupt vs free)
+        # as the lead agent. Set only when truthy: IM/absent stays unset
+        # and the middleware falls back to the free goto=END path.
+        if self.clarification_interrupt_enabled:
+            context["clarification_interrupt_enabled"] = self.clarification_interrupt_enabled
+
     async def _build_workflow_initial_state(self, task: str) -> tuple[dict[str, Any], list[BaseTool], DeferredToolSetup | None]:
         """Build a minimal initial state for a workflow subagent.
 
@@ -900,7 +954,7 @@ the same skill directory only when needed during execution.
             if message_dict in self._persisted_idless_message_dicts:
                 return
             self._persisted_idless_message_dicts.append(message_dict)
-        event_bus.emit(
+        self._emit(
             "subagent:message",
             {
                 "task_id": task_id,
@@ -1007,18 +1061,7 @@ the same skill directory only when needed during execution.
             # evaluated with the parent run's identity (role-aware policy,
             # audit). user_id reuses the resolved tracing id; on every
             # authenticated/IM path this equals the parent context value.
-            context["user_id"] = self.user_id
-            context["user_role"] = self.user_role
-            context["oauth_provider"] = self.oauth_provider
-            context["oauth_id"] = self.oauth_id
-            context["run_id"] = self.run_id
-            context["is_subagent"] = True
-            # Forward the structured-clarification gate so the subagent's
-            # ClarificationMiddleware takes the same path (interrupt vs free)
-            # as the lead agent. Set only when truthy: IM/absent stays unset
-            # and the middleware falls back to the free goto=END path.
-            if self.clarification_interrupt_enabled:
-                context["clarification_interrupt_enabled"] = self.clarification_interrupt_enabled
+            self._apply_runtime_context(context)
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution with max_turns={self.config.max_turns}")
 
@@ -1080,7 +1123,7 @@ the same skill directory only when needed during execution.
                         error="Cancelled by user",
                         token_usage_records=collector.snapshot_records(),
                     )
-                    event_bus.emit(
+                    self._emit(
                         "subagent:lifecycle",
                         {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
                     )
@@ -1150,7 +1193,7 @@ the same skill directory only when needed during execution.
                                     # terminal status at least once before the run
                                     # ends. Tokens/model are omitted; per-LLM usage
                                     # arrives via the token-collector.
-                                    event_bus.emit(
+                                    self._emit(
                                         "subagent:progress",
                                         {
                                             "task_id": result.task_id or "",
@@ -1158,7 +1201,7 @@ the same skill directory only when needed during execution.
                                             "status": result.status.value,
                                         },
                                     )
-                                    event_bus.emit(
+                                    self._emit(
                                         "subagent:lifecycle",
                                         {
                                             "event": "failed",
@@ -1172,7 +1215,7 @@ the same skill directory only when needed during execution.
                                 # message (id/type/content/tool_calls) so the
                                 # frontend SubtaskCard can render live tool-call
                                 # progress via ``explainLastToolCall``.
-                                event_bus.emit(
+                                self._emit(
                                     "subagent:progress",
                                     {
                                         "task_id": result.task_id or "",
@@ -1207,7 +1250,7 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
                 )
@@ -1223,7 +1266,7 @@ the same skill directory only when needed during execution.
                 from deerflow.subagents.agent_registry import agent_registry
 
                 agent_registry.update_status(result.task_id or "", SubagentStatus.INTERRUPTED)
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {
                         "event": "interrupted",
@@ -1261,7 +1304,7 @@ the same skill directory only when needed during execution.
                         SubagentStatus.IDLE,
                         idle_since=result.idle_since,
                     )
-                    event_bus.emit(
+                    self._emit(
                         "subagent:lifecycle",
                         {
                             "event": "idle",
@@ -1281,7 +1324,7 @@ the same skill directory only when needed during execution.
                     result=final_result,
                     token_usage_records=token_usage_records,
                 )
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {
                         "event": "completed",
@@ -1300,7 +1343,7 @@ the same skill directory only when needed during execution.
                 error=str(e),
                 token_usage_records=(collector.snapshot_records() if collector is not None else None),
             )
-            event_bus.emit(
+            self._emit(
                 "subagent:lifecycle",
                 {
                     "event": "failed",
@@ -1430,6 +1473,8 @@ the same skill directory only when needed during execution.
                 result=result,
                 description=self.config.description or "",
                 created_at=datetime.now(),
+                parent_task_id=self.parent_task_id,
+                depth=self.depth,
             )
         )
 
@@ -1441,7 +1486,7 @@ the same skill directory only when needed during execution.
 
             agent_registry.update_status(task_id, SubagentStatus.RUNNING)
             result_holder = result  # use the already-created result object
-            event_bus.emit(
+            self._emit(
                 "subagent:lifecycle",
                 {"event": "started", "task_id": task_id, "thread_id": self.thread_id or ""},
             )
@@ -1464,7 +1509,7 @@ the same skill directory only when needed during execution.
                         SubagentStatus.TIMED_OUT,
                         error=f"Execution timed out after {self.config.timeout_seconds} seconds",
                     )
-                    event_bus.emit(
+                    self._emit(
                         "subagent:lifecycle",
                         {
                             "event": "timed_out",
@@ -1477,7 +1522,7 @@ the same skill directory only when needed during execution.
             except Exception as e:
                 logger.exception(f"[trace={self.trace_id}] Subagent {self.config.name} async execution failed")
                 result.try_set_terminal(SubagentStatus.FAILED, error=str(e))
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {
                         "event": "failed",
@@ -1542,18 +1587,11 @@ the same skill directory only when needed during execution.
                 context["thread_id"] = self.thread_id
             if self.app_config is not None:
                 context["app_config"] = self.app_config
-            context["user_id"] = self.user_id
-            context["user_role"] = self.user_role
-            context["oauth_provider"] = self.oauth_provider
-            context["oauth_id"] = self.oauth_id
-            context["run_id"] = self.run_id
-            context["is_subagent"] = True
-            if self.clarification_interrupt_enabled:
-                context["clarification_interrupt_enabled"] = self.clarification_interrupt_enabled
+            self._apply_runtime_context(context)
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} resuming after interrupt")
 
-            event_bus.emit(
+            self._emit(
                 "subagent:lifecycle",
                 {"event": "running", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
             )
@@ -1574,7 +1612,7 @@ the same skill directory only when needed during execution.
                 from deerflow.subagents.agent_registry import agent_registry
 
                 agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
                 )
@@ -1590,7 +1628,7 @@ the same skill directory only when needed during execution.
                     from deerflow.subagents.agent_registry import agent_registry
 
                     agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
-                    event_bus.emit(
+                    self._emit(
                         "subagent:lifecycle",
                         {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
                     )
@@ -1624,7 +1662,7 @@ the same skill directory only when needed during execution.
                                 # message, exactly as before.
                                 if index != last_index:
                                     continue
-                                event_bus.emit(
+                                self._emit(
                                     "subagent:progress",
                                     {
                                         "task_id": result.task_id or "",
@@ -1650,7 +1688,7 @@ the same skill directory only when needed during execution.
                 from deerflow.subagents.agent_registry import agent_registry
 
                 agent_registry.update_status(result.task_id or "", SubagentStatus.CANCELLED)
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": result.task_id or "", "thread_id": self.thread_id or ""},
                 )
@@ -1665,7 +1703,7 @@ the same skill directory only when needed during execution.
                 from deerflow.subagents.agent_registry import agent_registry
 
                 agent_registry.update_status(result.task_id or "", SubagentStatus.INTERRUPTED)
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {
                         "event": "interrupted",
@@ -1694,7 +1732,7 @@ the same skill directory only when needed during execution.
                         SubagentStatus.IDLE,
                         idle_since=result.idle_since,
                     )
-                    event_bus.emit(
+                    self._emit(
                         "subagent:lifecycle",
                         {
                             "event": "idle",
@@ -1714,7 +1752,7 @@ the same skill directory only when needed during execution.
                     result=final_result,
                     token_usage_records=token_usage_records,
                 )
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {
                         "event": "completed",
@@ -1734,7 +1772,7 @@ the same skill directory only when needed during execution.
             from deerflow.subagents.agent_registry import agent_registry
 
             agent_registry.update_status(result.task_id or "", SubagentStatus.FAILED)
-            event_bus.emit(
+            self._emit(
                 "subagent:lifecycle",
                 {
                     "event": "failed",
@@ -1971,7 +2009,7 @@ the same skill directory only when needed during execution.
             # Canonical emit point: the ``follow_up`` tool and direct
             # ``continue_with_prompt`` callers both flow through here, so the
             # event fires exactly once at the right time (not at completion).
-            event_bus.emit(
+            self._emit(
                 "subagent:lifecycle",
                 {
                     "event": "revived",
@@ -2020,14 +2058,7 @@ the same skill directory only when needed during execution.
                 context["thread_id"] = self.thread_id
             if self.app_config is not None:
                 context["app_config"] = self.app_config
-            context["user_id"] = self.user_id
-            context["user_role"] = self.user_role
-            context["oauth_provider"] = self.oauth_provider
-            context["oauth_id"] = self.oauth_id
-            context["run_id"] = self.run_id
-            context["is_subagent"] = True
-            if self.clarification_interrupt_enabled:
-                context["clarification_interrupt_enabled"] = self.clarification_interrupt_enabled
+            self._apply_runtime_context(context)
 
             collector_yield = YieldCollector(output_schema=self.config.output)
             _yield_collector_ctx.set(collector_yield)
@@ -2054,7 +2085,7 @@ the same skill directory only when needed during execution.
                 from deerflow.subagents.agent_registry import agent_registry
 
                 agent_registry.update_status(task_id, SubagentStatus.CANCELLED)
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": task_id, "thread_id": self.thread_id or ""},
                 )
@@ -2070,7 +2101,7 @@ the same skill directory only when needed during execution.
                         error="Cancelled by user",
                         token_usage_records=collector.snapshot_records(),
                     )
-                    event_bus.emit(
+                    self._emit(
                         "subagent:lifecycle",
                         {"event": "cancelled", "task_id": task_id, "thread_id": self.thread_id or ""},
                     )
@@ -2105,7 +2136,7 @@ the same skill directory only when needed during execution.
                                 # message, exactly as before.
                                 if index != last_index:
                                     continue
-                                event_bus.emit(
+                                self._emit(
                                     "subagent:progress",
                                     {
                                         "task_id": task_id,
@@ -2132,7 +2163,7 @@ the same skill directory only when needed during execution.
                                     SubagentStatus.FAILED,
                                     error="request budget exceeded",
                                 )
-                                event_bus.emit(
+                                self._emit(
                                     "subagent:lifecycle",
                                     {
                                         "event": "failed",
@@ -2152,7 +2183,7 @@ the same skill directory only when needed during execution.
                     error="Cancelled by user",
                     token_usage_records=collector.snapshot_records(),
                 )
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {"event": "cancelled", "task_id": task_id, "thread_id": self.thread_id or ""},
                 )
@@ -2168,7 +2199,7 @@ the same skill directory only when needed during execution.
                 from deerflow.subagents.agent_registry import agent_registry
 
                 agent_registry.update_status(task_id, SubagentStatus.INTERRUPTED)
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {
                         "event": "interrupted",
@@ -2197,7 +2228,7 @@ the same skill directory only when needed during execution.
                         SubagentStatus.IDLE,
                         idle_since=result.idle_since,
                     )
-                    event_bus.emit(
+                    self._emit(
                         "subagent:lifecycle",
                         {
                             "event": "idle",
@@ -2217,7 +2248,7 @@ the same skill directory only when needed during execution.
                     result=final_result,
                     token_usage_records=token_usage_records,
                 )
-                event_bus.emit(
+                self._emit(
                     "subagent:lifecycle",
                     {
                         "event": "completed",
@@ -2237,7 +2268,7 @@ the same skill directory only when needed during execution.
             from deerflow.subagents.agent_registry import agent_registry
 
             agent_registry.update_status(task_id, SubagentStatus.FAILED)
-            event_bus.emit(
+            self._emit(
                 "subagent:lifecycle",
                 {
                     "event": "failed",
@@ -2292,6 +2323,10 @@ the same skill directory only when needed during execution.
 
 
 MAX_CONCURRENT_SUBAGENTS = 3
+
+# Maximum nesting depth: 1 = lead-spawned, 2 = one level of nesting
+# (a subagent's subagent). Deeper spawns are refused.
+MAX_SUBAGENT_DEPTH = 2
 
 
 def request_cancel_background_task(task_id: str) -> None:

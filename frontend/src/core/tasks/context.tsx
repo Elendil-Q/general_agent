@@ -11,7 +11,7 @@ import type { SubagentMirror } from "./mirror";
 import {
   findExpiredIdleTasks,
   findNextIdleExpiry,
-  mapMirrorStatusToSubtask,
+  mirrorEntryToSubtaskUpdate,
   shouldApplyMirrorUpdate,
 } from "./mirror";
 import { shouldKeepPreviousSubtaskStatus } from "./subtask-result";
@@ -172,15 +172,7 @@ export function useSubagentMirrorSync(
       if (!shouldApplyMirrorUpdate(tasks[taskId], entry)) {
         continue;
       }
-      updateSubtask({
-        id: taskId,
-        subagent_type: entry.subagent_type,
-        status: mapMirrorStatusToSubtask(entry.status),
-        mirrorUpdatedAt: entry.updated_at,
-        ...(entry.idle_expires_at != null
-          ? { idleExpiresAt: entry.idle_expires_at * 1000 }
-          : {}),
-      });
+      updateSubtask(mirrorEntryToSubtaskUpdate(taskId, entry));
     }
   }, [mirror, tasks, updateSubtask]);
 }

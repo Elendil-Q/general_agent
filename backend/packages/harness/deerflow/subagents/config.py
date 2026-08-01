@@ -69,6 +69,12 @@ class SubagentConfig:
     injected next round; at 1.5x the subagent is force-terminated. ``None``
     disables the budget path (today's behavior). Coexists with ``max_turns``;
     whichever triggers first wins."""
+    allow_subagents: bool = False
+    """When True, this subagent may itself spawn nested subagents via the
+    ``task`` tool (the default ``disallowed_tools=["task"]`` denial is lifted,
+    subject to the global ``MAX_SUBAGENT_DEPTH`` limit). Nested tasks carry
+    ``parent_task_id``/``depth`` lineage and are hidden from the frontend
+    activity panel."""
     output: "dict | None" = None
     """Optional JSON Schema constraining the terminal ``yield`` payload. When
     set, the yield tool's terminal payload is validated; on mismatch the

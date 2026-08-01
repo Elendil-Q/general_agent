@@ -39,7 +39,9 @@ async def wait_for_tasks(
 
     thread_id = runtime.context.get("thread_id") if runtime.context else None
     writer = get_stream_writer()
-    if thread_id:
+    # A nested run (inside a subagent) must not overwrite the lead run's
+    # writer in the bridge; nested events route through the lead's writer.
+    if thread_id and not (runtime.context or {}).get("is_subagent"):
         sse_bridge.register_writer(thread_id, writer)
 
     try:

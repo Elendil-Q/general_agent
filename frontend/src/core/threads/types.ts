@@ -21,6 +21,8 @@ export interface SubagentMirrorEntry {
     | "cancelled";
   idle_expires_at?: number | null;
   updated_at: number;
+  /** Set for nested subagents (depth 2); null/absent for lead tasks. */
+  parent_task_id?: string | null;
 }
 
 export interface AgentThreadState extends Record<string, unknown> {

@@ -58,7 +58,13 @@ class SubagentLifecycleManager:
         thread_id = ref.thread_id if ref is not None else ""
         event_bus.emit(
             "subagent:lifecycle",
-            {"event": "expired", "task_id": task_id, "thread_id": thread_id},
+            {
+                "event": "expired",
+                "task_id": task_id,
+                "thread_id": thread_id,
+                "parent_task_id": ref.parent_task_id if ref is not None else None,
+                "depth": ref.depth if ref is not None else 1,
+            },
         )
         self._do_cleanup(task_id)
 

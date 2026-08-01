@@ -380,6 +380,8 @@ export const zhCN: Translations = {
     interrupted: "已中断，等待输入",
     expired: "子任务已过期",
     background: "后台运行中",
+    delegating: (subagentType: string, description: string) =>
+      `正在委派子任务 [${subagentType}] ${description}`,
   },
 
   waitForTasks: {

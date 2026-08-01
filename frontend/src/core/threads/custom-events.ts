@@ -20,6 +20,20 @@ export function handleCustomEvent(
     return false;
   }
 
+  // Nested subagent events (depth 2) carry parent_task_id. They are an
+  // internal detail of the parent subagent: swallow them here so they never
+  // create partial entries in the subtask store (the activity panel only
+  // shows lead tasks; progress surfaces via the parent's latestMessage).
+  const parentTaskId = (event as { parent_task_id?: unknown }).parent_task_id;
+  if (
+    typeof parentTaskId === "string" &&
+    parentTaskId.length > 0 &&
+    typeof event.type === "string" &&
+    event.type.startsWith("task_")
+  ) {
+    return true;
+  }
+
   if (event.type === "task_running") {
     const e = event as {
       type: "task_running";

@@ -126,6 +126,8 @@ def parse_subagent_file(subagent_file: Path) -> SubagentConfig | None:
         max_turns=data.get("max_turns", 50),
         timeout_seconds=data.get("timeout_seconds", 900),
         workflow=data.get("workflow"),
+        keep_alive=data.get("keep_alive", False),
+        allow_subagents=data.get("allow_subagents", False),
     )
 
 
