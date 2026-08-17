@@ -311,7 +311,7 @@ def test_list_thread_messages_injects_turn_duration():
         response = client.get("/api/threads/thread-1/messages")
 
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
 
     assert "turn_duration" not in data[0].get("content", {}).get("additional_kwargs", {})
     assert data[1]["content"]["additional_kwargs"]["turn_duration"] == 5

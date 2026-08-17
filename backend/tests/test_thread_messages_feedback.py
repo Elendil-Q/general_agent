@@ -58,7 +58,7 @@ def test_feedback_attached_to_last_ai_message_per_run():
 
     resp = TestClient(app).get("/api/threads/t1/messages")
     assert resp.status_code == 200
-    data = resp.json()
+    data = resp.json()["data"]
 
     by_seq = {m["seq"]: m for m in data}
     # The bug: this used to be None for every message.
@@ -77,6 +77,37 @@ def test_no_feedback_query_when_thread_has_no_ai_message():
 
     resp = TestClient(app).get("/api/threads/t1/messages")
     assert resp.status_code == 200
-    assert resp.json()[0]["feedback"] is None
+    assert resp.json()["data"][0]["feedback"] is None
     # No AI message -> the grouped feedback query must not run.
     feedback_repo.list_by_thread_grouped.assert_not_awaited()
+
+
+def test_thread_messages_pagination_shape_and_cursor():
+    # Store returns limit+1 rows -> has_more True, page trimmed to latest `limit` rows.
+    rows = [_human("r1", s) for s in range(1, 4)]  # seqs 1,2,3; limit=2
+    app, _ = _make_app(rows, {})
+
+    resp = TestClient(app).get("/api/threads/t1/messages?limit=2&before_seq=100")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["has_more"] is True
+    assert [m["seq"] for m in body["data"]] == [2, 3]
+
+
+def test_thread_messages_pagination_after_seq_takes_head():
+    rows = [_human("r1", s) for s in range(1, 4)]
+    app, _ = _make_app(rows, {})
+
+    resp = TestClient(app).get("/api/threads/t1/messages?limit=2&after_seq=0")
+    body = resp.json()
+    assert body["has_more"] is True
+    assert [m["seq"] for m in body["data"]] == [1, 2]
+
+
+def test_thread_messages_preserve_global_seq_order_across_runs():
+    # Interleaved runs: endpoint must not regroup by run — store order (global seq) is authoritative.
+    messages = [_human("r1", 1), _ai("r1", 2, "a1"), _human("r2", 3), _ai("r2", 4, "a2")]
+    app, _ = _make_app(messages, {})
+
+    resp = TestClient(app).get("/api/threads/t1/messages")
+    assert [m["seq"] for m in resp.json()["data"]] == [1, 2, 3, 4]

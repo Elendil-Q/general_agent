@@ -694,13 +694,17 @@ async def stream_existing_run(
 async def list_thread_messages(
     thread_id: str,
     request: Request,
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, le=200, ge=1),
     before_seq: int | None = Query(default=None),
     after_seq: int | None = Query(default=None),
-) -> list[dict]:
-    """Return displayable messages for a thread (across all runs), with feedback attached."""
+) -> dict:
+    """Return paginated displayable messages for a thread (across all runs), with feedback attached.
+
+    Response: { data: [...], has_more: bool }
+    """
     event_store = get_run_event_store(request)
-    messages = await event_store.list_messages(thread_id, limit=limit, before_seq=before_seq, after_seq=after_seq)
+    rows = await event_store.list_messages(thread_id, limit=limit + 1, before_seq=before_seq, after_seq=after_seq)
+    messages, has_more = trim_run_message_page(rows, limit=limit, after_seq=after_seq)
 
     # Resolve the caller once; it is needed both to scope the feedback query
     # below and to list the thread's runs for turn-duration injection.
@@ -753,7 +757,7 @@ async def list_thread_messages(
                         content["additional_kwargs"] = {}
                     content["additional_kwargs"]["turn_duration"] = run_durations[rid]
 
-    return messages
+    return {"data": messages, "has_more": has_more}
 
 
 @router.get("/{thread_id}/runs/{run_id}/messages")
