@@ -23,6 +23,12 @@ export interface AgentThread extends Thread<AgentThreadState> {
   context?: AgentThreadContext;
 }
 
+export interface RunMessageFeedback {
+  feedback_id: string;
+  rating: string;
+  comment: string | null;
+}
+
 export interface RunMessage {
   run_id: string;
   seq?: number;
@@ -32,6 +38,7 @@ export interface RunMessage {
     [key: string]: unknown;
   };
   created_at: string;
+  feedback?: RunMessageFeedback | null;
 }
 
 export interface ThreadTokenUsageResponse {

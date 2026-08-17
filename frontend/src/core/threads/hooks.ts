@@ -165,24 +165,6 @@ function dedupeMessagesByIdentity(messages: Message[]): Message[] {
     });
 }
 
-function dedupeRunMessagesByIdentity(messages: RunMessage[]): RunMessage[] {
-  const lastIndexByIdentity = new Map<string, number>();
-  messages.forEach((message, index) => {
-    const identity = messageIdentity(message.content);
-    if (identity) {
-      lastIndexByIdentity.set(`${message.run_id}:${identity}`, index);
-    }
-  });
-
-  return messages.filter((message, index) => {
-    const identity = messageIdentity(message.content);
-    if (!identity) {
-      return true;
-    }
-    return lastIndexByIdentity.get(`${message.run_id}:${identity}`) === index;
-  });
-}
-
 export function getSupersededRunIds(
   runs: Run[] | undefined,
   pendingSupersededRunIds?: ReadonlySet<string>,
@@ -217,50 +199,16 @@ export function removeSetItems<T>(
 export function buildVisibleHistoryMessages(
   messageRows: RunMessage[],
   supersededRunIds: ReadonlySet<string>,
-  appendedMessages: Message[],
 ) {
   const visibleRows = messageRows.filter(
     (message) => !supersededRunIds.has(message.run_id),
   );
-  return dedupeMessagesByIdentity([
-    ...visibleRows.map((message) => message.content),
-    ...appendedMessages,
-  ]);
-}
-
-export function findLatestUnloadedRunIndex(
-  runs: Run[],
-  loadedRunIds: ReadonlySet<string>,
-): number {
-  for (let i = 0; i < runs.length; i++) {
-    const run = runs[i];
-    if (run && !loadedRunIds.has(run.run_id)) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-export const MAX_CONSECUTIVE_EMPTY_RUN_LOADS = 5;
-
-export function shouldAutoContinueOnEmptyRun(
-  fetchedMessageCount: number,
-  consecutiveEmptyLoads: number,
-  maxConsecutiveEmptyLoads: number = MAX_CONSECUTIVE_EMPTY_RUN_LOADS,
-): boolean {
-  return (
-    fetchedMessageCount === 0 &&
-    consecutiveEmptyLoads < maxConsecutiveEmptyLoads
+  return dedupeMessagesByIdentity(
+    visibleRows.map((message) => message.content),
   );
 }
 
-type RunMessagesPageResponse = {
-  data: RunMessage[];
-  has_more?: boolean;
-  hasMore?: boolean;
-};
-
-export function runMessagesPageHasMore(result: RunMessagesPageResponse) {
+export function runMessagesPageHasMore(result: ThreadMessagesPage) {
   return result.has_more ?? result.hasMore ?? false;
 }
 
@@ -276,31 +224,43 @@ export function getOldestRunMessageSeq(messages: RunMessage[]) {
   return oldestSeq;
 }
 
-export function getNextRunMessagesBeforeSeq(
-  result: RunMessagesPageResponse,
-): number | null | undefined {
-  if (!runMessagesPageHasMore(result)) {
-    return null;
-  }
-  return getOldestRunMessageSeq(result.data) ?? undefined;
+export const THREAD_MESSAGES_PAGE_SIZE = 100;
+
+export function threadMessagesQueryKey(threadId: string) {
+  return ["thread", threadId, "messages"] as const;
 }
 
-export function buildRunMessagesUrl(
+export type ThreadMessagesPage = {
+  data: RunMessage[];
+  has_more?: boolean;
+  hasMore?: boolean;
+};
+
+export function buildThreadMessagesUrl(
   baseUrl: string,
   threadId: string,
-  runId: string,
   beforeSeq?: number,
 ) {
   const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
-  const path = `/api/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/messages`;
+  const path = `/api/threads/${encodeURIComponent(threadId)}/messages`;
   const url = new URL(
     `${normalizedBaseUrl}${path}`,
     typeof window !== "undefined" ? window.location.origin : "http://localhost",
   );
+  url.searchParams.set("limit", String(THREAD_MESSAGES_PAGE_SIZE));
   if (beforeSeq !== undefined) {
     url.searchParams.set("before_seq", String(beforeSeq));
   }
   return normalizedBaseUrl ? url.toString() : `${url.pathname}${url.search}`;
+}
+
+export function getThreadMessagesPreviousPageParam(
+  firstPage: ThreadMessagesPage,
+): number | undefined {
+  if (!runMessagesPageHasMore(firstPage)) {
+    return undefined;
+  }
+  return getOldestRunMessageSeq(firstPage.data) ?? undefined;
 }
 
 export function mergeMessages(
@@ -370,107 +330,6 @@ export function mergeMessages(
       } as Message;
     }
     return message;
-  });
-}
-
-/**
- * Derive the live turns that context summarization is about to drop and that
- * therefore must be re-archived into history.
- *
- * Summarization emits `RemoveMessage(ALL)` + a hidden summary + the retained
- * tail. Everything in the current live thread before the first retained visible
- * message is being removed; we keep those (minus the summary control messages
- * already tracked) so the UI can still show the full conversation (#3825).
- */
-export function computeSummarizationMovedMessages(
-  currentMessages: Message[],
-  summarizationMessages: Message[],
-  summarizedMessageIds: ReadonlySet<string>,
-): Message[] {
-  const firstRetainedVisibleIdentity = summarizationMessages
-    .filter((message) => message.type !== "remove")
-    .filter((message) => !isHiddenFromUIMessage(message))
-    .map(messageIdentity)
-    .find(isNonEmptyString);
-
-  const moved: Message[] = [];
-  for (const message of currentMessages) {
-    if (
-      firstRetainedVisibleIdentity &&
-      messageIdentity(message) === firstRetainedVisibleIdentity
-    ) {
-      break;
-    }
-    if (!summarizedMessageIds.has(message.id ?? "")) {
-      moved.push(message);
-    }
-  }
-  return moved;
-}
-
-/**
- * Overlay the messages rescued from context summarization on top of the
- * (possibly stale) visible history so the merged view never drops them.
- *
- * Background (#3825): after summarization the backend removes every live
- * message (`RemoveMessage(ALL)`) and `onUpdateEvent` re-archives the removed
- * messages into history through an async `setState`. The live thread messages
- * are owned by the LangGraph SDK external store while the archived history is
- * React state, so a render can observe the post-summary (shrunk) thread before
- * the archive `setState` commits — leaving the rescued messages in neither
- * merge input. Reading them from a synchronous buffer here keeps the merge
- * correct at every render regardless of how the two state channels interleave.
- *
- * The rescued messages are the oldest live turns, so they follow whatever the
- * already-loaded history holds. Only messages still missing from history are
- * appended: once history absorbs a rescued message, its live copy stays
- * authoritative (the buffered copy is an older snapshot and must never overwrite
- * it), and ordering is preserved.
- */
-export function resolvePreservedHistory(
-  visibleHistory: Message[],
-  pendingArchivedMessages: Message[],
-): Message[] {
-  if (pendingArchivedMessages.length === 0) {
-    return visibleHistory;
-  }
-  const presentIdentities = new Set(
-    visibleHistory.map(messageIdentity).filter(isNonEmptyString),
-  );
-  const missing = pendingArchivedMessages.filter((message) => {
-    const identity = messageIdentity(message);
-    // Identity-less messages are intentionally skipped: without a stable
-    // identity they cannot be matched against history to drain or dedupe, so
-    // overlaying them would risk a permanent duplicate. They are still archived
-    // through appendMessages and surface via the normal history path instead.
-    return identity !== undefined && !presentIdentities.has(identity);
-  });
-  if (missing.length === 0) {
-    return visibleHistory;
-  }
-  return [...visibleHistory, ...missing];
-}
-
-/**
- * Drop the archive-buffer entries that the canonical history state has already
- * absorbed. This keeps the buffer a transient bridge across the async gap
- * rather than a second long-lived source of truth — otherwise a stale copy
- * could resurrect a message that history later filtered out (e.g. a superseded
- * or regenerated run).
- */
-export function pruneConfirmedArchivedMessages(
-  pendingArchivedMessages: Message[],
-  visibleHistory: Message[],
-): Message[] {
-  if (pendingArchivedMessages.length === 0) {
-    return pendingArchivedMessages;
-  }
-  const confirmedIdentities = new Set(
-    visibleHistory.map(messageIdentity).filter(isNonEmptyString),
-  );
-  return pendingArchivedMessages.filter((message) => {
-    const identity = messageIdentity(message);
-    return !identity || !confirmedIdentities.has(identity);
   });
 }
 
@@ -731,7 +590,6 @@ export function useThreadStream({
     hasMore: hasMoreHistory,
     loadMore: loadMoreHistory,
     loading: isHistoryLoading,
-    appendMessages,
   } = useThreadHistory(onStreamThreadId ?? "", {
     enabled: !isMock,
     pendingSupersededRunIds,
@@ -876,26 +734,16 @@ export function useThreadStream({
     onUpdateEvent(data) {
       const _messages = getSummarizationMiddlewareMessages(data);
       if (_messages && _messages.length >= 2) {
-        for (const m of _messages) {
-          if (m.name === "summary" && m.type === "human") {
-            summarizedRef.current?.add(m.id ?? "");
-          }
-        }
-        const _movedMessages = computeSummarizationMovedMessages(
-          messagesRef.current,
-          _messages,
-          summarizedRef.current ?? new Set<string>(),
-        );
-        // Buffer the rescued messages synchronously so the merge can keep
-        // displaying them immediately, even though appendMessages below only
-        // updates the archived-history state asynchronously (#3825).
-        pendingArchivedMessagesRef.current = dedupeMessagesByIdentity([
-          ...pendingArchivedMessagesRef.current,
-          ..._movedMessages,
-        ]);
-        pendingArchiveThreadIdRef.current = threadIdRef.current;
-        appendMessages(_movedMessages);
+        // Summarization rewrote the live list (RemoveMessage(ALL) + summary +
+        // retained tail). The removed turns remain in the server-side event
+        // store, so refetch the server-ordered history instead of rescuing
+        // them into React state (supersedes the #3825 archive buffer).
         messagesRef.current = [];
+        if (threadIdRef.current && !isMock) {
+          void queryClient.invalidateQueries({
+            queryKey: threadMessagesQueryKey(threadIdRef.current),
+          });
+        }
       }
 
       const updates: Array<Partial<AgentThreadState> | null> = Object.values(
@@ -1062,6 +910,9 @@ export function useThreadStream({
           queryKey: ["thread", threadIdRef.current],
         });
         void queryClient.invalidateQueries({
+          queryKey: threadMessagesQueryKey(threadIdRef.current),
+        });
+        void queryClient.invalidateQueries({
           queryKey: threadTokenUsageQueryKey(threadIdRef.current),
         });
         void queryClient.invalidateQueries({
@@ -1093,18 +944,6 @@ export function useThreadStream({
   const latestMessageCountsRef = useRef({ humanMessageCount });
   const sendInFlightRef = useRef(false);
   const messagesRef = useRef<Message[]>([]);
-  // Synchronous bridge for messages rescued from context summarization. The
-  // archived-history `setState` (via appendMessages) lands on a different
-  // schedule than the live thread external store, so the merge reads this buffer
-  // to avoid dropping rescued messages in the render window before history
-  // catches up (#3825).
-  const pendingArchivedMessagesRef = useRef<Message[]>([]);
-  // The thread the rescue buffer belongs to, captured when onUpdateEvent fills
-  // it. The merge only overlays the buffer when this matches the viewed
-  // `threadId`, so a previous thread's rescued messages can never flash into
-  // another thread or the new-chat screen (#3825).
-  const pendingArchiveThreadIdRef = useRef<string | null>(null);
-  const summarizedRef = useRef<Set<string>>(null);
   // Track human message count before sending to prevent clearing optimistic
   // messages before the server's human message arrives (e.g. when AI messages
   // from "messages-tuple" events arrive before the input human message from
@@ -1112,7 +951,6 @@ export function useThreadStream({
   const prevHumanMsgCountRef = useRef(humanMessageCount);
 
   latestMessageCountsRef.current = { humanMessageCount };
-  summarizedRef.current ??= new Set<string>();
 
   // Reset thread-local pending UI state when switching between threads so
   // optimistic messages and in-flight guards do not leak across chat views.
@@ -1120,25 +958,12 @@ export function useThreadStream({
     startedRef.current = false;
     sendInFlightRef.current = false;
     messagesRef.current = [];
-    pendingArchivedMessagesRef.current = [];
-    pendingArchiveThreadIdRef.current = null;
-    summarizedRef.current = new Set<string>();
     pendingUsageBaselineMessageIdsRef.current = new Set();
     setPendingSupersededRunIds(new Set());
     setPendingSupersededMessageIds(new Set());
     prevHumanMsgCountRef.current =
       latestMessageCountsRef.current.humanMessageCount;
   }, [threadId]);
-
-  // Release archive-buffer entries once the canonical history state has absorbed
-  // them, so the synchronous bridge stays transient and never resurrects a
-  // message that history later filters out (e.g. a superseded run) (#3825).
-  useEffect(() => {
-    pendingArchivedMessagesRef.current = pruneConfirmedArchivedMessages(
-      pendingArchivedMessagesRef.current,
-      visibleHistory,
-    );
-  }, [visibleHistory]);
 
   useEffect(() => {
     if (optimisticThreadId && optimisticThreadId !== currentViewThreadId) {
@@ -1539,18 +1364,8 @@ export function useThreadStream({
     humanMessageCount,
   );
 
-  // Overlay the summarization rescue buffer only onto the history of the thread
-  // it was captured from. visibleHistory is gated on `threadId`, so comparing the
-  // same prop keeps the buffer from flashing into another thread or the new-chat
-  // screen, and reading it here (instead of clearing a ref during render) is
-  // concurrent-mode safe (#3825).
-  const rescueBuffer = pendingArchivedMessagesRef.current;
-  const effectiveHistory =
-    rescueBuffer.length > 0 && pendingArchiveThreadIdRef.current === threadId
-      ? resolvePreservedHistory(visibleHistory, rescueBuffer)
-      : visibleHistory;
   const mergedMessages = mergeMessages(
-    effectiveHistory,
+    visibleHistory,
     persistedMessages,
     visibleOptimisticMessages,
   );
@@ -1726,197 +1541,75 @@ export function useThreadHistory(
   { enabled = true, pendingSupersededRunIds }: ThreadHistoryOptions = {},
 ) {
   const runs = useThreadRuns(threadId, { enabled });
-  const threadIdRef = useRef(threadId);
-  const runsRef = useRef(runs.data ?? []);
-  const indexRef = useRef(-1);
-  const loadingRef = useRef(false);
-  const pendingLoadRef = useRef(false);
-  const loadingRunIdRef = useRef<string | null>(null);
-  const loadedRunIdsRef = useRef<Set<string>>(new Set());
-  const runBeforeSeqRef = useRef<Map<string, number>>(new Map());
-  const loadGenerationRef = useRef(0);
-  const [loading, setLoading] = useState(false);
-  const [messageRows, setMessageRows] = useState<RunMessage[]>([]);
-  const [appendedMessages, setAppendedMessages] = useState<Message[]>([]);
+  const query = useInfiniteQuery({
+    queryKey: threadMessagesQueryKey(threadId),
+    queryFn: async ({ pageParam }) => {
+      const url = buildThreadMessagesUrl(
+        getBackendBaseURL(),
+        threadId,
+        pageParam,
+      );
+      const result: ThreadMessagesPage = await fetch(url, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      }).then((res) => {
+        if (!res.ok) {
+          throw new Error(`Failed to load thread messages: ${res.status}`);
+        }
+        return res.json();
+      });
+      return result;
+    },
+    initialPageParam: undefined as number | undefined,
+    getPreviousPageParam: getThreadMessagesPreviousPageParam,
+    // History only paginates backwards (older pages); there is never a newer
+    // page to fetch, but TanStack Query requires the option.
+    getNextPageParam: () => undefined,
+    enabled: enabled && Boolean(threadId),
+    refetchOnWindowFocus: false,
+  });
 
   const supersededRunIds = useMemo(() => {
     return getSupersededRunIds(runs.data, pendingSupersededRunIds);
   }, [pendingSupersededRunIds, runs.data]);
 
   const messages = useMemo(() => {
-    return buildVisibleHistoryMessages(
-      messageRows,
-      supersededRunIds,
-      appendedMessages,
+    const rows = (query.data?.pages ?? []).flatMap((page) =>
+      page.data.filter((m) => !m.metadata?.caller?.startsWith("middleware:")),
     );
-  }, [appendedMessages, messageRows, supersededRunIds]);
+    return buildVisibleHistoryMessages(rows, supersededRunIds);
+  }, [query.data, supersededRunIds]);
 
-  const loadMessages = useCallback(async () => {
-    if (!enabled) {
-      return;
-    }
-    const loadGeneration = loadGenerationRef.current;
-    if (loadingRef.current) {
-      const pendingRunIndex = findLatestUnloadedRunIndex(
-        runsRef.current,
-        loadedRunIdsRef.current,
-      );
-      const pendingRun = runsRef.current[pendingRunIndex];
-      if (pendingRun && pendingRun.run_id !== loadingRunIdRef.current) {
-        pendingLoadRef.current = true;
-      }
-      return;
-    }
-    if (runsRef.current.length === 0) {
-      return;
-    }
-
-    loadingRef.current = true;
-    setLoading(true);
-
-    try {
-      let consecutiveEmptyLoads = 0;
-      do {
-        pendingLoadRef.current = false;
-
-        const nextRunIndex = findLatestUnloadedRunIndex(
-          runsRef.current,
-          loadedRunIdsRef.current,
-        );
-        indexRef.current = nextRunIndex;
-
-        const run = runsRef.current[nextRunIndex];
-        if (!run) {
-          indexRef.current = -1;
-          return;
-        }
-
-        const requestThreadId = threadIdRef.current;
-        loadingRunIdRef.current = run.run_id;
-        const beforeSeq = runBeforeSeqRef.current.get(run.run_id);
-        const url = buildRunMessagesUrl(
-          getBackendBaseURL(),
-          requestThreadId,
-          run.run_id,
-          beforeSeq,
-        );
-        const result: RunMessagesPageResponse = await fetch(url, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-        }).then((res) => {
-          return res.json();
-        });
-        if (
-          loadGenerationRef.current !== loadGeneration ||
-          threadIdRef.current !== requestThreadId
-        ) {
-          return;
-        }
-        const _messages = result.data.filter(
-          (m) => !m.metadata.caller?.startsWith("middleware:"),
-        );
-        setMessageRows((prev) =>
-          dedupeRunMessagesByIdentity([..._messages, ...prev]),
-        );
-        const nextBeforeSeq = getNextRunMessagesBeforeSeq(result);
-        if (typeof nextBeforeSeq === "number") {
-          runBeforeSeqRef.current.set(run.run_id, nextBeforeSeq);
-          pendingLoadRef.current = true;
-        } else if (nextBeforeSeq === undefined) {
-          console.warn(
-            `Run ${run.run_id} returned has_more without message seq values; leaving it pending for retry.`,
-          );
-        } else {
-          runBeforeSeqRef.current.delete(run.run_id);
-          loadedRunIdsRef.current.add(run.run_id);
-          if (
-            shouldAutoContinueOnEmptyRun(
-              _messages.length,
-              consecutiveEmptyLoads,
-            )
-          ) {
-            consecutiveEmptyLoads += 1;
-            pendingLoadRef.current = true;
-          } else {
-            consecutiveEmptyLoads = 0;
-          }
-        }
-        indexRef.current = findLatestUnloadedRunIndex(
-          runsRef.current,
-          loadedRunIdsRef.current,
-        );
-      } while (pendingLoadRef.current);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      if (loadGenerationRef.current === loadGeneration) {
-        loadingRef.current = false;
-        loadingRunIdRef.current = null;
-        setLoading(false);
-      }
-    }
-  }, [enabled]);
+  // Surface load failures to the user (the per-run loader used to toast on
+  // failure). `isError` is stable across re-renders, so the effect only fires
+  // when the error state actually transitions.
   useEffect(() => {
-    const threadChanged = threadIdRef.current !== threadId;
-    threadIdRef.current = threadId;
-
-    if (!enabled || threadChanged) {
-      loadGenerationRef.current += 1;
-      runsRef.current = [];
-      indexRef.current = -1;
-      pendingLoadRef.current = false;
-      loadingRunIdRef.current = null;
-      loadedRunIdsRef.current = new Set();
-      runBeforeSeqRef.current = new Map();
-      loadingRef.current = false;
-      setLoading(false);
-      setMessageRows([]);
-      setAppendedMessages([]);
-    }
-
-    if (!enabled) {
-      return;
-    }
-
-    if (runs.data && runs.data.length > 0) {
-      runsRef.current = runs.data ?? [];
-      indexRef.current = findLatestUnloadedRunIndex(
-        runs.data,
-        loadedRunIdsRef.current,
-      );
-    }
-    loadMessages().catch(() => {
+    if (query.isError) {
       toast.error("Failed to load thread history.");
-    });
-  }, [enabled, threadId, runs.data, loadMessages]);
+    }
+  }, [query.isError]);
 
-  const appendMessages = useCallback((_messages: Message[]) => {
-    setAppendedMessages((prev) => {
-      return dedupeMessagesByIdentity([...prev, ..._messages]);
-    });
-  }, []);
   const hasThreadId = Boolean(threadId);
-  const hasUnloadedRuns = Boolean(
-    runs.data?.some((run) => !loadedRunIdsRef.current.has(run.run_id)),
-  );
   const isRunsLoading =
     enabled &&
     hasThreadId &&
     (runs.isLoading || (runs.isFetching && !runs.data));
   const isRunsUnresolved =
     enabled && hasThreadId && !runs.data && !runs.isError;
-  const hasMore =
-    enabled && hasThreadId && (indexRef.current >= 0 || hasUnloadedRuns);
+
   return {
     runs: runs.data,
     messages,
-    loading: loading || isRunsLoading || isRunsUnresolved,
-    appendMessages,
-    hasMore,
-    loadMore: loadMessages,
+    loading:
+      query.isLoading ||
+      query.isFetchingPreviousPage ||
+      isRunsLoading ||
+      isRunsUnresolved,
+    hasMore: enabled && hasThreadId && Boolean(query.hasPreviousPage),
+    loadMore: () => {
+      void query.fetchPreviousPage();
+    },
   };
 }
 

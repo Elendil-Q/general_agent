@@ -66,7 +66,8 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 1. User input → thread hooks (`core/threads/hooks.ts`) → LangGraph SDK streaming
 2. Stream events update thread state (messages, artifacts, todos)
 3. TanStack Query manages server state; localStorage stores user settings
-4. Components subscribe to thread state and render updates
+4. Thread history messages load server-ordered by global seq via `useThreadHistory` (TanStack `useInfiniteQuery` on `GET /api/threads/{id}/messages`, page size 100, `before_seq` cursor paging backwards); after compression the query is invalidated and refetched — there is no local archive/rescue of summarized messages
+5. Components subscribe to thread state and render updates
 
 ### Key Patterns
 
