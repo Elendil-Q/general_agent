@@ -119,7 +119,7 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
       id={`${resizableIdBase}-panels`}
       orientation="horizontal"
       defaultLayout={{ "file-browser": 0, chat: 100, artifacts: 0 }}
-      resizeTargetMinimumSize={{ coarse: 0, fine: 0 }}
+      resizeTargetMinimumSize={{ coarse: 16, fine: 12 }}
       groupRef={layoutRef}
     >
       {/* ── File Browser Panel (left) ── */}
@@ -130,6 +130,8 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
         )}
         defaultSize={0}
         id="file-browser"
+        maxSize={40}
+        minSize={12}
       >
         <div
           className={cn(
@@ -146,7 +148,6 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
 
       <ResizableHandle
         id={`${resizableIdBase}-file-browser-separator`}
-        disabled
         className={cn(!fileBrowserOpen && "pointer-events-none opacity-0")}
       />
 
