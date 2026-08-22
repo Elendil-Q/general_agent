@@ -64,7 +64,16 @@ class _FakeBridge:
 def _clear_tracing_env(monkeypatch):
     from deerflow.config.tracing_config import reset_tracing_config
 
-    for name in ("LANGFUSE_TRACING", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"):
+    for name in (
+        "LANGFUSE_TRACING",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
+        "PHOENIX_TRACING",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+        "PHOENIX_PROJECT_NAME",
+        "PHOENIX_HEADERS",
+    ):
         monkeypatch.delenv(name, raising=False)
     reset_tracing_config()
     yield
@@ -246,3 +255,46 @@ async def test_run_agent_skips_metadata_when_langfuse_disabled(monkeypatch):
     assert "langfuse_session_id" not in metadata
     assert "langfuse_user_id" not in metadata
     assert "langfuse_trace_name" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_run_agent_injects_phoenix_metadata_when_enabled(monkeypatch):
+    monkeypatch.setenv("PHOENIX_TRACING", "true")
+    from deerflow.config.tracing_config import reset_tracing_config
+
+    reset_tracing_config()
+
+    fake_agent = _FakeAgent()
+
+    def agent_factory(config):
+        return fake_agent
+
+    record = RunRecord(
+        run_id="run-phoenix",
+        thread_id="thread-phx",
+        assistant_id="lead-agent",
+        status=RunStatus.pending,
+        on_disconnect=DisconnectMode.cancel,
+        model_name="gpt-4o",
+    )
+    record.abort_event = asyncio.Event()
+    ctx = RunContext(checkpointer=None)
+
+    await run_agent(
+        _FakeBridge(),
+        _FakeRunManager(),
+        record,
+        ctx=ctx,
+        agent_factory=agent_factory,
+        graph_input={"messages": []},
+        config={"configurable": {"thread_id": "thread-phx"}},
+    )
+
+    metadata = fake_agent.captured_config.get("metadata") or {}
+    # The OpenInference tracer lifts these keys onto the root span's
+    # ``session.id`` attribute so Phoenix groups multi-turn traces.
+    assert metadata.get("session_id") == "thread-phx"
+    assert metadata.get("thread_id") == "thread-phx"
+    # Langfuse keys must NOT leak in when only Phoenix is enabled.
+    assert "langfuse_session_id" not in metadata
+    assert "langfuse_user_id" not in metadata

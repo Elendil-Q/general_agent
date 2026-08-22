@@ -21,6 +21,10 @@ def _clear_tracing_env(monkeypatch):
         "LANGCHAIN_TRACING",
         "LANGSMITH_API_KEY",
         "LANGCHAIN_API_KEY",
+        "PHOENIX_TRACING",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+        "PHOENIX_PROJECT_NAME",
+        "PHOENIX_HEADERS",
     ):
         monkeypatch.delenv(name, raising=False)
     reset_tracing_config()

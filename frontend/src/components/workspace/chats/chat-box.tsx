@@ -130,8 +130,8 @@ const ChatBox: React.FC<{ children: React.ReactNode; threadId: string }> = ({
         )}
         defaultSize={0}
         id="file-browser"
-        maxSize={40}
-        minSize={12}
+        maxSize="40%"
+        minSize="12%"
       >
         <div
           className={cn(

@@ -7,6 +7,7 @@ from deerflow.config import (
     get_tracing_config,
     validate_enabled_tracing_providers,
 )
+from deerflow.tracing.phoenix import register_phoenix_tracing
 
 
 def _create_langsmith_tracer(config) -> Any:
@@ -50,5 +51,15 @@ def build_tracing_callbacks() -> list[Any]:
                 callbacks.append(_create_langfuse_handler(tracing_config.langfuse))
             except Exception as exc:  # pragma: no cover - exercised via tests with monkeypatch
                 raise RuntimeError(f"Langfuse tracing initialization failed: {exc}") from exc
+        elif provider == "phoenix":
+            # Phoenix is process-global OpenTelemetry instrumentation, not a
+            # callback handler: registering here (idempotently, lazily at the
+            # first graph-root invocation) covers every call site that flows
+            # through this function. No callback is appended, so Phoenix spans
+            # are produced once by the auto-instrumented tracer.
+            try:
+                register_phoenix_tracing()
+            except Exception as exc:  # pragma: no cover - exercised via tests with monkeypatch
+                raise RuntimeError(f"Phoenix tracing initialization failed: {exc}") from exc
 
     return callbacks

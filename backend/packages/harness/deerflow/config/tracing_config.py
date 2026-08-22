@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 
@@ -47,11 +48,33 @@ class LangfuseTracingConfig(BaseModel):
             raise ValueError(f"Langfuse tracing is enabled but required settings are missing: {', '.join(missing)}")
 
 
+class PhoenixTracingConfig(BaseModel):
+    """Configuration for Arize Phoenix tracing.
+
+    Phoenix uses process-global OpenTelemetry instrumentation (OTLP export to
+    a local or hosted Phoenix collector) rather than per-run callbacks.
+    """
+
+    enabled: bool = Field(...)
+    endpoint: str = Field(...)
+    project_name: str = Field(...)
+    headers: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def is_configured(self) -> bool:
+        return self.enabled and bool(self.endpoint)
+
+    def validate(self) -> None:
+        if self.enabled and not self.endpoint:
+            raise ValueError("Phoenix tracing is enabled but PHOENIX_COLLECTOR_ENDPOINT is not set.")
+
+
 class TracingConfig(BaseModel):
     """Tracing configuration for supported providers."""
 
     langsmith: LangSmithTracingConfig = Field(...)
     langfuse: LangfuseTracingConfig = Field(...)
+    phoenix: PhoenixTracingConfig = Field(...)
 
     @property
     def is_configured(self) -> bool:
@@ -64,6 +87,8 @@ class TracingConfig(BaseModel):
             enabled.append("langsmith")
         if self.langfuse.enabled:
             enabled.append("langfuse")
+        if self.phoenix.enabled:
+            enabled.append("phoenix")
         return enabled
 
     @property
@@ -73,11 +98,14 @@ class TracingConfig(BaseModel):
             enabled.append("langsmith")
         if self.langfuse.is_configured:
             enabled.append("langfuse")
+        if self.phoenix.is_configured:
+            enabled.append("phoenix")
         return enabled
 
     def validate_enabled(self) -> None:
         self.langsmith.validate()
         self.langfuse.validate()
+        self.phoenix.validate()
 
 
 _tracing_config: TracingConfig | None = None
@@ -104,6 +132,20 @@ def _first_env_value(*names: str) -> str | None:
     return None
 
 
+def _json_env_value(name: str) -> dict[str, str]:
+    """Parse a JSON object from an env var, returning ``{}`` when unset/invalid."""
+    value = os.environ.get(name)
+    if not value or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): str(val) for key, val in parsed.items()}
+
+
 def get_tracing_config() -> TracingConfig:
     """Get the current tracing configuration from environment variables."""
     global _tracing_config
@@ -124,6 +166,12 @@ def get_tracing_config() -> TracingConfig:
                 public_key=_first_env_value("LANGFUSE_PUBLIC_KEY"),
                 secret_key=_first_env_value("LANGFUSE_SECRET_KEY"),
                 host=_first_env_value("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com",
+            ),
+            phoenix=PhoenixTracingConfig(
+                enabled=_env_flag_preferred("PHOENIX_TRACING"),
+                endpoint=_first_env_value("PHOENIX_COLLECTOR_ENDPOINT") or "http://localhost:6006/v1/traces",
+                project_name=_first_env_value("PHOENIX_PROJECT_NAME") or "deer-flow",
+                headers=_json_env_value("PHOENIX_HEADERS"),
             ),
         )
         return _tracing_config

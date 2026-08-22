@@ -34,7 +34,16 @@ class _FakeAgent:
 def _clear_langfuse_env(monkeypatch):
     from deerflow.config.tracing_config import reset_tracing_config
 
-    for name in ("LANGFUSE_TRACING", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"):
+    for name in (
+        "LANGFUSE_TRACING",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
+        "PHOENIX_TRACING",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+        "PHOENIX_PROJECT_NAME",
+        "PHOENIX_HEADERS",
+    ):
         monkeypatch.delenv(name, raising=False)
     reset_tracing_config()
     yield
@@ -157,3 +166,41 @@ def test_stream_preserves_caller_metadata_overrides(monkeypatch):
     assert metadata["langfuse_user_id"] == "explicit-user"
     # ``trace_name`` was not supplied by caller so the worker still fills it.
     assert metadata["langfuse_trace_name"] == "lead-agent"
+
+
+def test_stream_injects_phoenix_metadata_when_enabled(monkeypatch):
+    monkeypatch.setenv("PHOENIX_TRACING", "true")
+    from deerflow.config.tracing_config import reset_tracing_config
+
+    reset_tracing_config()
+    monkeypatch.setattr("deerflow.client.build_tracing_callbacks", lambda: [])
+
+    fake_agent = _FakeAgent()
+    captured = _stub_agent_creation(monkeypatch, fake_agent)
+    client = _make_client(monkeypatch)
+
+    list(client.stream("hi", thread_id="thread-client-phx"))
+
+    config = captured["config"]
+    metadata = config.get("metadata") or {}
+    # OpenInference ``session_id`` / ``thread_id`` → Phoenix ``session.id``.
+    assert metadata.get("session_id") == "thread-client-phx"
+    assert metadata.get("thread_id") == "thread-client-phx"
+    # Langfuse keys must NOT leak in when only Phoenix is enabled.
+    assert "langfuse_session_id" not in metadata
+    assert "langfuse_user_id" not in metadata
+
+
+def test_stream_inerts_phoenix_metadata_when_disabled(monkeypatch):
+    monkeypatch.setattr("deerflow.client.build_tracing_callbacks", lambda: [])
+
+    fake_agent = _FakeAgent()
+    captured = _stub_agent_creation(monkeypatch, fake_agent)
+    client = _make_client(monkeypatch)
+
+    list(client.stream("hi", thread_id="thread-client-phx-off"))
+
+    config = captured["config"]
+    metadata = config.get("metadata") or {}
+    assert "session_id" not in metadata
+    assert "thread_id" not in metadata

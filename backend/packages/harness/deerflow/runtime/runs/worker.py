@@ -30,7 +30,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.runtime.serialization import serialize
 from deerflow.runtime.stream_bridge import StreamBridge
 from deerflow.runtime.user_context import get_effective_user_id
-from deerflow.tracing import inject_langfuse_metadata
+from deerflow.tracing import inject_trace_metadata, phoenix_span_context
 
 from .manager import RunManager, RunRecord
 from .naming import resolve_root_run_name
@@ -231,11 +231,12 @@ async def run_agent(
         if journal is not None:
             config.setdefault("callbacks", []).append(journal)
 
-        # Inject Langfuse trace-attribute metadata so the langchain CallbackHandler
-        # can lift session_id / user_id / trace_name / tags onto the root trace.
-        # Shared helper with ``DeerFlowClient.stream`` so both entry points stay
-        # in sync; caller-provided metadata wins via setdefault inside the helper.
-        inject_langfuse_metadata(
+        # Inject trace-attribute metadata (Langfuse + Phoenix) so the trace
+        # links to the thread and carries the correct session/user IDs.
+        # Shared helper with ``DeerFlowClient.stream`` and the subagent
+        # executor so all entry points stay in sync; caller-provided
+        # metadata wins via setdefault inside the helpers.
+        inject_trace_metadata(
             config,
             thread_id=thread_id,
             user_id=get_effective_user_id(),
@@ -303,35 +304,40 @@ async def run_agent(
         logger.info("Run %s: streaming with modes %s (requested: %s)", run_id, lg_modes, requested_modes)
 
         # 7. Stream using graph.astream
-        if len(lg_modes) == 1 and not stream_subgraphs:
-            # Single mode, no subgraphs: astream yields raw chunks
-            single_mode = lg_modes[0]
-            async for chunk in agent.astream(graph_input, config=runnable_config, stream_mode=single_mode):
-                if record.abort_event.is_set():
-                    logger.info("Run %s abort requested — stopping", run_id)
-                    break
-                llm_error_fallback_message = llm_error_fallback_message or _extract_llm_error_fallback_message(chunk)
-                sse_event = _lg_mode_to_sse_event(single_mode)
-                await bridge.publish(run_id, sse_event, serialize(chunk, mode=single_mode))
-        else:
-            # Multiple modes or subgraphs: astream yields tuples
-            async for item in agent.astream(
-                graph_input,
-                config=runnable_config,
-                stream_mode=lg_modes,
-                subgraphs=stream_subgraphs,
-            ):
-                if record.abort_event.is_set():
-                    logger.info("Run %s abort requested — stopping", run_id)
-                    break
+        # Wrap the run in the Phoenix/OpenInference span context so the root
+        # trace carries session.id (thread) and user.id — grouping multi-turn
+        # runs into Phoenix sessions and enabling user-level filtering. No-op
+        # when Phoenix is not among the enabled tracing providers.
+        with phoenix_span_context(session_id=thread_id, user_id=get_effective_user_id()):
+            if len(lg_modes) == 1 and not stream_subgraphs:
+                # Single mode, no subgraphs: astream yields raw chunks
+                single_mode = lg_modes[0]
+                async for chunk in agent.astream(graph_input, config=runnable_config, stream_mode=single_mode):
+                    if record.abort_event.is_set():
+                        logger.info("Run %s abort requested — stopping", run_id)
+                        break
+                    llm_error_fallback_message = llm_error_fallback_message or _extract_llm_error_fallback_message(chunk)
+                    sse_event = _lg_mode_to_sse_event(single_mode)
+                    await bridge.publish(run_id, sse_event, serialize(chunk, mode=single_mode))
+            else:
+                # Multiple modes or subgraphs: astream yields tuples
+                async for item in agent.astream(
+                    graph_input,
+                    config=runnable_config,
+                    stream_mode=lg_modes,
+                    subgraphs=stream_subgraphs,
+                ):
+                    if record.abort_event.is_set():
+                        logger.info("Run %s abort requested — stopping", run_id)
+                        break
 
-                mode, chunk = _unpack_stream_item(item, lg_modes, stream_subgraphs)
-                if mode is None:
-                    continue
+                    mode, chunk = _unpack_stream_item(item, lg_modes, stream_subgraphs)
+                    if mode is None:
+                        continue
 
-                llm_error_fallback_message = llm_error_fallback_message or _extract_llm_error_fallback_message(chunk)
-                sse_event = _lg_mode_to_sse_event(mode)
-                await bridge.publish(run_id, sse_event, serialize(chunk, mode=mode))
+                    llm_error_fallback_message = llm_error_fallback_message or _extract_llm_error_fallback_message(chunk)
+                    sse_event = _lg_mode_to_sse_event(mode)
+                    await bridge.publish(run_id, sse_event, serialize(chunk, mode=mode))
 
         # 8. Final status
         if record.abort_event.is_set():

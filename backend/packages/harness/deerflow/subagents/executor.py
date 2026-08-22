@@ -31,7 +31,7 @@ from deerflow.skills.tool_policy import filter_tools_by_skill_allowed_tools
 from deerflow.skills.types import Skill
 from deerflow.subagents.config import SubagentConfig, resolve_subagent_model_name
 from deerflow.subagents.token_collector import SubagentTokenCollector
-from deerflow.tracing import build_tracing_callbacks, inject_langfuse_metadata
+from deerflow.tracing import build_tracing_callbacks, inject_trace_metadata, phoenix_span_context
 
 if TYPE_CHECKING:
     # Imported lazily at runtime inside _build_initial_state: importing
@@ -894,9 +894,10 @@ the same skill directory only when needed during execution.
             else:
                 assistant_id = "subagent"
 
-            # Inject Langfuse trace-attribute metadata so the subagent trace
-            # links to the parent thread and carries the correct session/user IDs.
-            inject_langfuse_metadata(
+            # Inject trace-attribute metadata (Langfuse + Phoenix) so the
+            # subagent trace links to the parent thread and carries the
+            # correct session/user IDs.
+            inject_trace_metadata(
                 run_config,
                 thread_id=self.thread_id,
                 user_id=self.user_id,
@@ -953,52 +954,58 @@ the same skill directory only when needed during execution.
                 )
                 return result
 
-            async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
-                # Cooperative cancellation: check if parent requested stop.
-                # Note: cancellation is only detected at astream iteration boundaries,
-                # so long-running tool calls within a single iteration will not be
-                # interrupted until the next chunk is yielded.
-                if result.cancel_event.is_set():
-                    logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} cancelled by parent")
-                    result.try_set_terminal(
-                        SubagentStatus.CANCELLED,
-                        error="Cancelled by user",
-                        token_usage_records=collector.snapshot_records(),
-                    )
-                    return result
+            # Wrap the run in the Phoenix/OpenInference span context so the
+            # subagent trace carries session.id (parent thread) and user.id,
+            # grouping it into the parent thread's Phoenix session. Runs inside
+            # the background execution thread, so the OTel context is set where
+            # the spans are actually created.
+            with phoenix_span_context(session_id=self.thread_id, user_id=self.user_id):
+                async for chunk in agent.astream(state, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
+                    # Cooperative cancellation: check if parent requested stop.
+                    # Note: cancellation is only detected at astream iteration boundaries,
+                    # so long-running tool calls within a single iteration will not be
+                    # interrupted until the next chunk is yielded.
+                    if result.cancel_event.is_set():
+                        logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} cancelled by parent")
+                        result.try_set_terminal(
+                            SubagentStatus.CANCELLED,
+                            error="Cancelled by user",
+                            token_usage_records=collector.snapshot_records(),
+                        )
+                        return result
 
-                final_state = chunk
+                    final_state = chunk
 
-                # Detect an interrupt: LangGraph surfaces ``__interrupt__`` (a
-                # tuple of Interrupt objects) on the values chunk that pauses
-                # execution. Capture it; the stream will end right after.
-                if isinstance(chunk, dict):
-                    chunk_interrupts = chunk.get("__interrupt__")
-                    if chunk_interrupts:
-                        interrupts = chunk_interrupts
+                    # Detect an interrupt: LangGraph surfaces ``__interrupt__`` (a
+                    # tuple of Interrupt objects) on the values chunk that pauses
+                    # execution. Capture it; the stream will end right after.
+                    if isinstance(chunk, dict):
+                        chunk_interrupts = chunk.get("__interrupt__")
+                        if chunk_interrupts:
+                            interrupts = chunk_interrupts
 
-                # Extract AI messages from the current state
-                messages = chunk.get("messages", [])
-                if messages:
-                    last_message = messages[-1]
-                    # Check if this is a new AI message
-                    if isinstance(last_message, AIMessage):
-                        # Convert message to dict for serialization
-                        message_dict = last_message.model_dump()
-                        # Only add if it's not already in the list (avoid duplicates)
-                        # Check by comparing message IDs if available, otherwise compare full dict
-                        message_id = message_dict.get("id")
-                        if message_id:
-                            is_duplicate = message_id in seen_message_ids
-                        else:
-                            # id-less messages can't be keyed; fall back to a full-dict compare
-                            is_duplicate = message_dict in ai_messages
-
-                        if not is_duplicate:
-                            ai_messages.append(message_dict)
+                    # Extract AI messages from the current state
+                    messages = chunk.get("messages", [])
+                    if messages:
+                        last_message = messages[-1]
+                        # Check if this is a new AI message
+                        if isinstance(last_message, AIMessage):
+                            # Convert message to dict for serialization
+                            message_dict = last_message.model_dump()
+                            # Only add if it's not already in the list (avoid duplicates)
+                            # Check by comparing message IDs if available, otherwise compare full dict
+                            message_id = message_dict.get("id")
                             if message_id:
-                                seen_message_ids.add(message_id)
-                            logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(ai_messages)}")
+                                is_duplicate = message_id in seen_message_ids
+                            else:
+                                # id-less messages can't be keyed; fall back to a full-dict compare
+                                is_duplicate = message_dict in ai_messages
+
+                            if not is_duplicate:
+                                ai_messages.append(message_dict)
+                                if message_id:
+                                    seen_message_ids.add(message_id)
+                                logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} captured AI message #{len(ai_messages)}")
 
             # Stream ended. Determine why: cancel takes precedence over an
             # interrupt (an explicit user stop wins over a pause), then an
@@ -1225,7 +1232,7 @@ the same skill directory only when needed during execution.
                 assistant_id = f"subagent:{normalized_name}"
             else:
                 assistant_id = "subagent"
-            inject_langfuse_metadata(
+            inject_trace_metadata(
                 run_config,
                 thread_id=self.thread_id,
                 user_id=self.user_id,
@@ -1265,35 +1272,39 @@ the same skill directory only when needed during execution.
                 )
                 return result
 
-            async for chunk in agent.astream(graph_input, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
-                if result.cancel_event.is_set():
-                    result.try_set_terminal(
-                        SubagentStatus.CANCELLED,
-                        error="Cancelled by user",
-                        token_usage_records=collector.snapshot_records(),
-                    )
-                    return result
+            # Same Phoenix/OpenInference span-context wrap as ``_aexecute`` so
+            # the resumed subagent trace stays grouped in the parent thread's
+            # Phoenix session with the correct user.id.
+            with phoenix_span_context(session_id=self.thread_id, user_id=self.user_id):
+                async for chunk in agent.astream(graph_input, config=run_config, context=context, stream_mode="values"):  # type: ignore[arg-type]
+                    if result.cancel_event.is_set():
+                        result.try_set_terminal(
+                            SubagentStatus.CANCELLED,
+                            error="Cancelled by user",
+                            token_usage_records=collector.snapshot_records(),
+                        )
+                        return result
 
-                final_state = chunk
-                if isinstance(chunk, dict):
-                    chunk_interrupts = chunk.get("__interrupt__")
-                    if chunk_interrupts:
-                        interrupts = chunk_interrupts
+                    final_state = chunk
+                    if isinstance(chunk, dict):
+                        chunk_interrupts = chunk.get("__interrupt__")
+                        if chunk_interrupts:
+                            interrupts = chunk_interrupts
 
-                messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
-                if messages:
-                    last_message = messages[-1]
-                    if isinstance(last_message, AIMessage):
-                        message_dict = last_message.model_dump()
-                        message_id = message_dict.get("id")
-                        if message_id:
-                            is_duplicate = message_id in seen_message_ids
-                        else:
-                            is_duplicate = message_dict in ai_messages
-                        if not is_duplicate:
-                            ai_messages.append(message_dict)
+                    messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
+                    if messages:
+                        last_message = messages[-1]
+                        if isinstance(last_message, AIMessage):
+                            message_dict = last_message.model_dump()
+                            message_id = message_dict.get("id")
                             if message_id:
-                                seen_message_ids.add(message_id)
+                                is_duplicate = message_id in seen_message_ids
+                            else:
+                                is_duplicate = message_dict in ai_messages
+                            if not is_duplicate:
+                                ai_messages.append(message_dict)
+                                if message_id:
+                                    seen_message_ids.add(message_id)
 
             if result.cancel_event.is_set():
                 result.try_set_terminal(

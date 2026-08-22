@@ -5,7 +5,7 @@ description = "LangGraph-based AI agent system with sandbox execution capabiliti
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "deerflow-harness",
+    "deerflow-harness[phoenix]",
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
     "python-multipart>=0.0.31",

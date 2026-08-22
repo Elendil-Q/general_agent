@@ -28,6 +28,10 @@ def clear_tracing_env(monkeypatch):
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
         "LANGFUSE_BASE_URL",
+        "PHOENIX_TRACING",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+        "PHOENIX_PROJECT_NAME",
+        "PHOENIX_HEADERS",
     ):
         monkeypatch.delenv(name, raising=False)
     reset_tracing_config()
@@ -171,3 +175,49 @@ def test_create_langfuse_handler_initializes_client_before_handler(monkeypatch):
             },
         ),
     ]
+
+
+def test_phoenix_appears_in_enabled_providers_when_env_set(monkeypatch):
+    from deerflow.config.tracing_config import get_enabled_tracing_providers, reset_tracing_config
+
+    monkeypatch.setenv("PHOENIX_TRACING", "true")
+    reset_tracing_config()
+
+    assert "phoenix" in get_enabled_tracing_providers()
+
+
+def test_phoenix_missing_from_enabled_providers_when_not_set(monkeypatch):
+    from deerflow.config.tracing_config import get_enabled_tracing_providers
+
+    assert "phoenix" not in get_enabled_tracing_providers()
+
+
+def test_build_tracing_callbacks_registers_phoenix_without_callback(monkeypatch):
+    registered: list[bool] = []
+
+    def _fake_register() -> bool:
+        registered.append(True)
+        return True
+
+    monkeypatch.setattr(tracing_factory, "get_enabled_tracing_providers", lambda: ["phoenix"])
+    monkeypatch.setattr(tracing_factory, "validate_enabled_tracing_providers", lambda: None)
+    monkeypatch.setattr(tracing_factory, "register_phoenix_tracing", _fake_register)
+
+    callbacks = tracing_factory.build_tracing_callbacks()
+
+    # Phoenix contributes no callback handler — global OTel instrumentation
+    # would otherwise double-trace every span.
+    assert callbacks == []
+    assert registered == [True]
+
+
+def test_build_tracing_callbacks_wraps_phoenix_init_failure(monkeypatch):
+    def _boom() -> bool:
+        raise RuntimeError("collector unreachable")
+
+    monkeypatch.setattr(tracing_factory, "get_enabled_tracing_providers", lambda: ["phoenix"])
+    monkeypatch.setattr(tracing_factory, "validate_enabled_tracing_providers", lambda: None)
+    monkeypatch.setattr(tracing_factory, "register_phoenix_tracing", _boom)
+
+    with pytest.raises(RuntimeError, match="Phoenix tracing initialization failed"):
+        tracing_factory.build_tracing_callbacks()

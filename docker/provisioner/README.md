@@ -195,6 +195,8 @@ kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'
    - OrbStack (built-in K8s), or
    - minikube, kind, k3s, etc.
 
+   The provisioner only uses core/v1 APIs (Pods, NodePort Services, Namespaces, hostPath/PVC), so lightweight distributions like k3s work as a drop-in replacement for full Kubernetes. For an offline/air-gapped single-node k3s setup, see [tutorials/offline-k3s-setup.md](../../tutorials/offline-k3s-setup.md).
+
 2. **kubectl Configured**:
    - `~/.kube/config` must exist and be valid
    - Current context should point to your local cluster

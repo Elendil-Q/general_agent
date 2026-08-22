@@ -28,6 +28,13 @@ def clear_tracing_env(monkeypatch):
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
         "LANGFUSE_BASE_URL",
+        # Phoenix vars: app_config's module-level load_dotenv() pulls the
+        # repo-root .env into os.environ, so a developer's local
+        # PHOENIX_TRACING=true would otherwise leak into these tests.
+        "PHOENIX_TRACING",
+        "PHOENIX_COLLECTOR_ENDPOINT",
+        "PHOENIX_PROJECT_NAME",
+        "PHOENIX_HEADERS",
     ):
         monkeypatch.delenv(name, raising=False)
     _reset_tracing_cache()

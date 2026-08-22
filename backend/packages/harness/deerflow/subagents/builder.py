@@ -68,6 +68,15 @@ def build_subagent_agent(
     )
     # system_prompt is injected via initial-state messages by callers, to
     # avoid multiple SystemMessages which some LLM APIs don't support.
+    # Name the compiled graph after the subagent: the name becomes the root
+    # span/run name under tracing (Phoenix/OpenInference names spans after
+    # the LangChain run name, and its "agent" in run.name heuristic maps the
+    # span kind to AGENT). Normalization mirrors the executor's trace-name
+    # shape (lowercase, hyphens only) so both paths agree.
+    if config.name and config.name.strip():
+        graph_name = f"subagent:{config.name.strip().lower().replace('_', '-')}"
+    else:
+        graph_name = "subagent"
     return create_agent(
         model=model,
         tools=tools,
@@ -75,4 +84,5 @@ def build_subagent_agent(
         system_prompt=None,
         state_schema=ThreadState,
         checkpointer=checkpointer,
+        name=graph_name,
     )

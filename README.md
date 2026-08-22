@@ -58,7 +58,8 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
       - [IM Channels](#im-channels)
       - [LangSmith Tracing](#langsmith-tracing)
       - [Langfuse Tracing](#langfuse-tracing)
-      - [Using Both Providers](#using-both-providers)
+      - [Phoenix Tracing](#phoenix-tracing)
+      - [Using Multiple Providers](#using-multiple-providers)
   - [From Deep Research to Super Agent Harness](#from-deep-research-to-super-agent-harness)
   - [Core Features](#core-features)
     - [Skills \& Tools](#skills--tools)
@@ -557,9 +558,33 @@ If you are using a self-hosted Langfuse instance, set `LANGFUSE_BASE_URL` to you
 
 These are injected into `RunnableConfig.metadata` at the graph invocation root for both the gateway path (`runtime/runs/worker.py::run_agent`) and the embedded path (`client.py::DeerFlowClient.stream`), so any LangChain-compatible callback can read them. Set `DEER_FLOW_ENV` (or `ENVIRONMENT`) to tag traces by deployment environment.
 
-#### Using Both Providers
+#### Phoenix Tracing
 
-If both LangSmith and Langfuse are enabled, DeerFlow attaches both tracing callbacks and reports the same model activity to both systems.
+DeerFlow also supports [Arize Phoenix](https://phoenix.arize.com) for OpenTelemetry-based tracing. Modern Phoenix is process-global OTel instrumentation rather than a callback handler, so once it is enabled, every LangChain / LangGraph / LLM / tool call is traced automatically (including standalone model calls like memory summarization, with no double-tracing).
+
+Install the optional extra and start a local Phoenix server:
+
+```bash
+uv add 'deerflow-harness[phoenix]'     # or: pip install 'deerflow-harness[phoenix]'
+uvx arize-phoenix serve                # starts the UI at http://localhost:6006
+```
+
+Add the following to your `.env` file:
+
+```bash
+PHOENIX_TRACING=true
+# PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006/v1/traces   # default
+# PHOENIX_PROJECT_NAME=deer-flow                               # default
+# PHOENIX_HEADERS='{}'                                         # optional JSON object
+```
+
+**Session / user correlation.** The OpenInference LangChain tracer lifts `thread_id` (or `session_id`) from `RunnableConfig.metadata` onto `session.id`, and DeerFlow sets `user.id` on the root spans, so the Phoenix **Sessions** page groups every trace of the same conversation under the LangGraph `thread_id`, and traces can be filtered by user. Registration is lazy and idempotent — it happens on the first agent run after the process starts.
+
+**Subagent traces.** Subagent runs join the parent thread's session and their root span is named after the subagent (e.g. `subagent:general-purpose`, classified with span kind `AGENT`), so delegated work is easy to spot inside a session.
+
+#### Using Multiple Providers
+
+If LangSmith, Langfuse, and/or Phoenix are enabled together, DeerFlow reports the same model activity to each system: LangSmith and Langfuse attach their callback handlers, while Phoenix registers global OpenTelemetry instrumentation.
 
 If a provider is explicitly enabled but missing required credentials, or if its callback fails to initialize, DeerFlow fails fast when tracing is initialized during model creation and the error message names the provider that caused the failure.
 

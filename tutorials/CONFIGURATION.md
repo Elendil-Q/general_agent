@@ -199,6 +199,10 @@ DeerFlow 默认启用 `web_search`（DuckDuckGo，无需 API key）与 `web_fetc
 | `LANGFUSE_TRACING` | 设为 `"true"` 启用 Langfuse |
 | `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY` | Langfuse 凭据 |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` |
+| `PHOENIX_TRACING` | 设为 `"true"` 启用 Arize Phoenix（需安装 `deerflow-harness[phoenix]` extra）|
+| `PHOENIX_COLLECTOR_ENDPOINT` | Phoenix OTLP 端点，默认 `http://localhost:6006/v1/traces` |
+| `PHOENIX_PROJECT_NAME` | Phoenix 项目名，默认 `deer-flow` |
+| `PHOENIX_HEADERS` | 可选 JSON 对象，透传给 OTLP exporter 的请求头 |
 | `DEER_FLOW_ENV` / `ENVIRONMENT` | 追踪标签 `env:<value>` |
 
 ### GitHub

@@ -58,6 +58,10 @@ postgres = [
     "psycopg-pool>=3.3.0",
 ]
 pymupdf = ["pymupdf4llm>=0.0.17"]
+phoenix = [
+    "arize-phoenix-otel>=0.16.0",
+    "openinference-instrumentation-langchain>=0.1.16",
+]
 
 [build-system]
 requires = ["hatchling"]

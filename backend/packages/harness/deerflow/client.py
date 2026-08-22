@@ -44,7 +44,7 @@ from deerflow.models import create_chat_model
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.skills.storage import get_or_new_skill_storage
 from deerflow.tools.builtins.tool_search import assemble_deferred_tools
-from deerflow.tracing import build_tracing_callbacks, inject_langfuse_metadata
+from deerflow.tracing import build_tracing_callbacks, inject_trace_metadata, phoenix_span_context
 from deerflow.uploads.manager import (
     claim_unique_filename,
     delete_file_safe,
@@ -611,7 +611,7 @@ class DeerFlowClient:
             config["callbacks"] = [*existing_callbacks, *tracing_callbacks]
 
         configurable = config.get("configurable") or {}
-        inject_langfuse_metadata(
+        inject_trace_metadata(
             config,
             thread_id=thread_id,
             user_id=get_effective_user_id(),
@@ -679,12 +679,21 @@ class DeerFlowClient:
             sent.update(delta)
             return delta
 
-        for item in self._agent.stream(
-            state,
-            config=config,
-            context=context,
-            stream_mode=["values", "messages", "custom"],
-        ):
+        # Wrap the run in the Phoenix/OpenInference span context so the trace
+        # carries session.id (thread) and user.id — grouping multi-turn runs
+        # into Phoenix sessions and enabling user-level filtering. No-op when
+        # Phoenix is not among the enabled tracing providers. The context
+        # stays active for the whole iteration via the inner generator.
+        def _iter_stream_chunks():
+            with phoenix_span_context(session_id=thread_id, user_id=get_effective_user_id()):
+                yield from self._agent.stream(
+                    state,
+                    config=config,
+                    context=context,
+                    stream_mode=["values", "messages", "custom"],
+                )
+
+        for item in _iter_stream_chunks():
             if isinstance(item, tuple) and len(item) == 2:
                 mode, chunk = item
                 mode = str(mode)

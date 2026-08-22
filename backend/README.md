@@ -355,9 +355,29 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 If you are using a self-hosted Langfuse deployment, set `LANGFUSE_BASE_URL` to your Langfuse host.
 
-### Dual Provider Behavior
+### Phoenix Tracing
 
-If both LangSmith and Langfuse are enabled, DeerFlow initializes and attaches both callbacks so the same run data is reported to both systems.
+DeerFlow also supports [Arize Phoenix](https://phoenix.arize.com) for OpenTelemetry-based tracing. Modern Phoenix is process-global OTel instrumentation rather than a per-run callback, so once enabled every LangChain / LangGraph / LLM / tool call is traced automatically (including standalone model calls like memory summarization, with no double-tracing). Install the optional extra and start a local Phoenix server:
+
+```bash
+uv add 'deerflow-harness[phoenix]'     # or: pip install 'deerflow-harness[phoenix]'
+uvx arize-phoenix serve                # UI at http://localhost:6006
+```
+
+Add the following to your `.env` file:
+
+```bash
+PHOENIX_TRACING=true
+# PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006/v1/traces   # default
+# PHOENIX_PROJECT_NAME=deer-flow                               # default
+# PHOENIX_HEADERS='{}'                                         # optional JSON object
+```
+
+The OpenInference LangChain tracer lifts `thread_id` (or `session_id`) from `RunnableConfig.metadata` onto `session.id`, and DeerFlow sets `user.id` on root spans, so the Phoenix Sessions page groups every trace of the same conversation under the LangGraph `thread_id`. Registration is lazy and idempotent — it happens on the first agent run after the process starts.
+
+### Multiple Provider Behavior
+
+If LangSmith, Langfuse, and/or Phoenix are enabled, DeerFlow reports the same run data to each system: LangSmith and Langfuse attach their callback handlers, while Phoenix registers global OpenTelemetry instrumentation.
 
 If a provider is explicitly enabled but required credentials are missing, or the provider callback cannot be initialized, DeerFlow raises an error when tracing is initialized during model creation instead of silently disabling tracing.
 

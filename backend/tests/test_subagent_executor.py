@@ -2283,7 +2283,16 @@ class TestSubagentTracingWiring:
         """
         from deerflow.config.tracing_config import reset_tracing_config
 
-        for name in ("LANGFUSE_TRACING", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"):
+        for name in (
+            "LANGFUSE_TRACING",
+            "LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY",
+            "LANGFUSE_BASE_URL",
+            "PHOENIX_TRACING",
+            "PHOENIX_COLLECTOR_ENDPOINT",
+            "PHOENIX_PROJECT_NAME",
+            "PHOENIX_HEADERS",
+        ):
             monkeypatch.delenv(name, raising=False)
         reset_tracing_config()
         yield
@@ -2402,6 +2411,36 @@ class TestSubagentTracingWiring:
         metadata = (fake_agent.captured_config or {}).get("metadata") or {}
         for key in ("langfuse_session_id", "langfuse_user_id", "langfuse_trace_name", "langfuse_tags"):
             assert key not in metadata, f"{key} must be absent when Langfuse is disabled"
+
+    @pytest.mark.anyio
+    async def test_aexecute_injects_phoenix_session_when_enabled(
+        self,
+        classes,
+        executor_module,
+        monkeypatch,
+    ):
+        """When Phoenix is enabled, ``run_config['metadata']`` must carry the
+        OpenInference ``session_id`` / ``thread_id`` (parent thread) so the
+        subagent trace groups under the parent thread's Phoenix session.
+        """
+        monkeypatch.setenv("PHOENIX_TRACING", "true")
+        from deerflow.config.tracing_config import reset_tracing_config
+
+        reset_tracing_config()
+        monkeypatch.setattr(executor_module, "build_tracing_callbacks", lambda: [object()])
+
+        executor = self._make_executor(classes, user_id="alice")
+        fake_agent = _FakeStreamAgent()
+        monkeypatch.setattr(executor, "_build_initial_state", self._noop_build_initial_state)
+        monkeypatch.setattr(executor, "_create_agent", lambda *a, **kw: fake_agent)
+
+        await executor._aexecute("do something")
+
+        metadata = (fake_agent.captured_config or {}).get("metadata") or {}
+        assert metadata.get("session_id") == "thread-trace-1", "subagent trace must inherit parent thread_id as session_id"
+        assert metadata.get("thread_id") == "thread-trace-1"
+        assert metadata.get("user_id") == "alice"
+        assert "langfuse_session_id" not in metadata, "Langfuse keys must be absent when only Phoenix is enabled"
 
     @pytest.mark.anyio
     async def test_user_id_defaults_when_not_supplied(
