@@ -51,6 +51,7 @@ DeerFlow has newly integrated the intelligent search and crawling toolset indepe
     - [Running the Application](#running-the-application)
       - [Deployment Sizing](#deployment-sizing)
       - [Option 1: Docker (Recommended)](#option-1-docker-recommended)
+      - [Offline Development Image](#offline-development-image)
       - [Option 2: Local Development](#option-2-local-development)
     - [Advanced](#advanced)
       - [Sandbox Mode](#sandbox-mode)
@@ -249,6 +250,20 @@ The unified nginx endpoint is same-origin by default and does not emit browser C
 > The Gateway holds run state (RunManager and the stream bridge) in process, so production defaults to a single Gateway worker (`GATEWAY_WORKERS=1`). Raising the worker count without a shared cross-worker stream bridge — which is not yet available — breaks run cancellation, SSE reconnects, request de-duplication, and IM channels, because nginx uses no sticky sessions and each worker keeps its own run state. Scale a single worker up with more CPU/RAM (or move the database and sandbox onto dedicated tiers) instead of raising `GATEWAY_WORKERS`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed Docker development guide.
+
+#### Offline Development Image
+
+For air-gapped or network-restricted environments, `Dockerfile.offline-dev` builds a single all-in-one development container: the whole project at `/app/general_agent`, backend and frontend dependencies (all extras included) pre-installed, dependency caches kept in the image for offline reinstalls, plus `git`/`vim`/`nginx`/docker CLI, opencode (with the DCP context-compression plugin pre-cached for offline use), a pre-downloaded tiktoken BPE cache (so the default `token_counting: tiktoken` works offline), common Python libraries (numpy/pandas/matplotlib/…) in the system Python for the local sandbox, and a provisioner venv for K3s sandbox mode. Inside the container you get the same `make dev` experience as local development.
+
+```bash
+# Build (requires network)
+docker build -f Dockerfile.offline-dev -t deer-flow-offline-dev .
+
+# Run as an interactive dev container (offline OK), then: make config && make dev
+docker run -it --rm -p 2026:2026 -p 8001:8001 -p 3000:3000 deer-flow-offline-dev
+```
+
+Full guide — mounting local source, offline reinstalls, and AIO sandbox debugging (DooD / K3s): [tutorials/offline_development.md](tutorials/offline_development.md) (Chinese).
 
 #### Option 2: Local Development
 

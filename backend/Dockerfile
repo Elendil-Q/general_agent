@@ -78,8 +78,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --frozen --offline` at startup fails to resolve [build-system].requires
 # for the deerflow-harness workspace member: "No solution found when
 # resolving: hatchling".
+# `uv pip` has no `download` subcommand, so install with --no-deps: the
+# wheel still lands in /root/.cache/uv (the persistent cache), which is
+# what the offline `uv sync` resolution needs.
 RUN cd backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} \
-    uv pip download --no-deps hatchling
+    uv pip install --no-deps hatchling
 
 # UTF-8 locale prevents UnicodeEncodeError on Chinese/emoji content in minimal
 # containers where locale configuration may be missing and the default encoding is not UTF-8.

@@ -1,0 +1,26 @@
+# Dockerignore for Dockerfile.offline-dev
+#
+# 根 .dockerignore 排除了 tests/ docs/ scripts/ skills/ *.md 等目录（因为
+# 现有 backend/frontend Dockerfile 只需要各自子目录）。本镜像要打包**整个
+# 项目**，因此 Docker 自动识别的同名 <dockerfile>.dockerignore 只排除真正
+# 不该进镜像的内容。
+
+.git
+.env
+.dockerignore
+
+# 本地真实配置（可能含 API key 等敏感信息）——绝不烘进镜像，
+# 容器内用 `make config` 从 example 模板重新生成
+config.yaml
+extensions_config.json
+
+# 构建产物 / 本地环境（镜像内会重新安装依赖）
+**/__pycache__
+**/.venv
+**/node_modules
+**/.next
+
+# 运行时产物
+logs/
+backend/.deer-flow
+*.log

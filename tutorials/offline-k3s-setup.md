@@ -40,6 +40,26 @@ DeerFlow 的沙箱 provisioner（`docker/provisioner/app.py`）对 Kubernetes �
 - provisioner 容器经 `host.docker.internal:6443` 访问宿主机上的 k3s API（自签名证书无碍：设置 `K8S_API_SERVER` 时 provisioner 会自动关闭 TLS 校验，见 `app.py`）。
 - gateway 容器经 `host.docker.internal:{NodePort}` 直连沙箱 Pod 的 HTTP 服务，不经过集群 DNS。
 
+## 0.1 在 WSL2 开发机上验证 k3s 的注意事项
+
+本文面向的离线目标机是纯 Linux 环境，无此问题。但若你想先在 **WSL2 + Docker Desktop** 的 Windows 开发机上验证 k3s 流程，会踩中一个上游 bug（[kubernetes/kubernetes#135554](https://github.com/kubernetes/kubernetes/issues/135554)）：
+
+- **症状**：k3s 服务崩溃循环（`systemctl show k3s -p NRestarts` 不断增长），`kubectl get nodes` 报 `ServiceUnavailable`，日志中反复出现 `Failed to start ContainerManager ... system validation failed - wrong number of fields (expected 6, got 7)`
+- **根因**：Docker Desktop 的 WSL2 集成注入的 9p 挂载 `/Docker/host` 在 `/proc/mounts` 中的 options 字段含未转义空格（`path=C:\Program Files\...`），kubelet 的 mounts 解析器期望恰好 6 个空白分割字段而失败。可用 `awk 'NF!=6' /proc/mounts` 确认
+- **修复**：给 k3s 加私有 mount namespace 的 systemd override（不影响 Docker Desktop 本身）：
+
+```bash
+sudo mkdir -p /etc/systemd/system/k3s.service.d/
+sudo tee /etc/systemd/system/k3s.service.d/override.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/unshare --mount /bin/bash -c "umount /Docker/host 2>/dev/null; exec /usr/local/bin/k3s server"
+EOF
+sudo systemctl daemon-reload && sudo systemctl restart k3s
+```
+
+- **替代思路**：若只是想在开发机上验证 DeerFlow 的容器沙箱而不需要 K8s 语义，直接用 DooD 模式（`AioSandboxProvider` 不配 `provisioner_url`，走 Docker socket）更省事；k3s/provisioner 模式的价值在于离线目标机部署。
+
 ## 1. 物料清单（源机/联网环境准备）
 
 在有网络的机器上准备以下物料，传输到目标机：
@@ -52,7 +72,7 @@ DeerFlow 的沙箱 provisioner（`docker/provisioner/app.py`）对 Kubernetes �
 | 沙箱镜像 tar | `docker pull enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest && docker save -o all-in-one-sandbox.tar enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest` | x86_64 + arm64 多架构镜像 |
 | DeerFlow 服务镜像 tar | 见 [offline-docker-setup.md](offline-docker-setup.md) §1.2/§1.3 | gateway、frontend、nginx |
 | provisioner 镜像 tar | `docker compose -f docker/docker-compose.yaml build provisioner && docker save -o provisioner.tar deer-flow-provisioner`（或 compose 自动打的标签） | 本仓库本地构建，无公共镜像；**必须在源机构建**，离线环境不可 `--build` |
-| 项目文件夹 | 见 [offline-docker-setup.md](offline-docker-setup.md) §1.4 | 含 `docker/`、`config.yaml` 等 |
+| 项目文件夹 | 见 [offline-docker-setup.md](offline-docker-setup.md) §1.3（导出与传输） | 含 `docker/`、`config.yaml` 等 |
 
 **资源估算**：每个沙箱 Pod 的资源为 requests `100m CPU / 256Mi 内存`、limits `1000m CPU / 1Gi 内存 / 500Mi 临时存储`。按预期并发沙箱数叠加，再预留 k3s 自身约 512Mi 内存。
 
@@ -152,7 +172,7 @@ sandbox:
 
 ### 5.3 启动
 
-按 [offline-docker-setup.md](offline-docker-setup.md) §2 的流程加载服务镜像后启动（**不要加 `--build`**）。启动脚本（`scripts/deploy.sh` / `scripts/docker.sh`）会检测 `config.yaml` 的沙箱模式：检测到 provisioner 模式时，自动把 provisioner 服务加入启动列表（其余模式不会启动它）。
+按 [offline-docker-setup.md](offline-docker-setup.md) §2 的流程加载服务镜像后启动（**不要加 `--build`**）。启动脚本（`scripts/deploy.sh`）会检测 `config.yaml` 的沙箱模式：检测到 provisioner 模式时，自动把 provisioner 服务加入启动列表（其余模式不会启动它）。
 
 ## 6. 验证
 
@@ -227,7 +247,7 @@ EOF
 
 ## 8. 离线陷阱速查
 
-k3s 模式与 Docker 离线模式共享全部通用陷阱，不再重复——务必对照 [offline-docker-setup.md](offline-docker-setup.md) 的「已知离线陷阱」一节，特别是：
+k3s 模式与 Docker 离线模式共享全部通用陷阱，不再重复——务必对照 [offline-docker-setup.md](offline-docker-setup.md) 的「排错速查」一节，特别是：
 
 - **tiktoken 离线**：`config.yaml` 中设置 `memory.token_counting: char`（或预打包 tiktoken 缓存），否则启动时联网下载编码文件失败。
 - **永不 `--build`**：所有镜像在源机构建、`docker save` 传输、目标机 `docker load`；provisioner 镜像也不例外。

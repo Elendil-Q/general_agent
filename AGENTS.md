@@ -41,6 +41,8 @@ other `/api/*` go straight to the Gateway REST routers. See
 ```
 deer-flow/
 ├── Makefile                        # Root orchestration: drives the full stack (dev/start/stop, docker, setup)
+├── Dockerfile.offline-dev          # All-in-one offline dev image (whole project + baked-in deps and caches)
+├── Dockerfile.offline-dev.dockerignore  # Companion ignore file (auto-detected); includes tests/docs/scripts/skills
 ├── config.example.yaml             # Template → copy to config.yaml (gitignored) at repo root
 ├── extensions_config.example.json  # Template → copy to extensions_config.json (gitignored): MCP servers + skills
 ├── backend/                        # Python backend — see backend/AGENTS.md
@@ -80,6 +82,14 @@ make docker-start / docker-stop / docker-logs   # Docker development environment
 ```
 
 Run `make help` for the full list.
+
+**Offline development** (no `make` target — plain `docker build`): `Dockerfile.offline-dev`
+builds an all-in-one interactive dev container with the whole project, pre-installed
+backend/frontend dependencies, and the uv/pnpm caches **baked into the image layers** so
+`uv sync --offline` / `pnpm install --offline` work on air-gapped hosts — including after
+mounting local source over `/app/general_agent` (which shadows the baked-in `.venv`/`node_modules`). See
+the "Offline Development Image" section in [README.md](README.md) and the comments at the
+top of the Dockerfile for build args and usage.
 
 **Per-module commands drive a single module** (run inside that module):
 

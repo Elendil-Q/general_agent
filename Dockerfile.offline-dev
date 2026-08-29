@@ -1,0 +1,180 @@
+# Dockerfile.offline-dev — 离线开发环境镜像（纯开发环境容器）
+#
+# 把整个 DeerFlow 项目打包进一个镜像，构建期完成前后端依赖安装，并**保留**
+# uv / pnpm 缓存目录在镜像层，使得离线环境下（含挂载本地源码遮盖镜像内
+# .venv / node_modules 之后）仍可用缓存离线重装。
+#
+# 构建（构建期需要网络）：
+#   docker build -f Dockerfile.offline-dev -t deer-flow-offline-dev .
+#
+# 完整使用说明（本地开发 / AIO 沙箱容器开发）：tutorials/offline_development.md
+#
+# 配套文件：Dockerfile.offline-dev.dockerignore（Docker 自动识别同名
+# <dockerfile>.dockerignore），用于放行根 .dockerignore 排除掉的
+# tests/ docs/ scripts/ skills/ 等开发所需目录。
+
+# 用于 FROM 的 ARG 必须声明在第一个 FROM 之前（声明在 FROM 之后的 ARG
+# 只在该 stage 作用域内生效，对后续 FROM 行不可见）。
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
+ARG DOCKER_CLI_IMAGE=docker:cli
+
+FROM ${UV_IMAGE} AS uv-source
+FROM ${DOCKER_CLI_IMAGE} AS docker-cli
+
+FROM python:3.12-bookworm
+
+ARG NODE_MAJOR=22
+ARG APT_MIRROR
+ARG UV_INDEX_URL
+ARG NPM_REGISTRY
+ARG PNPM_STORE_PATH=/root/.local/share/pnpm/store
+
+# ── apt 镜像源（可选，受限网络构建用）─────────────────────────────────────
+# 与 backend/Dockerfile 相同的归一化 + 校验逻辑：接受裸主机名或 URL，
+# 归一化为裸主机名；含非法字符的值直接报错失败。
+RUN if [ -n "${APT_MIRROR}" ]; then \
+      APT_MIRROR_HOST=$(printf '%s' "${APT_MIRROR}" | sed -E 's|^[a-zA-Z]+://||; s|^//||; s|/+$||; s|/debian$||'); \
+      case "$APT_MIRROR_HOST" in \
+        "" | *[!A-Za-z0-9.:-]* | .* | -* | *.) \
+          echo "ERROR: APT_MIRROR value '${APT_MIRROR}' is not a valid bare hostname after normalization ('$APT_MIRROR_HOST'). Set it to a bare host like 'mirrors.tuna.tsinghua.edu.cn'." >&2; \
+          exit 1; \
+          ;; \
+      esac; \
+      echo "[apt] using mirror host: $APT_MIRROR_HOST (raw input: ${APT_MIRROR})"; \
+      sed -i "s|deb.debian.org|${APT_MIRROR_HOST}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+      sed -i "s|deb.debian.org|${APT_MIRROR_HOST}|g" /etc/apt/sources.list 2>/dev/null || true; \
+    fi
+
+# ── 开发工具 + Node.js ────────────────────────────────────────────────────
+# python:3.12-bookworm 完整版已自带 gcc/make 编译链，离线环境下仍可构建
+# Python 原生扩展。这里只补开发常用工具 + serve.sh 端口检测需要的
+# lsof/iproute2(ss)。apt 缓存可清理——离线环境本就无法 apt install 新包，
+# 不属于前后端依赖缓存。
+RUN env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+    apt-get update && apt-get install -y \
+    git \
+    vim \
+    curl \
+    ca-certificates \
+    gnupg \
+    iproute2 \
+    jq \
+    less \
+    lsof \
+    nginx \
+    procps \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── uv ────────────────────────────────────────────────────────────────────
+COPY --from=uv-source /uv /uvx /usr/local/bin/
+
+# ── Docker CLI（DooD：AIO 沙箱本地模式经宿主机 Docker socket 起沙箱容器）───
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+
+# ── pnpm（corepack，版本与 frontend/Dockerfile 一致）──────────────────────
+# COREPACK_NPM_REGISTRY 控制 corepack 自身下载包管理器的来源（受限网络）。
+RUN if [ -n "${NPM_REGISTRY}" ]; then \
+      export COREPACK_NPM_REGISTRY="${NPM_REGISTRY}"; \
+    fi && \
+    corepack enable && corepack install -g pnpm@10.26.2
+RUN pnpm config set store-dir ${PNPM_STORE_PATH}
+RUN if [ -n "${NPM_REGISTRY}" ]; then pnpm config set registry "${NPM_REGISTRY}"; fi
+
+# ── opencode + DCP 插件 ──────────────────────────────────────────────────
+# `opencode plugin <module> --global` 是带交互 spinner 的 CLI（实测构建期
+# 非 TTY 下不可靠），这里直接复现它的终态，效果等价：
+#   1) 全局配置 /root/.config/opencode/opencode.json 写入 plugin 列表
+#   2) 插件包预装进 opencode 缓存目录（~/.cache/opencode/packages/<spec>/，
+#      含 package.json 精确锁版本 + package-lock.json + node_modules）
+# 缓存预置后离线启动直接命中缓存，不再联网安装（已实测：未预置时 opencode
+# 会卡在 "Installing plugin package"；预置后 bootstrap 直接通过）。
+RUN if [ -n "${NPM_REGISTRY}" ]; then npm config set registry "${NPM_REGISTRY}"; fi && \
+    npm install -g opencode-ai && \
+    mkdir -p /root/.config/opencode \
+      /root/.cache/opencode/packages/@tarquinen/opencode-dcp@latest && \
+    printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "plugin": ["@tarquinen/opencode-dcp@latest"]\n}\n' \
+      > /root/.config/opencode/opencode.json && \
+    cd /root/.cache/opencode/packages/@tarquinen/opencode-dcp@latest && \
+    npm install --save-exact @tarquinen/opencode-dcp@latest
+
+# ── 项目源码 ──────────────────────────────────────────────────────────────
+WORKDIR /app/general_agent
+COPY . /app/general_agent
+
+# ── 后端依赖（缓存保留在镜像层，供离线 uv sync 使用）──────────────────────
+# 注意：不使用 RUN --mount=type=cache（BuildKit 临时缓存不进镜像层），
+# 普通 RUN 让 /root/.cache/uv 落进镜像层。
+# --all-extras：默认安装全部 optional extras（backend 根的 postgres/discord，
+# harness 的 ollama/postgres/phoenix/pymupdf/tui/groundroute）——离线环境下
+# 运行时再 `uv sync --extra X` 无法拉取，必须在构建期烘入。
+RUN cd /app/general_agent/backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} uv sync --all-packages --all-extras
+# 把构建后端 hatchling 烘进 uv 持久缓存：离线 `uv sync --frozen --offline`
+# 需要解析 deerflow-harness workspace 成员的 [build-system].requires，
+# 否则报 "No solution found when resolving: hatchling"（同 backend/Dockerfile）。
+RUN cd /app/general_agent/backend && UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} \
+    uv pip install --no-deps hatchling
+
+# ── tiktoken BPE 编码缓存 ─────────────────────────────────────────────────
+# memory.token_counting 默认 tiktoken，首次 get_encoding 会从外网下载 BPE
+# 数据文件，离线环境会失败（warm-up 超时后回退 char 估算，精度受损——见
+# app/gateway/app.py）。构建期预下载项目唯一使用的 cl100k_base 到固定目录，
+# 配合 TIKTOKEN_CACHE_DIR 运行时直接命中缓存，离线也可用 tiktoken 精确计数。
+# tiktoken 缓存键是 URL 的 SHA1，与下载源无关，命中即不再联网。
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
+RUN mkdir -p $TIKTOKEN_CACHE_DIR && \
+    /app/general_agent/backend/.venv/bin/python -c \
+    "import tiktoken; tiktoken.get_encoding('cl100k_base'); print('tiktoken cl100k_base cached')"
+
+# ── 前端依赖（pnpm store 保留在镜像层，供离线 pnpm install 使用）──────────
+RUN cd /app/general_agent/frontend && pnpm install --frozen-lockfile
+
+# ── 全局 Python 常用库（本地沙箱用）───────────────────────────────────────
+# 本地沙箱（LocalSandboxProvider + allow_host_bash）下 agent 的 bash 工具
+# 直接在容器内执行，用的是系统 Python（/usr/local/bin/python3，与
+# backend/.venv 相互独立），常用数据科学库必须装进全局 Python。
+# 用 uv pip 安装：wheel 落进 /root/.cache/uv（与其他缓存一起保留在镜像层，
+# 离线可重装）。随后预热 matplotlib 字体缓存（Agg 后端，无需显示服务），
+# 避免 agent 首次绘图时卡顿。
+RUN UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} \
+    uv pip install --python /usr/local/bin/python3 \
+    numpy pandas matplotlib scipy pillow requests beautifulsoup4 lxml openpyxl scikit-learn \
+    pymupdf pypdf pdfplumber reportlab
+RUN python3 -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot; \
+    import numpy, pandas, scipy, sklearn, PIL, requests, bs4, lxml, openpyxl; \
+    import pymupdf, pypdf, pdfplumber, reportlab; \
+    print('global python libs OK')"
+
+# ── provisioner 独立 venv（K3s 沙箱模式用）────────────────────────────────
+# docker/provisioner/app.py 已随 COPY . 进入镜像，这里只补它的运行依赖。
+# 必须用独立 venv 而非 backend/.venv：挂载本地源码后 `uv sync` 会按 lockfile
+# 裁剪掉非锁定包。构建期联网安装，uv cache 落镜像层，运行时离线无影响。
+RUN uv venv /opt/provisioner-venv && \
+    UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple} \
+    uv pip install --python /opt/provisioner-venv/bin/python \
+    fastapi "uvicorn[standard]" kubernetes
+
+# ── 环境 ──────────────────────────────────────────────────────────────────
+# UTF-8 locale 防止最小容器内中文/emoji 内容触发 UnicodeEncodeError。
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV PYTHONIOENCODING=utf-8
+
+# 离线默认值（必须放在所有构建期 RUN 之后，否则构建自己也被强制离线）：
+# - UV_OFFLINE=1：serve.sh 的 `uv sync` 不带 --offline，会按 HTTP
+#   cache-control 重校验 registry 元数据（如解析 deerflow-harness 的
+#   build-system.requires: hatchling），离线环境 DNS 失败即硬报错——即使
+#   缓存完整。UV_OFFLINE=1 让 uv 默认只用缓存、永不联网。
+# - UV_INDEX_URL 烘为构建期同值：uv 的 registry 元数据缓存按 index URL
+#   分桶，运行时用别的 index 会缓存 miss。运行时不要覆盖它。
+# 故意联网装新包时覆盖：docker run -e UV_OFFLINE=0 ...，或容器内
+# UV_OFFLINE=0 uv add <pkg>。
+ENV UV_OFFLINE=1 \
+    UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.org/simple}
+
+# 纯开发环境容器：进入交互 shell，在容器内跑 `make dev`（与本地开发一致）。
+CMD ["bash"]
